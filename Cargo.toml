@@ -1,0 +1,15 @@
+[package]
+name = "tinsel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Clean, pink-hued terminal output with a little sparkle: live step lists, spinners, tables, trees, prompts and more. Zero dependencies."
+authors = ["borhara"]
+license = "MIT"
+readme = "README.md"
+documentation = "https://docs.rs/tinsel"
+keywords = ["cli", "terminal", "spinner", "progress", "prompt"]
+categories = ["command-line-interface"]
+exclude = ["/.github", "demo.tape", "demo.gif"]
+
+[dependencies]
