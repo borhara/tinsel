@@ -180,3 +180,326 @@ fn ioctl_size() -> Option<(usize, usize)> {
 fn ioctl_size() -> Option<(usize, usize)> {
     None
 }
+
+/// How far local time is ahead of UTC at `secs` since the epoch, in seconds, from the C
+/// library's idea of the time zone. 0 where that can't be found.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn utc_offset_secs(secs: i64) -> i64 {
+    #[repr(C)]
+    struct Tm {
+        fields: [i32; 9],
+        gmtoff: std::ffi::c_long,
+        zone: *const std::ffi::c_char,
+    }
+    unsafe extern "C" {
+        fn localtime_r(time: *const i64, out: *mut Tm) -> *mut Tm;
+    }
+    let mut tm = Tm {
+        fields: [0; 9],
+        gmtoff: 0,
+        zone: std::ptr::null(),
+    };
+    // SAFETY: localtime_r fills one struct tm, whose leading fields have this layout on both
+    // platforms; it returns null on failure, leaving gmtoff at 0.
+    unsafe { localtime_r(&secs, &mut tm) };
+    tm.gmtoff as i64
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(crate) fn utc_offset_secs(_: i64) -> i64 {
+    0
+}
+
+/// Turn on escape-code handling for output in older Windows consoles. Elsewhere, and in
+/// Windows Terminal, it's always on.
+pub(crate) fn enable_escapes() {
+    #[cfg(windows)]
+    win::enable_escapes();
+}
+
+/// The Windows console API, for what Unix does with `stty` and `ioctl`.
+#[cfg(windows)]
+mod win {
+    use std::ffi::c_void;
+    use std::io;
+
+    type Handle = *mut c_void;
+
+    const STD_INPUT_HANDLE: u32 = -10i32 as u32;
+    const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+    const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
+    const ENABLE_LINE_INPUT: u32 = 0x0002;
+    const ENABLE_ECHO_INPUT: u32 = 0x0004;
+    const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
+    const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+    const WAIT_OBJECT_0: u32 = 0;
+    const KEY_EVENT: u16 = 1;
+    const UTF8: u32 = 65001;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct Coord {
+        x: i16,
+        y: i16,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct ScreenBufferInfo {
+        size: Coord,
+        cursor: Coord,
+        attributes: u16,
+        left: i16,
+        top: i16,
+        right: i16,
+        bottom: i16,
+        max_size: Coord,
+    }
+
+    /// INPUT_RECORD, with its union read as a KEY_EVENT_RECORD (the largest member, 16 bytes).
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct InputRecord {
+        kind: u16,
+        _pad: u16,
+        key_down: i32,
+        repeat: u16,
+        virtual_key: u16,
+        scan_code: u16,
+        ch: u16,
+        control_state: u32,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(which: u32) -> Handle;
+        fn GetConsoleMode(h: Handle, mode: *mut u32) -> i32;
+        fn SetConsoleMode(h: Handle, mode: u32) -> i32;
+        fn GetConsoleCP() -> u32;
+        fn SetConsoleCP(cp: u32) -> i32;
+        fn WaitForSingleObject(h: Handle, ms: u32) -> u32;
+        fn PeekConsoleInputW(h: Handle, buf: *mut InputRecord, len: u32, read: *mut u32) -> i32;
+        fn ReadConsoleInputW(h: Handle, buf: *mut InputRecord, len: u32, read: *mut u32) -> i32;
+        fn GetConsoleScreenBufferInfo(h: Handle, info: *mut ScreenBufferInfo) -> i32;
+    }
+
+    pub(super) struct Saved {
+        input: u32,
+        error: u32,
+        code_page: u32,
+    }
+
+    fn mode(h: Handle) -> io::Result<u32> {
+        let mut m = 0;
+        // SAFETY: GetConsoleMode writes one u32 through the pointer.
+        if unsafe { GetConsoleMode(h, &mut m) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(m)
+    }
+
+    pub(super) fn enter_raw() -> io::Result<Saved> {
+        // SAFETY: these calls only read and set console flags on standard handles.
+        unsafe {
+            let (input, error) = (GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE));
+            let saved = Saved {
+                input: mode(input)?,
+                error: mode(error).unwrap_or(0),
+                code_page: GetConsoleCP(),
+            };
+            let raw = (saved.input & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
+                | ENABLE_VIRTUAL_TERMINAL_INPUT;
+            if SetConsoleMode(input, raw) == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            SetConsoleMode(error, saved.error | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            SetConsoleCP(UTF8);
+            Ok(saved)
+        }
+    }
+
+    pub(super) fn leave_raw(saved: &Saved) {
+        // SAFETY: as above, restoring values read earlier.
+        unsafe {
+            SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), saved.input);
+            SetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), saved.error);
+            SetConsoleCP(saved.code_page);
+        }
+    }
+
+    /// Wait up to `ms` for a keypress that will produce a character, throwing away events that
+    /// won't (key releases, focus and mouse events), which would otherwise leave a read blocked.
+    pub(super) fn key_waiting(ms: u32) -> bool {
+        // SAFETY: the record buffer is one element long, matching the length passed.
+        unsafe {
+            let input = GetStdHandle(STD_INPUT_HANDLE);
+            if WaitForSingleObject(input, ms) != WAIT_OBJECT_0 {
+                return false;
+            }
+            loop {
+                let mut rec = InputRecord::default();
+                let mut n = 0;
+                if PeekConsoleInputW(input, &mut rec, 1, &mut n) == 0 || n == 0 {
+                    return false;
+                }
+                if rec.kind == KEY_EVENT && rec.key_down != 0 && rec.ch != 0 {
+                    return true;
+                }
+                ReadConsoleInputW(input, &mut rec, 1, &mut n);
+            }
+        }
+    }
+
+    pub(super) fn size() -> Option<(usize, usize)> {
+        let mut info = ScreenBufferInfo::default();
+        // SAFETY: GetConsoleScreenBufferInfo fills one struct through the pointer.
+        let ok = unsafe { GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &mut info) } != 0;
+        let w = (info.right - info.left + 1) as usize;
+        let h = (info.bottom - info.top + 1) as usize;
+        (ok && w > 0).then_some((w, h))
+    }
+
+    pub(super) fn enable_escapes() {
+        for which in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: as above.
+            unsafe {
+                let h = GetStdHandle(which);
+                if let Ok(m) = mode(h) {
+                    SetConsoleMode(h, m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+                }
+            }
+        }
+    }
+}
+
+/// Put bytes back into the terminal's input queue, so keys typed while tinsel was reading
+/// stdin reach the shell afterwards. Best effort: newer Linux kernels refuse (TIOCSTI).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn push_back_input(bytes: &[u8]) {
+    #[cfg(target_os = "macos")]
+    const TIOCSTI: std::ffi::c_ulong = 0x8001_7472;
+    #[cfg(target_os = "linux")]
+    const TIOCSTI: std::ffi::c_ulong = 0x5412;
+    for b in bytes {
+        // SAFETY: TIOCSTI reads one byte through the pointer.
+        if unsafe { ioctl(0, TIOCSTI, b as *const u8) } != 0 {
+            return;
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(crate) fn push_back_input(_: &[u8]) {}
+
+// MARK: - Ctrl-C
+
+/// While tinsel has the cursor hidden or the terminal in a special mode, Ctrl-C would leave
+/// the user's shell that way. Returns the previous handler so it can be put back afterwards.
+#[cfg(unix)]
+pub(crate) fn guard_interrupt() -> Option<usize> {
+    // SAFETY: on_interrupt only calls async-signal-safe functions.
+    let prev = unsafe { signal(SIGINT, on_interrupt as extern "C" fn(i32) as usize) };
+    (prev != SIG_ERR).then_some(prev)
+}
+
+#[cfg(unix)]
+pub(crate) fn restore_interrupt(prev: Option<usize>) {
+    if let Some(prev) = prev {
+        // SAFETY: prev came from signal() itself, so it is a valid handler value.
+        unsafe { signal(SIGINT, prev) };
+    }
+}
+
+/// Snapshot the terminal's settings so the Ctrl-C handler can restore them. The snapshot is
+/// kept as opaque bytes: tcsetattr is safe to call from a signal handler, `stty` isn't, and
+/// handing back exactly what tcgetattr gave means never needing to know the struct's layout.
+#[cfg(unix)]
+pub(crate) fn remember_terminal() {
+    // SAFETY: the buffer is larger than any platform's termios struct.
+    let ok = unsafe { tcgetattr(0, (&raw mut SAVED_TERMIOS).cast()) } == 0;
+    HAVE_SAVED.store(ok, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(unix)]
+pub(crate) fn forget_terminal() {
+    HAVE_SAVED.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Put back the settings [`remember_terminal`] saved, if any, and stop focus reports.
+#[cfg(unix)]
+pub(crate) fn restore_saved_terminal() {
+    if HAVE_SAVED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        // SAFETY: SAVED_TERMIOS holds exactly what tcgetattr wrote.
+        unsafe { tcsetattr(0, TCSANOW, (&raw const SAVED_TERMIOS).cast()) };
+    }
+    print!("\x1b[?1004l\x1b[?25h\x1b[?7h");
+}
+
+#[cfg(unix)]
+const SIGINT: i32 = 2;
+#[cfg(unix)]
+const SIG_ERR: usize = usize::MAX;
+#[cfg(unix)]
+const TCSANOW: i32 = 0;
+
+#[cfg(unix)]
+static mut SAVED_TERMIOS: [u8; 256] = [0; 256];
+#[cfg(unix)]
+static HAVE_SAVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn signal(sig: i32, handler: usize) -> usize;
+    fn write(fd: i32, buf: *const std::ffi::c_void, count: usize) -> isize;
+    fn _exit(code: i32) -> !;
+    fn tcgetattr(fd: i32, termios: *mut u8) -> i32;
+    fn tcsetattr(fd: i32, action: i32, termios: *const u8) -> i32;
+}
+
+#[cfg(unix)]
+extern "C" fn on_interrupt(_: i32) {
+    // stop focus reports, show the cursor, turn line wrapping back on
+    let msg = b"\x1b[?1004l\x1b[?25h\x1b[?7h\n";
+    // SAFETY: write, tcsetattr and _exit are all async-signal-safe, and SAVED_TERMIOS is only
+    // written before HAVE_SAVED is set.
+    unsafe {
+        if HAVE_SAVED.load(std::sync::atomic::Ordering::SeqCst) {
+            tcsetattr(0, TCSANOW, (&raw const SAVED_TERMIOS).cast());
+        }
+        write(1, msg.as_ptr().cast(), msg.len());
+        _exit(130)
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn guard_interrupt() -> Option<usize> {
+    None
+}
+
+#[cfg(not(unix))]
+pub(crate) fn restore_interrupt(_: Option<usize>) {}
+
+#[cfg(not(unix))]
+pub(crate) fn remember_terminal() {}
+
+#[cfg(not(unix))]
+pub(crate) fn forget_terminal() {}
+
+#[cfg(not(unix))]
+pub(crate) fn restore_saved_terminal() {
+    print!("\x1b[?25h\x1b[?7h");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_osc_color;
+
+    #[test]
+    fn reads_osc_colour_replies() {
+        assert_eq!(parse_osc_color("\x1b]11;rgb:ffff/ffff/ffff\x07"), Some((255, 255, 255)));
+        assert_eq!(parse_osc_color("\x1b]11;rgb:1e1e/2020/2a2a\x1b\\"), Some((30, 32, 42)));
+        assert_eq!(parse_osc_color("\x1b]11;rgb:ff/80/00\x07"), Some((255, 128, 0)));
+        assert_eq!(parse_osc_color("garbage"), None);
+    }
+}
