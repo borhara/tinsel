@@ -229,3 +229,293 @@ pub fn sample(stops: &[Rgb], t: f32) -> Rgb {
         }
     }
 }
+
+/// The colour family tinsel's accents are drawn in. Pink is tinsel's own; the others redraw
+/// every pink (accents, the spinner, the faint tint in the greys) in another hue, so a CLI can
+/// match its brand. Red, amber and sage keep their meaning whatever the accent.
+///
+/// ```
+/// tinsel::set_accent(tinsel::Accent::Blue);
+/// # tinsel::set_accent(tinsel::Accent::Pink);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Accent {
+    /// tinsel's own: rose, blush and berry.
+    #[default]
+    Pink,
+    /// Lavender and plum.
+    Violet,
+    /// Cornflower and navy.
+    Blue,
+    /// Aqua and deep teal.
+    Teal,
+    /// Apricot and rust.
+    Orange,
+    /// Any hue, in degrees around the colour wheel (pink is about 338°).
+    Hue(f32),
+}
+
+impl Accent {
+    /// The accent with this name (`pink`, `violet`, `blue`, `teal`, `orange`), or a hue in degrees.
+    pub fn from_name(name: &str) -> Option<Accent> {
+        Some(match name {
+            "pink" => Accent::Pink,
+            "violet" | "purple" => Accent::Violet,
+            "blue" => Accent::Blue,
+            "teal" => Accent::Teal,
+            "orange" => Accent::Orange,
+            n => Accent::Hue(n.parse().ok()?),
+        })
+    }
+
+    /// The hue the accent sits at, in degrees.
+    fn hue(self) -> f32 {
+        match self {
+            Accent::Pink => PINK_HUE,
+            Accent::Violet => 275.0,
+            Accent::Blue => 220.0,
+            Accent::Teal => 178.0,
+            Accent::Orange => 24.0,
+            Accent::Hue(h) => h.rem_euclid(360.0),
+        }
+    }
+}
+
+/// Where tinsel's pinks sit on the colour wheel.
+const PINK_HUE: f32 = 338.0;
+
+// the accent's hue in degrees as f32 bits; 0 = not decided yet
+static ACCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The accent in use: from `TINSEL_ACCENT` if set, otherwise [`Accent::Pink`], unless
+/// [`set_accent`] has chosen one.
+fn accent_hue() -> f32 {
+    match ACCENT.load(Ordering::Relaxed) {
+        0 => {
+            let accent = std::env::var("TINSEL_ACCENT")
+                .ok()
+                .and_then(|n| Accent::from_name(&n))
+                .unwrap_or_default();
+            set_accent(accent);
+            accent.hue()
+        }
+        bits => f32::from_bits(bits),
+    }
+}
+
+/// Choose the accent colour, for a brand or a `--accent` flag.
+pub fn set_accent(accent: Accent) {
+    // a hue of exactly 0.0 has bits 0, which means "undecided", so nudge it
+    let hue = accent.hue().max(f32::MIN_POSITIVE);
+    ACCENT.store(hue.to_bits(), Ordering::Relaxed);
+}
+
+/// A colour in the accent's family. Only pinks (hues from magenta to just short of red) move;
+/// everything else, red included, stays put.
+fn for_accent(rgb: Rgb, hue: f32) -> Rgb {
+    let (h, s, l) = to_hsl(rgb);
+    let deg = h * 360.0;
+    if s == 0.0 || !(295.0..354.0).contains(&deg) {
+        return rgb;
+    }
+    from_hsl((deg + hue - PINK_HUE).rem_euclid(360.0) / 360.0, s, l)
+}
+
+/// The SGR parameters for a colour; `layer` is 38 for foreground, 48 for background.
+pub(crate) fn sgr(rgb: Rgb, layer: u8) -> String {
+    let hue = accent_hue();
+    let rgb = if (hue - PINK_HUE).abs() > 0.5 {
+        for_accent(rgb, hue)
+    } else {
+        rgb
+    };
+    let Rgb(r, g, b) = if theme() == Theme::Light { for_light(rgb) } else { rgb };
+    if color_mode() == ColorMode::TrueColor {
+        format!("{layer};2;{r};{g};{b}")
+    } else {
+        let q = |c: u8| (c as u16 * 5 + 127) / 255;
+        format!("{layer};5;{}", 16 + 36 * q(r) + 6 * q(g) + q(b))
+    }
+}
+
+/// Colour the text. Resets only the foreground, so it nests inside bold, backgrounds and so on.
+pub fn paint(rgb: Rgb, s: &str) -> String {
+    if color_mode() == ColorMode::None {
+        return s.to_string();
+    }
+    format!("\x1b[{}m{s}\x1b[39m", sgr(rgb, 38))
+}
+
+/// Colour both the text and the cells behind it.
+pub fn paint_bg(fg: Rgb, bg: Rgb, s: &str) -> String {
+    if color_mode() == ColorMode::None {
+        return s.to_string();
+    }
+    format!("\x1b[{};{}m{s}\x1b[39;49m", sgr(fg, 38), sgr(bg, 48))
+}
+
+/// Tint the cells behind the text, leaving its own colours alone.
+pub(crate) fn on_bg(bg: Rgb, s: &str) -> String {
+    if color_mode() == ColorMode::None {
+        return s.to_string();
+    }
+    format!("\x1b[{}m{s}\x1b[49m", sgr(bg, 48))
+}
+
+fn attr(on: u8, off: u8, s: &str) -> String {
+    if color_mode() == ColorMode::None {
+        return s.to_string();
+    }
+    format!("\x1b[{on}m{s}\x1b[{off}m")
+}
+
+/// Bold text.
+pub fn bold(s: &str) -> String {
+    attr(1, 22, s)
+}
+
+/// Faint text.
+pub fn dim(s: &str) -> String {
+    attr(2, 22, s)
+}
+
+/// Italic text, where the terminal's font has it.
+pub fn italic(s: &str) -> String {
+    attr(3, 23, s)
+}
+
+/// Underlined text.
+pub fn underline(s: &str) -> String {
+    attr(4, 24, s)
+}
+
+/// Blinking text, animated by the terminal itself, so it keeps blinking after your program
+/// has exited. Most terminals support it (iTerm2, kitty, WezTerm, Ghostty, GNOME Terminal,
+/// macOS Terminal); where it's turned off or unsupported, the text simply stays still. Best
+/// kept to a single mark: a whole line blinking is hard to read.
+///
+/// ```
+/// println!("  {} ready", tinsel::blink(&tinsel::paint(tinsel::palette::ROSE, "✦")));
+/// ```
+pub fn blink(s: &str) -> String {
+    attr(5, 25, s)
+}
+
+/// Colour s across the stops; a non-zero shift slides the gradient back and forth.
+pub fn gradient(s: &str, stops: &[Rgb], shift: f32) -> String {
+    let n = s.chars().count().saturating_sub(1).max(1) as f32;
+    s.chars()
+        .enumerate()
+        .map(|(i, c)| {
+            let t = (i as f32 / n + shift).rem_euclid(2.0);
+            paint(
+                sample(stops, if t > 1.0 { 2.0 - t } else { t }),
+                c.encode_utf8(&mut [0; 4]),
+            )
+        })
+        .collect()
+}
+
+/// A painted string that remembers its visible width, so it can be padded and aligned.
+#[derive(Clone, Debug, Default)]
+pub struct Line {
+    text: String,
+    width: usize,
+}
+
+impl Line {
+    /// An empty line.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add text in a colour.
+    pub fn push(mut self, s: &str, rgb: Rgb) -> Self {
+        self.text += &paint(rgb, s);
+        self.width += crate::text::width(s);
+        self
+    }
+
+    /// Append text that's already styled (a badge, a link); its width is measured without the codes.
+    pub fn raw(mut self, styled: &str) -> Self {
+        self.text += styled;
+        self.width += crate::text::width(styled);
+        self
+    }
+
+    /// Add another line's text to the end of this one.
+    pub fn append(mut self, other: Line) -> Self {
+        self.text += &other.text;
+        self.width += other.width;
+        self
+    }
+
+    /// Add `n` spaces.
+    pub fn space(mut self, n: usize) -> Self {
+        self.text += &" ".repeat(n);
+        self.width += n;
+        self
+    }
+
+    /// A muted, aligned key followed by a value - the row shape cards are built from.
+    pub fn kv(key: &str, value: &str, color: Rgb) -> Self {
+        Line::new()
+            .push(&format!("{key:<10}"), palette::MUTED)
+            .push(value, color)
+    }
+
+    /// How many columns the line takes up on screen.
+    pub fn width(&self) -> usize {
+        self.width
+    }
+}
+
+impl fmt::Display for Line {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hsl_round_trips() {
+        for c in [
+            palette::ROSE,
+            palette::TEXT,
+            palette::SAGE,
+            palette::TRACK,
+            Rgb(0, 0, 0),
+            Rgb(255, 255, 255),
+        ] {
+            let (h, s, l) = to_hsl(c);
+            let back = from_hsl(h, s, l);
+            assert!(
+                c.0.abs_diff(back.0) <= 1 && c.1.abs_diff(back.1) <= 1 && c.2.abs_diff(back.2) <= 1,
+                "{c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn light_theme_darkens_text_and_keeps_pinks_pink() {
+        assert!(luminance(for_light(palette::TEXT)) < 0.3);
+        let rose = for_light(palette::ROSE);
+        assert!(rose.0 > rose.1 && rose.0 > rose.2, "still reddest: {rose:?}");
+        assert!(luminance(rose) < luminance(palette::ROSE));
+        // the track goes from dark grey to light grey
+        assert!(luminance(for_light(palette::TRACK)) > 0.6);
+    }
+
+    #[test]
+    fn accents_move_pinks_and_leave_signal_colours() {
+        let blue = for_accent(palette::ROSE, 220.0);
+        assert!(blue.2 > blue.0, "rose turned blue: {blue:?}");
+        assert_eq!(for_accent(palette::RED, 220.0), palette::RED);
+        assert_eq!(for_accent(palette::AMBER, 220.0), palette::AMBER);
+        assert_eq!(for_accent(palette::SAGE, 220.0), palette::SAGE);
+        assert_eq!(Accent::from_name("200"), Some(Accent::Hue(200.0)));
+    }
+}
