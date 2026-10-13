@@ -277,3 +277,116 @@ fn wave(fraction: f32, width: usize, t: Option<f32>) -> Line {
         line.push(glyph, mix(lit, SHINE, glow))
     })
 }
+
+/// A rounded box with a thin border, for summing up a run: a headline, then details.
+///
+/// ```
+/// use tinsel::Card;
+///
+/// Card::success("deployed")
+///     .aside("in 10.0s")
+///     .kv("url", "https://my-app.example.com")
+///     .kv("commands", "14 registered")
+///     .print();
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct Card {
+    headline: Option<Line>,
+    rows: Vec<Line>,
+    width: Option<usize>,
+}
+
+impl Card {
+    /// An empty card. Most cards start from [`Card::success`] or [`Card::failure`] instead.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A card headed `● headline` in rose.
+    pub fn success(headline: &str) -> Self {
+        Card::new().headline(Line::new().push("● ", ROSE).push(headline, TEXT))
+    }
+
+    /// A card headed `✕ headline` in red.
+    pub fn failure(headline: &str) -> Self {
+        Card::new().headline(Line::new().push("✕ ", RED).push(headline, TEXT))
+    }
+
+    /// Use any line as the headline. A blank line separates it from the rows below.
+    pub fn headline(mut self, line: Line) -> Self {
+        self.headline = Some(line);
+        self
+    }
+
+    /// Quieter text after the headline, like how long something took.
+    pub fn aside(mut self, text: &str) -> Self {
+        let headline = self.headline.take().unwrap_or_default();
+        self.headline = Some(headline.push(&format!(" {text}"), MUTED));
+        self
+    }
+
+    /// A row of any styled line.
+    pub fn line(mut self, line: Line) -> Self {
+        self.rows.push(line);
+        self
+    }
+
+    /// An empty row.
+    pub fn blank(self) -> Self {
+        self.line(Line::new())
+    }
+
+    /// A `key  value` row with the key muted.
+    pub fn kv(self, key: &str, value: &str) -> Self {
+        self.kv_with(key, value, TEXT)
+    }
+
+    /// A `key  value` row with the value in a colour of your choosing.
+    pub fn kv_with(self, key: &str, value: &str, color: Rgb) -> Self {
+        self.line(Line::kv(key, value, color))
+    }
+
+    /// Columns wide, border included (default: the content width).
+    pub fn width(mut self, cols: usize) -> Self {
+        self.width = Some(cols);
+        self
+    }
+
+    /// The card as lines, with a blank line above so it sits apart from what came before.
+    pub fn lines(&self) -> Block {
+        let width = self.width.unwrap_or_else(|| content_width().saturating_sub(2));
+        let inner = width.saturating_sub(2);
+        let rule = "─".repeat(inner);
+        let side = paint(LINE, "│");
+        let mut rows: Vec<&Line> = Vec::new();
+        let blank = Line::new();
+        if let Some(h) = &self.headline {
+            rows.push(h);
+            if !self.rows.is_empty() {
+                rows.push(&blank);
+            }
+        }
+        rows.extend(&self.rows);
+
+        let mut out = Block::new();
+        out.push("");
+        out.push(format!("  {}", paint(LINE, &format!("╭{rule}╮"))));
+        for row in rows {
+            let pad = inner.saturating_sub(2 + row.width());
+            out.push(format!("  {side}  {row}{}{side}", " ".repeat(pad)));
+        }
+        out.push(format!("  {}", paint(LINE, &format!("╰{rule}╯"))));
+        out
+    }
+
+    /// Print the card.
+    pub fn print(&self) {
+        self.lines().print();
+    }
+}
+
+impl fmt::Display for Card {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.lines().fmt(f)
+    }
+}
