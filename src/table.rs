@@ -418,3 +418,118 @@ impl Table {
         self.lines().print();
     }
 }
+
+/// The faint tint behind striped rows (redrawn light on light terminals).
+const STRIPE: Rgb = Rgb(38, 32, 36);
+
+struct Layout {
+    cols: usize,
+    header: Vec<Vec<String>>,
+    rows: Vec<(Vec<Vec<String>>, bool)>,
+    footer: Option<Vec<Vec<String>>>,
+    widths: Vec<usize>,
+    aligns: Vec<Align>,
+}
+
+/// How a row's plain cells are drawn.
+struct Look {
+    color: Rgb,
+    bold: bool,
+    /// Body rows show `·` in empty cells; headers and footers leave them blank.
+    body: bool,
+}
+
+impl Look {
+    fn heading() -> Look {
+        Look {
+            color: BLUSH,
+            bold: true,
+            body: false,
+        }
+    }
+
+    fn body(marked: bool) -> Look {
+        Look {
+            color: if marked { ROSE } else { TEXT },
+            bold: false,
+            body: true,
+        }
+    }
+
+    fn footer() -> Look {
+        Look {
+            color: TEXT,
+            bold: true,
+            body: false,
+        }
+    }
+}
+
+/// How many lines a row takes.
+fn height(cells: &[Vec<String>]) -> usize {
+    cells.iter().map(Vec::len).max().unwrap_or(1).max(1)
+}
+
+fn set<T: Clone + Default>(v: &mut Vec<T>, i: usize, value: T) {
+    if i >= v.len() {
+        v.resize(i + 1, T::default());
+    }
+    v[i] = value;
+}
+
+/// A cell as a number, scaled by its unit if it has one: `$1,200` → 1200, `1.5 MB` →
+/// 1 500 000, `2m` → 120, `84ms` → 0.084.
+fn parse_number(cell: &str) -> Option<f64> {
+    let s: String = cell
+        .trim()
+        .trim_start_matches('$')
+        .chars()
+        .filter(|&c| c != ',')
+        .collect();
+    let end = s
+        .char_indices()
+        .find(|&(i, c)| !(c.is_ascii_digit() || c == '.' || (i == 0 && (c == '-' || c == '+'))))
+        .map_or(s.len(), |(i, _)| i);
+    let value: f64 = s[..end].parse().ok()?;
+    let scale = match s[end..].trim() {
+        "" | "%" | "B" | "s" | "x" | "×" => 1.0,
+        "k" | "K" | "KB" | "kB" => 1e3,
+        "M" | "MB" => 1e6,
+        "G" | "GB" => 1e9,
+        "T" | "TB" => 1e12,
+        "KiB" => 1024.0,
+        "MiB" => 1024f64.powi(2),
+        "GiB" => 1024f64.powi(3),
+        "TiB" => 1024f64.powi(4),
+        "ns" => 1e-9,
+        "µs" | "us" => 1e-6,
+        "ms" => 1e-3,
+        "m" | "min" => 60.0,
+        "h" => 3600.0,
+        "d" => 86400.0,
+        _ => 1.0,
+    };
+    Some(value * scale)
+}
+
+impl fmt::Display for Table {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.lines().fmt(f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_number;
+
+    #[test]
+    fn numbers_understand_units() {
+        assert_eq!(parse_number("$1,200"), Some(1200.0));
+        assert_eq!(parse_number("1.5 MB"), Some(1.5e6));
+        assert!(parse_number("900 KB") < parse_number("1.2 MB"));
+        assert!(parse_number("45s") < parse_number("2m"));
+        assert_eq!(parse_number("84ms"), Some(0.084));
+        assert_eq!(parse_number("-3"), Some(-3.0));
+        assert_eq!(parse_number("n/a"), None);
+    }
+}
