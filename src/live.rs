@@ -1107,3 +1107,273 @@ impl std::error::Error for RunError {
         }
     }
 }
+
+/// When each step ran, as bars on one time axis: which steps overlapped, and where the time
+/// went. Steps that never started are listed without a bar.
+fn timeline(s: &Shared, width: usize) -> Vec<String> {
+    let now = s.now();
+    let mut order = Vec::new();
+    fn visit(s: &Shared, idx: usize, order: &mut Vec<usize>) {
+        order.push(idx);
+        for &c in &s.steps[idx].children {
+            visit(s, c, order);
+        }
+    }
+    for &r in &s.roots {
+        visit(s, r, &mut order);
+    }
+    let end = s
+        .steps
+        .iter()
+        .filter_map(|st| st.started.map(|b| st.ended.unwrap_or(now).max(b)))
+        .max()
+        .unwrap_or(now);
+    let total = (end - s.t0).as_secs_f64().max(0.001);
+    let label = |st: &StepData| format!("{}{}", "  ".repeat(st.depth), st.label);
+    let label_w = order
+        .iter()
+        .map(|&i| crate::text::width(&label(&s.steps[i])))
+        .max()
+        .unwrap_or(0);
+    let time_w = 7;
+    let track = width.saturating_sub(2 + label_w + 2 + 2 + time_w).max(10);
+    let col = |at: Instant| ((at - s.t0).as_secs_f64() / total * track as f64).round() as usize;
+
+    let mut out = Vec::new();
+    for &i in &order {
+        let st = &s.steps[i];
+        let name = crate::text::pad(&label(st), label_w);
+        let Some(began) = st.started else {
+            out.push(format!("  {}", paint(MUTED, &name)));
+            continue;
+        };
+        let finished = st.ended.unwrap_or(now);
+        let (a, b) = (col(began).min(track - 1), col(finished).min(track));
+        let color = match st.state {
+            State::Done => ROSE,
+            State::Warn => AMBER,
+            State::Fail => RED,
+            _ => crate::style::palette::BLUSH,
+        };
+        let bar = "━".repeat(b.saturating_sub(a).max(1));
+        let took = fmt_secs((finished - began).as_secs_f64());
+        let gap = track.saturating_sub(a + crate::text::width(&bar));
+        out.push(format!(
+            "  {}  {}{}{}  {}",
+            paint(if st.depth > 0 { SOFT } else { TEXT }, &name),
+            " ".repeat(a),
+            paint(color, &bar),
+            " ".repeat(gap),
+            paint(MUTED, &format!("{took:>time_w$}"))
+        ));
+    }
+    let axis_pad = " ".repeat(2 + label_w + 2);
+    out.push(format!(
+        "{axis_pad}{}",
+        paint(crate::style::palette::LINE, &"─".repeat(track))
+    ));
+    let total_label = fmt_secs(total);
+    out.push(format!(
+        "{axis_pad}{}{}",
+        paint(MUTED, "0s"),
+        paint(MUTED, &format!("{total_label:>w$}", w = track.saturating_sub(2)))
+    ));
+    out
+}
+
+fn draw(shared: &Mutex<Shared>, settled: bool) {
+    paint_frame(&mut lock(shared), settled);
+}
+
+/// Redraw the display over its last frame: the header the first time, then anything logged
+/// since, then the steps.
+fn paint_frame(s: &mut Shared, settled: bool) {
+    if s.abandoned {
+        return;
+    }
+    let mut buf = if s.drawn > 0 {
+        format!("\x1b[{}F", s.drawn)
+    } else {
+        String::new()
+    };
+    let mut kept = Vec::new();
+    if !std::mem::replace(&mut s.header_drawn, true) {
+        kept = header(s);
+    }
+    kept.append(&mut s.logs);
+    for line in &kept {
+        buf += line;
+        buf += "\x1b[K\n";
+    }
+    // no wrapping while drawing steps: an over-long line is cut at the edge rather than
+    // taking up two rows and throwing off the next redraw
+    buf += "\x1b[?7l";
+    let lines = render(s, s.now(), content_width(), settled);
+    let rest = &lines[s.committed.min(lines.len())..];
+    // the cursor can only move back up as far as the top of the screen, so a display taller
+    // than the terminal leaves its first rows in scrollback and redraws only what fits. The
+    // last frame is drawn in full, since nothing is redrawn after it.
+    let room = term::height().saturating_sub(1).max(1);
+    let (commit, tail) = if !settled && rest.len() > room {
+        rest.split_at(rest.len() - room)
+    } else {
+        (&rest[..0], rest)
+    };
+    for line in commit.iter().chain(tail) {
+        buf += line;
+        buf += "\x1b[K\n";
+    }
+    buf += "\x1b[J\x1b[?7h";
+    s.drawn = tail.len();
+    s.committed += commit.len();
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(buf.as_bytes());
+    let _ = out.flush();
+}
+
+fn header(s: &Shared) -> Vec<String> {
+    let header = format!("  {}  {}", paint(ROSE, &s.title), paint(SOFT, &s.target));
+    vec![String::new(), header, String::new()]
+}
+
+/// What a frame needs to know beyond the step itself.
+struct Frame {
+    spinner: Spinner,
+    bar: BarStyle,
+    now: Instant,
+    t: f32,
+    width: usize,
+    settled: bool,
+    /// If someone just came back to the window: when they left and when they returned.
+    returned: Option<(Instant, Instant)>,
+}
+
+/// The steps (and the closing card, if there is one), without the header.
+fn render(s: &Shared, now: Instant, width: usize, settled: bool) -> Vec<String> {
+    let frame = Frame {
+        spinner: s.spinner,
+        bar: s.bar,
+        now,
+        t: (now - s.t0).as_secs_f32(),
+        width,
+        settled,
+        returned: s.focus.as_ref().and_then(|f| f.just_returned(now)),
+    };
+    let mut lines = Vec::new();
+    for &idx in &s.roots {
+        walk(s, idx, &frame, &mut lines);
+    }
+    lines.extend(s.footer.iter().cloned());
+    lines
+}
+
+/// A step, then its sub-steps unless they've all quietly succeeded.
+fn walk(s: &Shared, idx: usize, frame: &Frame, out: &mut Vec<String>) {
+    let step = &s.steps[idx];
+    step_lines(step, frame, out);
+    let folded = step.state == State::Done && step.children.iter().all(|&c| !troubled(s, c));
+    if !folded {
+        for &child in &step.children {
+            walk(s, child, frame, out);
+        }
+    }
+}
+
+/// Whether a step or anything under it warned or failed.
+fn troubled(s: &Shared, idx: usize) -> bool {
+    let step = &s.steps[idx];
+    matches!(step.state, State::Warn | State::Fail) || step.children.iter().any(|&c| troubled(s, c))
+}
+
+fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
+    // marks sit centred in the spinner's column, so labels stay put when a step finishes;
+    // sub-steps start where their parent's label does
+    let gutter = f.spinner.width();
+    let nest = st.depth * (gutter + 2);
+    let indent = " ".repeat(2 + nest + gutter + 2);
+    let took = st
+        .started
+        .map(|b| fmt_secs((st.ended.unwrap_or(f.now) - b).as_secs_f64()))
+        .unwrap_or_default();
+    let row = |glyph: Line, label: Line, right_color: Rgb| {
+        let left = Line::new().space(2 + nest).append(glyph).space(2).append(label);
+        let pad = f.width.saturating_sub(left.width() + took.chars().count() + 2).max(1);
+        format!("{left}{}{}", " ".repeat(pad), paint(right_color, &took))
+    };
+    let centred = |mark: Line| {
+        Line::new()
+            .space((gutter - 1) / 2)
+            .append(mark)
+            .space(gutter - 1 - (gutter - 1) / 2)
+    };
+    let plain = |glyph: &str, glyph_color: Rgb, label_color: Rgb| {
+        (
+            centred(Line::new().push(glyph, glyph_color)),
+            Line::new().push(&st.label, label_color),
+        )
+    };
+    // a note's first line says what happened; any more (a failed command's last output) are quieter
+    let note = |color: Rgb, out: &mut Vec<String>| {
+        for (i, line) in st.note.lines().enumerate() {
+            out.push(format!("{indent}{}", paint(if i == 0 { color } else { MUTED }, line)));
+        }
+    };
+
+    match st.state {
+        State::Pending => {
+            let (g, l) = plain("○", MUTED, MUTED);
+            out.push(row(g, l, MUTED));
+        }
+        State::Active => {
+            out.push(row(f.spinner.frame(f.t), widgets::shimmer(&st.label, f.t), MUTED));
+            let usual = st.estimate.filter(|e| *e >= MIN_ESTIMATE);
+            if let Some((p, text)) = &st.progress {
+                let stats = paint(SOFT, &format!("{:>3.0}%  {text}", p * 100.0));
+                out.push(format!("{indent}{}  {stats}", f.bar.draw(*p, 30, f.t)));
+            } else if let (Some(usual), Some(started)) = (usual, st.started) {
+                let elapsed = (f.now - started).as_secs_f64();
+                let (text, color) = if elapsed <= usual {
+                    (
+                        format!("usually {} · {} left", approx(usual), approx(usual - elapsed)),
+                        SOFT,
+                    )
+                } else if elapsed <= usual * 1.25 {
+                    (format!("usually {} · nearly there", approx(usual)), SOFT)
+                } else {
+                    (
+                        format!("slower than usual · usually {}", approx(usual)),
+                        mix(AMBER, SOFT, 0.35),
+                    )
+                };
+                let bar = f.bar.draw(estimated_fraction(elapsed, usual), 30, f.t);
+                out.push(format!("{indent}{bar}  {}", paint(color, &text)));
+            }
+            if st.progress.is_none() && !st.detail.is_empty() {
+                out.push(format!("{indent}{}", paint(MUTED, &st.detail)));
+            }
+        }
+        State::Done => {
+            let mut age = st.ended.map_or(f32::MAX, |e| (f.now - e).as_secs_f32());
+            // finished while you were away? twinkle again now you're back
+            if let (Some((left, back)), Some(ended)) = (f.returned, st.ended) {
+                if ended >= left && ended <= back {
+                    age = (f.now - back).as_secs_f32();
+                }
+            }
+            let mark = widgets::pop(age)
+                .filter(|_| !f.settled)
+                .unwrap_or_else(|| Line::new().push("●", ROSE));
+            out.push(row(centred(mark), Line::new().push(&st.label, TEXT), MUTED));
+        }
+        State::Warn => {
+            let (g, l) = plain("▲", AMBER, TEXT);
+            out.push(row(g, l, MUTED));
+            note(mix(AMBER, MUTED, 0.35), out);
+        }
+        State::Fail => {
+            let (g, l) = plain("✕", RED, RED);
+            out.push(row(g, l, RED));
+            note(mix(RED, SOFT, 0.3), out);
+        }
+    }
+}
