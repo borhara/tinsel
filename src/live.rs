@@ -1,0 +1,629 @@
+use std::io::{IsTerminal, Read, Write};
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use crate::block::Block;
+use crate::history::{self, History};
+use crate::output::{self, Val};
+use crate::style::palette::{AMBER, MUTED, RED, ROSE, SOFT, TEXT};
+use crate::style::{Line, Rgb, mix, paint};
+use crate::watch::{Focus, Watch};
+use crate::widgets::{self, BarStyle, Card, Spinner};
+use crate::{format, notify, term};
+
+const MAX_WIDTH: usize = 76;
+const FRAME: Duration = Duration::from_millis(33);
+/// Redraws slow right down while nobody's looking.
+const AWAY_FRAME: Duration = Duration::from_millis(250);
+/// Runs shorter than this never send a notification.
+const DEFAULT_NOTIFY_AFTER: Duration = Duration::from_secs(10);
+/// Steps that usually take less than this don't get an estimate bar.
+const MIN_ESTIMATE: f64 = 1.0;
+const HIDE_CURSOR: &str = "\x1b[?25l";
+const SHOW_CURSOR: &str = "\x1b[?25h";
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum State {
+    Pending,
+    Active,
+    Done,
+    Warn,
+    Fail,
+}
+
+impl State {
+    fn name(self) -> &'static str {
+        match self {
+            State::Pending => "pending",
+            State::Active => "running",
+            State::Done => "done",
+            State::Warn => "warn",
+            State::Fail => "fail",
+        }
+    }
+}
+
+/// How a display shows itself, decided once when it starts.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mode {
+    /// Redrawn in place on a terminal.
+    Draw,
+    /// One plain line per finished step, for logs and pipes.
+    Plain,
+    /// One JSON event per change.
+    Json,
+    /// Nothing but failures.
+    Quiet,
+    /// Nothing at all, on a clock that only moves when told: for tests.
+    Headless,
+}
+
+struct StepData {
+    label: String,
+    /// What the step's timings are remembered under: the title and every label down to this one.
+    key: String,
+    depth: usize,
+    children: Vec<usize>,
+    state: State,
+    started: Option<Instant>,
+    ended: Option<Instant>,
+    detail: String,
+    note: String,
+    progress: Option<(f32, String)>,
+    /// How long this step usually takes, in seconds, from earlier runs.
+    estimate: Option<f64>,
+}
+
+struct Shared {
+    title: String,
+    target: String,
+    steps: Vec<StepData>,
+    /// Steps with no parent, in the order they were added.
+    roots: Vec<usize>,
+    footer: Vec<String>,
+    /// Lines logged since the last frame, waiting to be printed above the steps. A headless
+    /// display keeps them all, so snapshots show them.
+    logs: Vec<String>,
+    t0: Instant,
+    /// A headless display's clock: how far it has been moved on since it started.
+    clock: Option<Duration>,
+    drawn: usize,
+    /// Rows that scrolled off the top of a display taller than the terminal: left in
+    /// scrollback as they were, never redrawn.
+    committed: usize,
+    header_drawn: bool,
+    /// A panic took over the screen: stop drawing.
+    abandoned: bool,
+    mode: Mode,
+    spinner: Spinner,
+    bar: BarStyle,
+    history: Option<History>,
+    focus: Option<Arc<Focus>>,
+}
+
+impl Shared {
+    fn now(&self) -> Instant {
+        match self.clock {
+            Some(offset) => self.t0 + offset,
+            None => Instant::now(),
+        }
+    }
+}
+
+/// A list of steps redrawn in place as they run.
+///
+/// Steps can run one after another or at the same time: [`Step`] handles are cheap to clone
+/// and can be moved to other threads, and every active step animates on its own. Steps can
+/// have sub-steps ([`Step::step`]), and [`log`](Live::log) prints a line above the display
+/// without disturbing it.
+///
+/// Beyond spinners and timings, a `Live` display does three things on its own:
+///
+/// - **It learns.** Each step's duration is remembered between runs (see
+///   [`remember_as`](Live::remember_as)). Next time, a step that would only have had a spinner
+///   gets a progress bar and an estimate: `usually 42s · 18s left`, or `slower than usual`.
+/// - **It notices when you look away.** In terminals that report window focus, animation
+///   slows while you're in another window. If a run of 10 seconds or more finishes while
+///   you're away, you get a desktop notification ([`notify_after`](Live::notify_after)), and
+///   when you come back, the steps that finished meanwhile twinkle once so you can see them.
+/// - **It stays out of the way of typing.** Keys pressed during the run don't scribble over
+///   the display; they're handed back to the shell when it ends.
+///
+/// When stdout isn't a terminal it does none of this and prints one plain line per finished
+/// step, so CI logs stay readable. With [`Output::Json`](crate::Output::Json) every change is
+/// a JSON event instead, and with [`Output::Quiet`](crate::Output::Quiet) only failures print.
+pub struct Live {
+    shared: Arc<Mutex<Shared>>,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+    watch: Option<Watch>,
+    notify_after: Option<Duration>,
+    mode: Mode,
+    closed: bool,
+    prev_interrupt: Option<usize>,
+}
+
+/// A handle to one step of a [`Live`] display. Cheap to clone and safe to move to other threads.
+#[derive(Clone)]
+pub struct Step {
+    shared: Arc<Mutex<Shared>>,
+    idx: usize,
+}
+
+fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
+    shared.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn content_width() -> usize {
+    term::width().min(MAX_WIDTH)
+}
+
+fn fmt_secs(s: f64) -> String {
+    if s < 60.0 {
+        format!("{s:.1}s")
+    } else {
+        format!("{}m{:02}s", (s / 60.0) as u64, (s % 60.0) as u64)
+    }
+}
+
+/// Whole seconds, rounded up, for estimates that shouldn't flicker every frame.
+fn approx(secs: f64) -> String {
+    if secs < 60.0 {
+        format!("{}s", secs.ceil().max(1.0))
+    } else {
+        format::duration(Duration::from_secs_f64(secs))
+    }
+}
+
+/// How far along a step probably is: in step with the clock until 90% of its usual time,
+/// then easing towards (but never reaching) the end, so it never looks finished early.
+fn estimated_fraction(elapsed: f64, usual: f64) -> f32 {
+    let x = elapsed / usual;
+    let f = if x < 0.9 {
+        x
+    } else {
+        0.9 + 0.09 * (1.0 - (-(x - 0.9) * 3.0).exp())
+    };
+    f as f32
+}
+
+/// Displays drawing right now, so a panic can stop them and leave a clean screen.
+static DRAWING: Mutex<Vec<Weak<Mutex<Shared>>>> = Mutex::new(Vec::new());
+
+/// Stop every display mid-draw: running steps are marked failed, the last frame is drawn,
+/// and nothing is drawn after it. Called by the panic hook before it prints. Returns whether
+/// there were any.
+pub(crate) fn abandon_all() -> bool {
+    let drawing = std::mem::take(&mut *DRAWING.lock().unwrap_or_else(|e| e.into_inner()));
+    let mut any = false;
+    for shared in drawing.iter().filter_map(Weak::upgrade) {
+        // the panicking thread might be the one holding the lock, so never wait forever
+        let mut s = None;
+        for _ in 0..50 {
+            match shared.try_lock() {
+                Ok(guard) => s = Some(guard),
+                Err(TryLockError::Poisoned(e)) => s = Some(e.into_inner()),
+                Err(TryLockError::WouldBlock) => {
+                    thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
+            }
+            break;
+        }
+        let Some(mut s) = s else { continue };
+        let now = s.now();
+        for step in s.steps.iter_mut().filter(|st| st.state == State::Active) {
+            step.state = State::Fail;
+            step.ended = Some(now);
+            step.note = "interrupted by a panic".into();
+        }
+        paint_frame(&mut s, true);
+        s.abandoned = true;
+        print!("{SHOW_CURSOR}");
+        let _ = std::io::stdout().flush();
+        any = true;
+    }
+    any
+}
+
+impl Live {
+    /// Start a live display headed `title  target`, e.g. `deploy  my-app → production`.
+    ///
+    /// It starts drawing straight away; add steps with [`Live::step`].
+    pub fn new(title: impl Into<String>, target: impl Into<String>) -> Self {
+        let mode = match output::output() {
+            output::Output::Json => Mode::Json,
+            output::Output::Quiet => Mode::Quiet,
+            output::Output::Pretty if std::io::stdout().is_terminal() => Mode::Draw,
+            output::Output::Pretty => Mode::Plain,
+        };
+        let mut live = Live::with_mode(title.into(), target.into(), mode);
+        match mode {
+            Mode::Plain => {
+                let s = lock(&live.shared);
+                println!("{} {}", s.title, s.target);
+            }
+            Mode::Json => {
+                let s = lock(&live.shared);
+                output::emit(
+                    "live",
+                    &[("title", Val::Str(&s.title)), ("target", Val::Str(&s.target))],
+                );
+            }
+            Mode::Draw => live.start_drawing(),
+            Mode::Quiet | Mode::Headless => {}
+        }
+        live
+    }
+
+    /// A display that never draws, on a clock that only moves when you call
+    /// [`advance`](Live::advance), for checking what a run looks like in tests. Take a
+    /// [`snapshot`](Live::snapshot) whenever you want to see it. It keeps no history and
+    /// sends no notifications.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use tinsel::Live;
+    ///
+    /// tinsel::set_color_mode(tinsel::ColorMode::None);
+    /// let live = Live::headless("deploy", "my-app");
+    /// let build = live.step("Build");
+    /// build.start();
+    /// live.advance(Duration::from_millis(1200));
+    /// build.done();
+    /// assert!(live.snapshot().plain().contains("●   Build"));
+    /// assert!(live.snapshot().plain().ends_with("1.2s"));
+    /// ```
+    pub fn headless(title: impl Into<String>, target: impl Into<String>) -> Self {
+        let live = Live::with_mode(title.into(), target.into(), Mode::Headless);
+        lock(&live.shared).clock = Some(Duration::ZERO);
+        live
+    }
+
+    fn with_mode(title: String, target: String, mode: Mode) -> Self {
+        Live {
+            shared: Arc::new(Mutex::new(Shared {
+                title,
+                target,
+                steps: Vec::new(),
+                roots: Vec::new(),
+                footer: Vec::new(),
+                logs: Vec::new(),
+                t0: Instant::now(),
+                clock: None,
+                drawn: 0,
+                committed: 0,
+                header_drawn: false,
+                abandoned: false,
+                mode,
+                spinner: Spinner::default(),
+                bar: BarStyle::default(),
+                history: None,
+                focus: None,
+            })),
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: None,
+            watch: None,
+            notify_after: Some(DEFAULT_NOTIFY_AFTER),
+            mode,
+            closed: false,
+            prev_interrupt: None,
+        }
+    }
+
+    fn start_drawing(&mut self) {
+        // the theme has to be settled before the focus watcher starts reading stdin, because
+        // finding it out can mean asking the terminal and reading its reply
+        crate::style::theme();
+        self.prev_interrupt = term::guard_interrupt();
+        self.watch = Watch::start();
+        {
+            let mut s = lock(&self.shared);
+            s.history = History::open(&History::default_app());
+            s.focus = self.watch.as_ref().map(|w| w.focus.clone());
+        }
+        DRAWING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Arc::downgrade(&self.shared));
+        print!("{HIDE_CURSOR}");
+        let (shared, stop) = (self.shared.clone(), self.stop.clone());
+        let focus = self.watch.as_ref().map(|w| w.focus.clone());
+        self.thread = Some(thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                draw(&shared, false);
+                let away = focus.as_ref().is_some_and(|f| f.away());
+                thread::sleep(if away { AWAY_FRAME } else { FRAME });
+            }
+        }));
+    }
+
+    /// Add a pending step. Declaring every step up front shows the whole plan from the start.
+    pub fn step(&self, label: impl Into<String>) -> Step {
+        add_step(&self.shared, None, label.into())
+    }
+
+    /// Print a line above the display, which carries on drawing underneath it: for output
+    /// that's worth keeping, like a warning from a compiler or a URL. Safe to call from any
+    /// thread. In plain output it's an ordinary line; as JSON, a `"log"` event.
+    ///
+    /// ```no_run
+    /// let live = tinsel::Live::new("build", "my-app");
+    /// live.log("using cached dependencies from yesterday");
+    /// ```
+    pub fn log(&self, text: impl AsRef<str>) {
+        log(&self.shared, None, text.as_ref());
+    }
+
+    /// Choose how running steps animate (default: [`Spinner::Sparkle`]).
+    pub fn with_spinner(self, spinner: Spinner) -> Self {
+        lock(&self.shared).spinner = spinner;
+        self
+    }
+
+    /// Choose how progress bars and estimates are drawn (default: [`BarStyle::Line`]).
+    ///
+    /// ```no_run
+    /// use tinsel::{BarStyle, Live};
+    ///
+    /// let live = Live::new("render", "intro.mp4").with_bar(BarStyle::Waveform);
+    /// ```
+    pub fn with_bar(self, bar: BarStyle) -> Self {
+        lock(&self.shared).bar = bar;
+        self
+    }
+
+    /// The name step timings are remembered under. Defaults to the program's own name, which
+    /// is right unless several programs share a name or one program wants separate histories.
+    /// Steps are told apart by this name, the display's title, and their label.
+    ///
+    /// Timings live in `$XDG_CACHE_HOME/tinsel` (or `~/.cache/tinsel`), one small file per
+    /// name. Only runs drawn on a terminal are recorded, and only steps that succeed.
+    /// [`timings`](crate::timings) shows what's been learned.
+    pub fn remember_as(self, name: &str) -> Self {
+        if self.mode == Mode::Draw {
+            lock(&self.shared).history = History::open(name);
+        }
+        self
+    }
+
+    /// Don't remember step timings, or show estimates from earlier runs. Setting the
+    /// `TINSEL_NO_HISTORY` environment variable does the same for every program.
+    pub fn no_history(self) -> Self {
+        lock(&self.shared).history = None;
+        self
+    }
+
+    /// Send a desktop notification when the run finishes, if it took at least this long and
+    /// the terminal window wasn't focused at the time (default: 10 seconds).
+    pub fn notify_after(mut self, after: Duration) -> Self {
+        self.notify_after = Some(after);
+        self
+    }
+
+    /// Never send a notification when the run finishes.
+    pub fn no_notify(mut self) -> Self {
+        self.notify_after = None;
+        self
+    }
+
+    /// How long since the display started, for a closing "done in 10.2s".
+    pub fn elapsed(&self) -> Duration {
+        let s = lock(&self.shared);
+        s.now() - s.t0
+    }
+
+    /// Move a [`headless`](Live::headless) display's clock on. Does nothing to a display on
+    /// real time.
+    pub fn advance(&self, by: Duration) {
+        let mut s = lock(&self.shared);
+        if let Some(clock) = s.clock.as_mut() {
+            *clock += by;
+        }
+    }
+
+    /// The display as it looks right now, settled (no twinkles mid-way), with the header and
+    /// anything logged. Most useful with [`headless`](Live::headless) displays in tests.
+    pub fn snapshot(&self) -> Block {
+        let s = lock(&self.shared);
+        let mut lines = header(&s);
+        lines.extend(s.logs.iter().cloned());
+        lines.extend(render(&s, s.now(), content_width(), true));
+        lines.into()
+    }
+
+    /// When each step ran, as bars on one time axis, so you can see which steps overlapped
+    /// and where the time went.
+    ///
+    /// ```text
+    ///   Build                 ━━━━━━━━━━━━━━━━━━              2.3s
+    ///     linux-arm64         ━━━━━━━━━━━━━━                  1.8s
+    ///     linux-x64           ━━━━━━━━━━━━━━━━━━              2.3s
+    ///   Upload                                  ━━━━━━━━━━━━  1.6s
+    ///                         ──────────────────────────────
+    ///                         0s                          3.9s
+    /// ```
+    pub fn timeline(&self) -> Block {
+        timeline(&lock(&self.shared), content_width()).into()
+    }
+
+    /// Finish with a [`timeline`](Live::timeline) under the steps.
+    pub fn finish_with_timeline(mut self) {
+        {
+            let mut s = lock(&self.shared);
+            let mut footer = vec![String::new()];
+            footer.extend(timeline(&s, content_width()));
+            s.footer = footer;
+        }
+        self.close();
+    }
+
+    /// Stop drawing and leave the final state on screen. Dropping a `Live` does the same.
+    pub fn finish(mut self) {
+        self.close();
+    }
+
+    /// Finish with a summary [`Card`] under the steps.
+    ///
+    /// ```
+    /// use tinsel::{Card, Live};
+    ///
+    /// let live = Live::new("deploy", "my-app");
+    /// let build = live.step("Build");
+    /// build.start();
+    /// build.done();
+    /// live.finish_with_card(Card::success("deployed").kv("url", "https://my-app.example.com"));
+    /// ```
+    pub fn finish_with_card(mut self, card: Card) {
+        lock(&self.shared).footer = card.lines().into_lines();
+        self.close();
+    }
+
+    fn close(&mut self) {
+        if std::mem::replace(&mut self.closed, true) {
+            return;
+        }
+        match self.mode {
+            Mode::Plain => {
+                for line in &lock(&self.shared).footer {
+                    println!("{line}");
+                }
+                return;
+            }
+            Mode::Json => {
+                let s = lock(&self.shared);
+                let secs = (s.now() - s.t0).as_secs_f64();
+                let card: Vec<String> = s.footer.iter().map(|l| crate::text::strip_ansi(l)).collect();
+                let fields = [
+                    ("title", Val::Str(&s.title)),
+                    ("outcome", Val::Str(outcome(&s))),
+                    ("secs", Val::Num(secs)),
+                    ("card", Val::List(&card)),
+                ];
+                output::emit("finish", &fields);
+                return;
+            }
+            Mode::Quiet | Mode::Headless => return,
+            Mode::Draw => {}
+        }
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
+        // the last frame is drawn settled, so a step that just finished shows ● rather than mid-twinkle
+        draw(&self.shared, true);
+        DRAWING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|w| w.upgrade().is_some_and(|s| !Arc::ptr_eq(&s, &self.shared)));
+        let away = self.watch.as_ref().is_some_and(|w| w.focus.away());
+        if let Some(mut watch) = self.watch.take() {
+            watch.stop();
+        }
+        print!("{SHOW_CURSOR}");
+        let _ = std::io::stdout().flush();
+        term::restore_interrupt(self.prev_interrupt.take());
+
+        let s = lock(&self.shared);
+        if away && self.notify_after.is_some_and(|after| s.t0.elapsed() >= after) {
+            notify::notify(&format!("{} {}", s.title, s.target), &summary(&s));
+        }
+        if let Some(history) = &s.history {
+            history.save();
+        }
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+fn add_step(shared: &Arc<Mutex<Shared>>, parent: Option<usize>, label: String) -> Step {
+    let mut s = lock(shared);
+    let idx = s.steps.len();
+    let (key, depth) = match parent {
+        Some(p) => (history::key(&s.steps[p].key, &label), s.steps[p].depth + 1),
+        None => (history::key(&s.title, &label), 0),
+    };
+    s.steps.push(StepData {
+        label,
+        key,
+        depth,
+        children: Vec::new(),
+        state: State::Pending,
+        started: None,
+        ended: None,
+        detail: String::new(),
+        note: String::new(),
+        progress: None,
+        estimate: None,
+    });
+    match parent {
+        Some(p) => s.steps[p].children.push(idx),
+        None => s.roots.push(idx),
+    }
+    drop(s);
+    Step {
+        shared: shared.clone(),
+        idx,
+    }
+}
+
+fn log(shared: &Mutex<Shared>, step: Option<usize>, text: &str) {
+    let mut s = lock(shared);
+    let label = step.map(|i| s.steps[i].label.clone());
+    match s.mode {
+        Mode::Draw | Mode::Headless => {
+            let indent = " ".repeat(2 + s.spinner.width() + 2);
+            let line = match &label {
+                Some(l) => format!("{indent}{}  {}", paint(MUTED, l), paint(SOFT, text)),
+                None => format!("{indent}{}", paint(SOFT, text)),
+            };
+            s.logs.push(line);
+        }
+        Mode::Plain => match &label {
+            Some(l) => println!("    {l}: {text}"),
+            None => println!("    {text}"),
+        },
+        Mode::Json => {
+            let step = label.unwrap_or_default();
+            output::emit(
+                "log",
+                &[
+                    ("title", Val::Str(&s.title)),
+                    ("step", Val::Str(&step)),
+                    ("text", Val::Str(text)),
+                ],
+            );
+        }
+        Mode::Quiet => {}
+    }
+}
+
+/// `ok`, `warn` or `fail`: how the run went overall.
+fn outcome(s: &Shared) -> &'static str {
+    if s.steps.iter().any(|st| st.state == State::Fail) {
+        "fail"
+    } else if s.steps.iter().any(|st| st.state == State::Warn) {
+        "warn"
+    } else {
+        "ok"
+    }
+}
+
+/// One line on how the run went, for the notification.
+fn summary(s: &Shared) -> String {
+    let took = format::duration(s.t0.elapsed());
+    if let Some(failed) = s.steps.iter().find(|st| st.state == State::Fail) {
+        return format!("✕ {} failed after {took}", failed.label);
+    }
+    match s.steps.iter().filter(|st| st.state == State::Warn).count() {
+        0 => format!("● finished in {took}"),
+        n => format!("▲ finished in {took}, with {}", format::plural(n as u64, "warning")),
+    }
+}
