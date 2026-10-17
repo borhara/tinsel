@@ -627,3 +627,250 @@ fn summary(s: &Shared) -> String {
         n => format!("▲ finished in {took}, with {}", format::plural(n as u64, "warning")),
     }
 }
+
+impl Step {
+    fn with<R>(&self, f: impl FnOnce(&mut StepData) -> R) -> R {
+        f(&mut lock(&self.shared).steps[self.idx])
+    }
+
+    /// Add a pending sub-step, drawn indented under this one. Once a step and all its
+    /// sub-steps have succeeded, the sub-steps fold away; if any warned or failed, they stay.
+    ///
+    /// ```
+    /// let live = tinsel::Live::new("release", "v2.1.0");
+    /// let build = live.step("Build");
+    /// let (linux, mac) = (build.step("linux"), build.step("macos"));
+    /// build.start();
+    /// for target in [&linux, &mac] {
+    ///     target.start();
+    ///     target.done();
+    /// }
+    /// build.done();
+    /// ```
+    pub fn step(&self, label: impl Into<String>) -> Step {
+        add_step(&self.shared, Some(self.idx), label.into())
+    }
+
+    /// Mark the step as running: its spinner starts and its timer begins. If it has run
+    /// before, its usual duration is looked up so it can show an estimate.
+    pub fn start(&self) {
+        let mut s = lock(&self.shared);
+        let now = s.now();
+        let estimate = s.history.as_ref().and_then(|h| h.estimate(&s.steps[self.idx].key));
+        let step = &mut s.steps[self.idx];
+        step.state = State::Active;
+        step.started = Some(now);
+        step.estimate = estimate;
+        if s.mode == Mode::Json {
+            emit_step(&s, self.idx, None);
+        }
+    }
+
+    /// A dim sub-line under the active step, e.g. what it's working on right now.
+    pub fn detail(&self, text: impl Into<String>) {
+        let text = text.into();
+        self.with(|s| s.detail = text);
+    }
+
+    /// Show a progress bar under the active step; `text` sits beside the percentage. A step
+    /// that reports its own progress doesn't show an estimate.
+    pub fn progress(&self, fraction: f32, text: impl Into<String>) {
+        let text = text.into();
+        self.with(|s| s.progress = Some((fraction.clamp(0.0, 1.0), text)));
+    }
+
+    /// Print a line above the display, labelled with this step: see [`Live::log`].
+    pub fn log(&self, text: impl AsRef<str>) {
+        log(&self.shared, Some(self.idx), text.as_ref());
+    }
+
+    /// Mark the step as finished. Its mark twinkles, then settles into `●`.
+    pub fn done(&self) {
+        self.end(State::Done, String::new());
+    }
+
+    /// Mark the step as finished with something worth a look, shown as a note under it.
+    pub fn warn(&self, note: impl Into<String>) {
+        self.end(State::Warn, note.into());
+    }
+
+    /// Mark the step as failed, with the reason shown under it.
+    pub fn fail(&self, note: impl Into<String>) {
+        self.end(State::Fail, note.into());
+    }
+
+    /// Run `f` as this step: started if it hasn't been, then done on `Ok` or failed on `Err`,
+    /// with the error as its note.
+    ///
+    /// ```no_run
+    /// # fn load_config() -> Result<(), std::io::Error> { Ok(()) }
+    /// let live = tinsel::Live::new("deploy", "my-app");
+    /// live.step("Load config").try_run(load_config)?;
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn try_run<T, E: std::fmt::Display>(&self, f: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+        self.start_if_pending();
+        let result = f();
+        match &result {
+            Ok(_) => self.done(),
+            Err(e) => self.fail(e.to_string()),
+        }
+        result
+    }
+
+    /// Like [`try_run`](Step::try_run), but on `Err` tries again, up to `retries` more times,
+    /// waiting a little longer each time (0.5s, 1s, 2s, … up to 8s). The step's detail shows
+    /// which attempt it's on. Succeeding after a retry ends on a warning, so flaky steps
+    /// get noticed.
+    pub fn retry<T, E: std::fmt::Display>(&self, retries: u32, mut f: impl FnMut() -> Result<T, E>) -> Result<T, E> {
+        self.start_if_pending();
+        let mut attempt = 0;
+        loop {
+            match f() {
+                Ok(v) => {
+                    self.settle_after(attempt);
+                    return Ok(v);
+                }
+                Err(e) if attempt < retries => {
+                    attempt += 1;
+                    self.detail(format!("attempt {} of {} · {e}", attempt + 1, retries + 1));
+                    thread::sleep(backoff(attempt));
+                }
+                Err(e) => {
+                    self.fail(attempts_note(&e.to_string(), attempt));
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    /// Run a command as this step, showing its latest line of output as the step's detail.
+    /// Done if it exits successfully; otherwise failed, with its last lines of output under
+    /// it. Returns everything it printed (stdout and stderr together).
+    ///
+    /// ```no_run
+    /// use std::process::Command;
+    ///
+    /// let live = tinsel::Live::new("build", "my-app");
+    /// let output = live.step("Compile").run(Command::new("cargo").arg("build"))?;
+    /// # Ok::<(), tinsel::RunError>(())
+    /// ```
+    ///
+    /// For a timeout or retries, use [`command`](Step::command).
+    pub fn run(&self, command: &mut Command) -> Result<String, RunError> {
+        self.command(command).run()
+    }
+
+    /// A command to run as this step, with options: see [`StepCommand`].
+    pub fn command<'c>(&self, command: &'c mut Command) -> StepCommand<'_, 'c> {
+        StepCommand {
+            step: self,
+            command,
+            timeout: None,
+            retries: 0,
+            tail: 12,
+        }
+    }
+
+    fn start_if_pending(&self) {
+        if self.with(|s| s.state == State::Pending) {
+            self.start();
+        }
+    }
+
+    /// Done, or a warning if it took more than one attempt.
+    fn settle_after(&self, retries: u32) {
+        if retries == 0 {
+            self.done();
+        } else {
+            self.warn(format!("succeeded on attempt {}", retries + 1));
+        }
+    }
+
+    fn end(&self, state: State, note: String) {
+        let mut s = lock(&self.shared);
+        let now = s.now();
+        let mode = s.mode;
+        let step = &mut s.steps[self.idx];
+        let started = *step.started.get_or_insert(now);
+        step.state = state;
+        step.ended = Some(now);
+        step.detail.clear();
+        step.progress = None;
+        step.note = note;
+        let secs = (now - started).as_secs_f64();
+        let key = step.key.clone();
+        // failures stop early, so their times would drag the estimate down
+        if state != State::Fail {
+            if let Some(history) = s.history.as_mut() {
+                history.record(&key, secs);
+            }
+        }
+        match mode {
+            Mode::Plain => println!("{}", plain_line(&s.steps[self.idx], secs)),
+            Mode::Quiet if state == State::Fail => eprintln!("{}", plain_line(&s.steps[self.idx], secs)),
+            Mode::Json => emit_step(&s, self.idx, Some(secs)),
+            _ => {}
+        }
+    }
+}
+
+/// `  [ok] Build (1.2s)`, indented under its parent if it has one.
+fn plain_line(step: &StepData, secs: f64) -> String {
+    let mark = match step.state {
+        State::Warn => "warn",
+        State::Fail => "FAIL",
+        _ => "ok",
+    };
+    let indent = "  ".repeat(step.depth + 1);
+    let mut note = step.note.lines();
+    let tail = note.next().map(|first| format!(" - {first}")).unwrap_or_default();
+    let mut out = format!("{indent}[{mark}] {} ({}){tail}", step.label, fmt_secs(secs));
+    for line in note {
+        out += &format!("\n{indent}    | {line}");
+    }
+    out
+}
+
+fn emit_step(s: &Shared, idx: usize, secs: Option<f64>) {
+    let step = &s.steps[idx];
+    let mut path = vec![step.label.clone()];
+    let mut at = idx;
+    while let Some(parent) = s.steps.iter().position(|p| p.children.contains(&at)) {
+        path.insert(0, s.steps[parent].label.clone());
+        at = parent;
+    }
+    let mut fields = vec![
+        ("title", Val::Str(&s.title)),
+        ("step", Val::Str(&step.label)),
+        ("path", Val::List(&path)),
+        ("state", Val::Str(step.state.name())),
+    ];
+    if let Some(secs) = secs {
+        fields.push(("secs", Val::Num(secs)));
+    }
+    if !step.note.is_empty() {
+        fields.push(("note", Val::Str(&step.note)));
+    }
+    output::emit("step", &fields);
+}
+
+/// How long to wait before retry number `attempt` (from 1).
+fn backoff(attempt: u32) -> Duration {
+    Duration::from_millis(500 * 2u64.pow(attempt.saturating_sub(1).min(4)))
+}
+
+fn attempts_note(error: &str, retries: u32) -> String {
+    match retries {
+        0 => error.to_string(),
+        n => {
+            let (first, rest) = error.split_once('\n').unwrap_or((error, ""));
+            let rest = if rest.is_empty() {
+                String::new()
+            } else {
+                format!("\n{rest}")
+            };
+            format!("{first} (after {} attempts){rest}", n + 1)
+        }
+    }
+}
