@@ -1377,3 +1377,24 @@ fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimates_never_look_finished_early() {
+        assert!((estimated_fraction(21.0, 42.0) - 0.5).abs() < 1e-6);
+        assert!(estimated_fraction(42.0, 42.0) < 0.95);
+        assert!(estimated_fraction(1000.0, 42.0) < 0.991);
+        // and keep creeping forward
+        assert!(estimated_fraction(60.0, 42.0) > estimated_fraction(50.0, 42.0));
+    }
+
+    #[test]
+    fn approximations_round_up_to_whole_seconds() {
+        assert_eq!(approx(41.2), "42s");
+        assert_eq!(approx(0.3), "1s");
+        assert_eq!(approx(187.0), "3m07s");
+    }
+}
