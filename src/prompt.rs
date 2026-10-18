@@ -1198,3 +1198,67 @@ pub fn editor(question: &str, initial: &str) -> Result<String> {
     frame.draw(&[answered(question, &crate::format::plural(lines as u64, "line"))]);
     Ok(text)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fuzzy_matches_letters_in_order() {
+        assert_eq!(fuzzy("production", "pdn"), Some(vec![0, 3, 9]));
+        assert_eq!(fuzzy("Staging", "stg"), Some(vec![0, 1, 3]));
+        assert_eq!(fuzzy("staging", "gts"), None);
+        assert_eq!(fuzzy("anything", ""), Some(vec![]));
+    }
+
+    #[test]
+    fn dates_round_trip_through_days() {
+        for d in [
+            (1970, 1, 1),
+            (2000, 2, 29),
+            (2026, 11, 12),
+            (1969, 12, 31),
+            (2400, 12, 31),
+        ] {
+            let date = Date::new(d.0, d.1, d.2).unwrap();
+            assert_eq!(Date::from_days(date.days()), date);
+        }
+        assert_eq!(Date::new(1970, 1, 1).unwrap().days(), 0);
+        // 2026-11-12 is a Thursday
+        assert_eq!(Date::new(2026, 11, 12).unwrap().weekday(), 3);
+    }
+
+    #[test]
+    fn months_clamp_to_their_length() {
+        let jan31 = Date::new(2027, 1, 31).unwrap();
+        assert_eq!(jan31.add_months(1), Date::new(2027, 2, 28).unwrap());
+        assert_eq!(jan31.add_months(-2), Date::new(2026, 11, 30).unwrap());
+        assert_eq!(Date::new(2026, 2, 29), None);
+    }
+
+    #[test]
+    fn dates_parse() {
+        assert_eq!("2026-03-14".parse(), Ok(Date::new(2026, 3, 14).unwrap()));
+        assert!("2026-13-01".parse::<Date>().is_err());
+        assert!("soon".parse::<Date>().is_err());
+    }
+
+    #[test]
+    fn line_editing_moves_and_deletes() {
+        let mut e = LineEdit::default();
+        for c in "deploy now".chars() {
+            e.key(if c == ' ' { Key::Space } else { Key::Char(c) });
+        }
+        e.key(Key::Ctrl('w'));
+        assert_eq!(e.text, "deploy ");
+        e.key(Key::Home);
+        e.key(Key::Char('>'));
+        assert_eq!(e.split(), (">", "deploy "));
+        e.key(Key::Right);
+        e.key(Key::Backspace);
+        assert_eq!(e.text, ">eploy ");
+        e.key(Key::End);
+        e.key(Key::Ctrl('u'));
+        assert_eq!(e.text, "");
+    }
+}
