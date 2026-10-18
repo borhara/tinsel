@@ -715,3 +715,240 @@ fn kind_of_number<T>() -> &'static str {
 }
 
 // MARK: - Lists
+
+const VISIBLE: usize = 8;
+
+/// The slice of a long list to show, keeping the cursor in view.
+fn window(len: usize, cursor: usize) -> std::ops::Range<usize> {
+    let shown = len.min(VISIBLE);
+    let top = cursor.saturating_sub(shown / 2).min(len - shown);
+    top..top + shown
+}
+
+/// Whether `query`'s characters all appear in `option`, in order (ignoring case), and if so
+/// where, so they can be highlighted.
+fn fuzzy(option: &str, query: &str) -> Option<Vec<usize>> {
+    let mut hits = Vec::new();
+    let mut want = query.chars().flat_map(char::to_lowercase).peekable();
+    for (i, c) in option.chars().enumerate() {
+        let Some(&w) = want.peek() else { break };
+        if c.to_lowercase().eq(std::iter::once(w)) {
+            hits.push(i);
+            want.next();
+        }
+    }
+    want.peek().is_none().then_some(hits)
+}
+
+/// The options shown in a list question, narrowed by what's been typed in long lists.
+struct Picker<'a> {
+    options: &'a [&'a str],
+    /// Long lists can be filtered by typing; short ones keep j/k for moving.
+    filterable: bool,
+    filter: String,
+    /// Indices into `options` that match the filter, with the matched characters.
+    shown: Vec<(usize, Vec<usize>)>,
+    /// Position in `shown`.
+    cursor: usize,
+}
+
+impl<'a> Picker<'a> {
+    fn new(options: &'a [&'a str]) -> Self {
+        let mut picker = Picker {
+            options,
+            filterable: options.len() > VISIBLE,
+            filter: String::new(),
+            shown: Vec::new(),
+            cursor: 0,
+        };
+        picker.refilter();
+        picker
+    }
+
+    fn refilter(&mut self) {
+        let keep = self.shown.get(self.cursor).map(|(i, _)| *i);
+        self.shown = (0..self.options.len())
+            .filter_map(|i| fuzzy(self.options[i], &self.filter).map(|hits| (i, hits)))
+            .collect();
+        // stay on the same option if it's still there
+        self.cursor = keep
+            .and_then(|k| self.shown.iter().position(|(i, _)| *i == k))
+            .unwrap_or(0);
+    }
+
+    fn current(&self) -> Option<usize> {
+        self.shown.get(self.cursor).map(|(i, _)| *i)
+    }
+
+    /// Handle a key that moves or filters; returns `false` for keys it doesn't use.
+    fn key(&mut self, key: Key) -> bool {
+        let n = self.shown.len().max(1);
+        match key {
+            Key::Up => self.cursor = (self.cursor + n - 1) % n,
+            Key::Down => self.cursor = (self.cursor + 1) % n,
+            Key::Char('k') if !self.filterable => self.cursor = (self.cursor + n - 1) % n,
+            Key::Char('j') if !self.filterable => self.cursor = (self.cursor + 1) % n,
+            Key::Char(c) if self.filterable => {
+                self.filter.push(c);
+                self.refilter();
+            }
+            Key::Backspace if self.filterable => {
+                self.filter.pop();
+                self.refilter();
+            }
+            Key::Ctrl('u') if self.filterable => {
+                self.filter.clear();
+                self.refilter();
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The question line, with the filter typed so far.
+    fn heading(&self, question: &str) -> String {
+        if self.filter.is_empty() {
+            ask(question)
+        } else {
+            format!("{}  {}{}", ask(question), paint(TEXT, &self.filter), paint(ROSE, "▏"))
+        }
+    }
+
+    /// The visible options, each drawn by `row(option index, is cursor, label)`.
+    fn rows(&self, row: impl Fn(usize, bool, String) -> String) -> Vec<String> {
+        if self.shown.is_empty() {
+            return vec![format!("      {}", paint(MUTED, "no matches"))];
+        }
+        window(self.shown.len(), self.cursor)
+            .map(|pos| {
+                let (i, hits) = &self.shown[pos];
+                let here = pos == self.cursor;
+                let base = if here { TEXT } else { SOFT };
+                let label: String = self.options[*i]
+                    .chars()
+                    .enumerate()
+                    .map(|(ci, c)| {
+                        let color = if hits.contains(&ci) { ROSE } else { base };
+                        paint(color, c.encode_utf8(&mut [0; 4]))
+                    })
+                    .collect();
+                row(*i, here, label)
+            })
+            .collect()
+    }
+}
+
+/// One of a list, moved through with ↑↓ (or j/k). Returns the chosen index. In lists longer
+/// than eight, typing narrows the list to options containing those letters in order.
+pub fn select(question: &str, options: &[&str]) -> Result<usize> {
+    need_terminal()?;
+    if options.is_empty() {
+        return Err(Error::NoOptions);
+    }
+    let _raw = Raw::enter()?;
+    let mut frame = Frame::default();
+    let mut picker = Picker::new(options);
+    let hint = if picker.filterable {
+        "type to filter · ↑↓ move · enter choose"
+    } else {
+        "↑↓ move · enter choose"
+    };
+    loop {
+        let mut lines = vec![picker.heading(question)];
+        lines.extend(picker.rows(|_, here, label| {
+            if here {
+                format!("    {} {label}", paint(ROSE, "›"))
+            } else {
+                format!("      {label}")
+            }
+        }));
+        lines.push(keys(hint));
+        frame.draw(&lines);
+        match read_key()? {
+            Key::Enter => {
+                if let Some(i) = picker.current() {
+                    frame.draw(&[answered(question, options[i])]);
+                    return Ok(i);
+                }
+            }
+            // Esc clears a filter first, and only cancels once there's nothing to clear
+            Key::Esc if !picker.filter.is_empty() => {
+                picker.filter.clear();
+                picker.refilter();
+            }
+            Key::Esc | Key::Interrupt => return Err(cancel(&mut frame, question)),
+            key => {
+                picker.key(key);
+            }
+        }
+    }
+}
+
+/// Several of a list: space toggles, `a` toggles all, enter confirms. Returns the chosen
+/// indices in order. In lists longer than eight, typing filters and Ctrl-A toggles all of
+/// what's shown.
+pub fn multiselect(question: &str, options: &[&str], preselected: &[usize]) -> Result<Vec<usize>> {
+    need_terminal()?;
+    if options.is_empty() {
+        return Ok(Vec::new());
+    }
+    let _raw = Raw::enter()?;
+    let mut frame = Frame::default();
+    let mut picker = Picker::new(options);
+    let mut picked: Vec<bool> = (0..options.len()).map(|i| preselected.contains(&i)).collect();
+    let hint = if picker.filterable {
+        "type to filter · ↑↓ move · space toggle · ctrl-a all · enter done"
+    } else {
+        "↑↓ move · space toggle · a all · enter done"
+    };
+    loop {
+        let mut lines = vec![picker.heading(question)];
+        lines.extend(picker.rows(|i, here, label| {
+            let mark = if picked[i] {
+                paint(ROSE, "◉")
+            } else {
+                paint(MUTED, "○")
+            };
+            let pointer = if here { paint(ROSE, "›") } else { " ".into() };
+            format!("    {pointer} {mark} {label}")
+        }));
+        lines.push(keys(hint));
+        frame.draw(&lines);
+        match read_key()? {
+            Key::Space => {
+                if let Some(i) = picker.current() {
+                    picked[i] = !picked[i];
+                }
+            }
+            Key::Char('a') if !picker.filterable => {
+                let all = picked.iter().all(|p| *p);
+                picked.iter_mut().for_each(|p| *p = !all);
+            }
+            Key::Ctrl('a') => {
+                let shown: Vec<usize> = picker.shown.iter().map(|(i, _)| *i).collect();
+                let all = shown.iter().all(|&i| picked[i]);
+                shown.iter().for_each(|&i| picked[i] = !all);
+            }
+            Key::Enter => break,
+            Key::Esc if !picker.filter.is_empty() => {
+                picker.filter.clear();
+                picker.refilter();
+            }
+            Key::Esc | Key::Interrupt => return Err(cancel(&mut frame, question)),
+            key => {
+                picker.key(key);
+            }
+        }
+    }
+    let chosen: Vec<usize> = (0..options.len()).filter(|&i| picked[i]).collect();
+    let names: Vec<&str> = chosen.iter().map(|&i| options[i]).collect();
+    let summary = if names.is_empty() {
+        "none".to_string()
+    } else {
+        text::truncate(&names.join(", "), 40)
+    };
+    frame.draw(&[answered(question, &summary)]);
+    Ok(chosen)
+}
+
+// MARK: - Dates
