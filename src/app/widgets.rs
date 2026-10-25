@@ -271,3 +271,275 @@ impl Widget for Panel<'_> {
 }
 
 // MARK: - List
+
+/// A list to move through, with the chosen row lit up. It scrolls itself to keep that row in
+/// view, and shows a scrollbar when there's more than fits. Keep the selected index in your
+/// app and move it with [`navigate`](super::navigate).
+///
+/// ```
+/// use tinsel::app::{Frame, List};
+///
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// let mut frame = Frame::new(12, 3);
+/// frame.render(frame.area(), List::new(["api", "worker", "cron"]).selected(1));
+/// assert_eq!(frame.snapshot().plain(), "  api\n› worker\n  cron");
+/// ```
+pub struct List {
+    items: Vec<String>,
+    selected: Option<usize>,
+}
+
+impl List {
+    /// A list of these items. Styled text is fine.
+    pub fn new<S: Into<String>>(items: impl IntoIterator<Item = S>) -> Self {
+        List {
+            items: items.into_iter().map(Into::into).collect(),
+            selected: None,
+        }
+    }
+
+    /// Which item is chosen.
+    pub fn selected(mut self, index: usize) -> Self {
+        self.selected = Some(index);
+        self
+    }
+}
+
+impl Widget for List {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        let (n, h) = (self.items.len(), area.height);
+        if n == 0 {
+            frame.print(area, 0, &paint(MUTED, "nothing here yet"));
+            return;
+        }
+        let chosen = self.selected.map(|s| s.min(n - 1));
+        let start = if n <= h {
+            0
+        } else {
+            chosen.unwrap_or(0).saturating_sub(h / 2).min(n - h)
+        };
+        let overflow = n > h;
+        let text_w = area.width.saturating_sub(overflow as usize);
+        for (row, i) in (start..n).take(h).enumerate() {
+            let line = area.row(row);
+            let line = Rect::new(line.x, line.y, text_w, line.height);
+            if Some(i) == chosen {
+                frame.print(
+                    line,
+                    0,
+                    &format!("{} {}", paint(ROSE, "›"), bold(&paint(TEXT, &self.items[i]))),
+                );
+                frame.tint(line, mix(TRACK, BERRY, 0.35));
+            } else {
+                frame.print(line, 0, &format!("  {}", paint(SOFT, &self.items[i])));
+            }
+        }
+        if overflow && area.width > 0 {
+            let thumb = (h * h / n).max(1);
+            let at = start * (h - thumb) / (n - h);
+            let bar = Rect::new(area.x + area.width - 1, area.y, 1, h);
+            for row in 0..h {
+                let mark = if (at..at + thumb).contains(&row) {
+                    paint(ROSE, "┃")
+                } else {
+                    paint(TRACK, "│")
+                };
+                frame.print(bar, row, &mark);
+            }
+        }
+    }
+}
+
+// MARK: - Tabs
+
+/// A row of tabs, the chosen one a soft pink pill.
+///
+/// ```
+/// use tinsel::app::{Frame, Tabs};
+///
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// let tabs = Tabs::new(["overview", "logs"]).selected(1);
+/// let mut frame = Frame::new(30, 1);
+/// frame.render(frame.area(), &tabs);
+/// assert_eq!(frame.snapshot().plain(), " overview   logs");
+/// assert_eq!(tabs.at(frame.area(), 13, 0), Some(1));
+/// ```
+pub struct Tabs {
+    titles: Vec<String>,
+    selected: usize,
+}
+
+impl Tabs {
+    /// Tabs with these titles.
+    pub fn new<S: Into<String>>(titles: impl IntoIterator<Item = S>) -> Self {
+        Tabs {
+            titles: titles.into_iter().map(Into::into).collect(),
+            selected: 0,
+        }
+    }
+
+    /// Which tab is chosen.
+    pub fn selected(mut self, index: usize) -> Self {
+        self.selected = index;
+        self
+    }
+
+    /// Which tab is at `x`, `y`, if the tabs are drawn at `area`: for clicks.
+    pub fn at(&self, area: Rect, x: usize, y: usize) -> Option<usize> {
+        if y != area.y || x < area.x {
+            return None;
+        }
+        let mut left = area.x;
+        for (i, title) in self.titles.iter().enumerate() {
+            let right = left + text::width(title) + 2;
+            if (left..right).contains(&x) {
+                return Some(i);
+            }
+            left = right + 1;
+        }
+        None
+    }
+}
+
+impl Widget for Tabs {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        let line = self.titles.iter().enumerate().fold(Line::new(), |line, (i, title)| {
+            let line = if i > 0 { line.space(1) } else { line };
+            if i == self.selected {
+                line.raw(&paint_bg(PETAL, mix(TRACK, ROSE, 0.32), &format!(" {title} ")))
+            } else {
+                line.push(&format!(" {title} "), MUTED)
+            }
+        });
+        line.render(area, frame);
+    }
+}
+
+// MARK: - Plot
+
+/// An area chart of the latest values, as many as fit across, rising berry → blush. Good for
+/// anything over time: latency, requests, temperature.
+///
+/// ```
+/// use tinsel::app::{Frame, Plot};
+///
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// let mut frame = Frame::new(6, 2);
+/// frame.render(frame.area(), Plot::new(&[1.0, 2.0, 3.0, 4.0, 3.0, 2.0]));
+/// assert_eq!(frame.snapshot().plain(), "  ▄█▄\n▄█████");
+/// ```
+pub struct Plot {
+    values: Vec<f64>,
+    range: Option<(f64, f64)>,
+    color: Option<Rgb>,
+}
+
+impl Plot {
+    /// A chart of these values, oldest first.
+    pub fn new(values: &[f64]) -> Self {
+        Plot {
+            values: values.to_vec(),
+            range: None,
+            color: None,
+        }
+    }
+
+    /// The values at the bottom and top of the chart. Unless set, it runs from 0 (or the
+    /// lowest value, if that's negative) to the highest.
+    pub fn range(mut self, low: f64, high: f64) -> Self {
+        self.range = Some((low, high));
+        self
+    }
+
+    /// Fill in one colour, fading towards the bottom, instead of the pink ramp.
+    pub fn color(mut self, color: Rgb) -> Self {
+        self.color = Some(color);
+        self
+    }
+}
+
+const LEVELS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+impl Widget for Plot {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        let shown = &self.values[self.values.len().saturating_sub(area.width)..];
+        let (lo, hi) = self.range.unwrap_or_else(|| {
+            let lo = shown.iter().copied().fold(0.0, f64::min);
+            (lo, shown.iter().copied().fold(lo, f64::max))
+        });
+        let span = (hi - lo).max(f64::EPSILON);
+        let h = area.height;
+        let left = area.x + area.width - shown.len();
+        for row in 0..h {
+            // drawn from the bottom up; each row's colour is its height
+            let t = (h - 1 - row) as f32 / h.saturating_sub(1).max(1) as f32;
+            let color = match self.color {
+                Some(c) => mix(mix(TRACK, c, 0.45), c, t),
+                None => sample(&RAMP, t),
+            };
+            let mut line = String::new();
+            for &v in shown {
+                let eighths = (((v - lo) / span).clamp(0.0, 1.0) * (h * 8) as f64).round() as usize;
+                let here = eighths.saturating_sub((h - 1 - row) * 8).min(8);
+                line.push_str(if here == 0 { " " } else { LEVELS[here - 1] });
+            }
+            frame.print(Rect::new(left, area.y, shown.len(), h), row, &paint(color, &line));
+        }
+    }
+}
+
+// MARK: - Stat
+
+/// One number that matters, with a label above it and a note below. With room for it, the
+/// number is drawn large.
+///
+/// ```
+/// use tinsel::app::{Frame, Stat};
+/// use tinsel::palette;
+///
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// let mut frame = Frame::new(16, 3);
+/// frame.render(frame.area(), Stat::new("uptime", "99.9%").note("30 days", palette::SAGE));
+/// assert_eq!(frame.snapshot().plain(), "uptime\n99.9%\n30 days");
+/// ```
+pub struct Stat {
+    label: String,
+    value: String,
+    note: Option<(String, Rgb)>,
+}
+
+impl Stat {
+    /// A stat called `label`, showing `value`.
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Stat {
+            label: label.into(),
+            value: value.into(),
+            note: None,
+        }
+    }
+
+    /// A line under the number, in a colour: `▲ 12%` in sage, `3 failing` in red.
+    pub fn note(mut self, text: impl Into<String>, color: Rgb) -> Self {
+        self.note = Some((text.into(), color));
+        self
+    }
+}
+
+impl Widget for Stat {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        frame.print(area, 0, &paint(MUTED, &self.label));
+        let large = big(&self.value);
+        let roomy = area.height > 3 + self.note.is_some() as usize
+            && large.lines().iter().all(|l| text::width(l) <= area.width);
+        let note_row = if roomy {
+            large.render(Rect::new(area.x, area.y + 1, area.width, 3), frame);
+            4
+        } else {
+            frame.print(area, 1, &bold(&gradient(&self.value, &RAMP, 0.0)));
+            2
+        };
+        if let Some((note, color)) = &self.note {
+            frame.print(area, note_row, &paint(*color, note));
+        }
+    }
+}
