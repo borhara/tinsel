@@ -543,3 +543,146 @@ impl Widget for Stat {
         }
     }
 }
+
+/// Text three rows tall in thin rounded strokes, for clocks and numbers on a dashboard.
+/// Digits and `. , : - + % /` are drawn large; anything else sits small on the bottom row.
+///
+/// ```
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// assert_eq!(tinsel::app::big("12").plain(), "╶┐  ╶─╮\n │  ╭─╯\n╶┴╴ ╰─╴");
+/// ```
+pub fn big(text: &str) -> Block {
+    let mut rows = [String::new(), String::new(), String::new()];
+    for (i, c) in text.chars().enumerate() {
+        let glyph = match c {
+            '0' => ["╭─╮", "│ │", "╰─╯"],
+            '1' => ["╶┐ ", " │ ", "╶┴╴"],
+            '2' => ["╶─╮", "╭─╯", "╰─╴"],
+            '3' => ["╶─╮", " ─┤", "╶─╯"],
+            '4' => ["╷ ╷", "╰─┤", "  ╵"],
+            '5' => ["╭─╴", "╰─╮", "╶─╯"],
+            '6' => ["╭─╴", "├─╮", "╰─╯"],
+            '7' => ["╶─┐", "  │", "  ╵"],
+            '8' => ["╭─╮", "├─┤", "╰─╯"],
+            '9' => ["╭─╮", "╰─┤", "╶─╯"],
+            '.' => [" ", " ", "•"],
+            ',' => [" ", " ", ","],
+            ':' => [" ", "•", "•"],
+            '-' => ["  ", "╶╴", "  "],
+            '+' => ["   ", "╶┼╴", "   "],
+            '%' => ["◦ ╱", " ╱ ", "╱ ◦"],
+            '/' => ["  ╱", " ╱ ", "╱  "],
+            ' ' => [" ", " ", " "],
+            _ => ["", "", ""],
+        };
+        let small;
+        let glyph = if glyph[0].is_empty() && c != ' ' {
+            let pad = " ".repeat(text::char_width(c));
+            small = c.to_string();
+            [pad.clone(), pad, small]
+        } else {
+            glyph.map(String::from)
+        };
+        // a little space between digits, none around punctuation
+        let gap = i > 0 && text::width(&glyph[0]) > 1;
+        for (row, part) in rows.iter_mut().zip(glyph) {
+            if gap {
+                row.push(' ');
+            }
+            row.push_str(&part);
+        }
+    }
+    rows.iter().map(|r| gradient(r, &RAMP, 0.0)).collect()
+}
+
+// MARK: - Little touches
+
+/// Key hints for a footer: `q quit · ↑↓ move · tab next panel`.
+///
+/// ```
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// let line = tinsel::app::hints(&[("q", "quit"), ("↑↓", "move")]);
+/// assert_eq!(line.to_string(), "q quit · ↑↓ move");
+/// ```
+pub fn hints(keys: &[(&str, &str)]) -> Line {
+    keys.iter().enumerate().fold(Line::new(), |line, (i, (key, what))| {
+        let line = if i > 0 { line.push(" · ", TRACK) } else { line };
+        line.push(key, BLUSH).space(1).push(what, MUTED)
+    })
+}
+
+/// A scattering of stars twinkling quietly in the background: behind a header, an empty
+/// state, a splash screen. Draw it first, then put things on top.
+#[derive(Clone, Copy, Debug)]
+pub struct Sparkles {
+    density: f32,
+}
+
+impl Sparkles {
+    /// One star for every forty or so cells.
+    pub fn new() -> Self {
+        Sparkles { density: 0.025 }
+    }
+
+    /// The share of cells with a star, 0 to 1.
+    pub fn density(mut self, density: f32) -> Self {
+        self.density = density.clamp(0.0, 1.0);
+        self
+    }
+}
+
+impl Default for Sparkles {
+    fn default() -> Self {
+        Sparkles::new()
+    }
+}
+
+impl Widget for Sparkles {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        const STARS: [&str; 4] = ["·", "⋆", "✧", "✦"];
+        let t = frame.time();
+        for row in 0..area.height {
+            for col in 0..area.width {
+                let cell = ((area.y + row) * 4093 + area.x + col) as u32;
+                if noise(cell, 0) >= self.density {
+                    continue;
+                }
+                // each star keeps its place and twinkles at its own pace
+                let speed = 0.6 + 1.8 * noise(cell, 1);
+                let b = ((t * speed + noise(cell, 2) * 6.3).sin() + 1.0) / 2.0;
+                let b = b * b * b;
+                let star = paint(
+                    sample(&[TRACK, BERRY, ROSE, SHINE], b),
+                    STARS[((b * 4.0) as usize).min(3)],
+                );
+                frame.print(Rect::new(area.x + col, area.y + row, 1, 1), 0, &star);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blocks_lose_their_margin() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let mut f = Frame::new(10, 2);
+        f.render(f.area(), Block::from(vec!["  a".to_string(), "    b".to_string()]));
+        assert_eq!(f.snapshot().plain(), "a\n  b");
+        assert_eq!(drop_columns("\x1b[1m  x", 2), "\x1b[1mx");
+    }
+
+    #[test]
+    fn long_lists_scroll_to_the_selection() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let items: Vec<String> = (0..20).map(|i| format!("item {i}")).collect();
+        let mut f = Frame::new(10, 4);
+        f.render(f.area(), List::new(items).selected(19));
+        let shown = f.snapshot().plain();
+        assert!(shown.contains("› item 19") && !shown.contains("item 15"), "{shown}");
+        // and a scrollbar, thumb at the bottom
+        assert!(shown.lines().last().unwrap().ends_with('┃'));
+    }
+}
