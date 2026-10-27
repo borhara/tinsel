@@ -189,6 +189,30 @@ Table::new(["service", "status", "p95"])
     .print();
 ```
 
+**Full-screen apps:** dashboards, pickers, little toys. Write a struct, draw it in `view`,
+change it in `event`; `app::run` takes over the screen and gives it back afterwards (even on
+a panic). Panels shimmer when focused, lists scroll themselves, and numbers can be drawn big:
+
+```rust
+use tinsel::app::{self, App, Frame, Panel, Plot, Stat, Size::*};
+
+struct Dash { latency: Vec<f64> }
+
+impl App for Dash {
+    fn view(&self, frame: &mut Frame) {
+        let [stat, chart] = frame.area().columns_gap(1, [Fixed(20), Fill(1)]);
+        frame.render(stat, Panel::new("p95").body(Stat::new("latency", "84ms")));
+        frame.render(chart, Panel::new("latency").body(Plot::new(&self.latency)).focused(true));
+    }
+}
+
+app::run(Dash { latency: vec![84.0, 90.0, 120.0, 340.0, 95.0] })?;   // q or Esc quits
+```
+
+Anything tinsel draws (tables, trees, cards, any `Block`) goes straight into a panel, next to
+`List`, `Tabs`, `Plot`, `Stat`, `big` text, `hints` and twinkling `Sparkles`.
+`app::snapshot(&app, 80, 24)` draws a frame without a terminal, for tests.
+
 **Report an error** with its whole cause chain:
 
 ```rust
@@ -255,6 +279,7 @@ cargo run -- demo --bar waveform     # the deploy with waveform progress bars
 cargo run -- help                  # the CLI's own help, with its entrance
 cargo run -- prompts               # the interactive questions
 cargo run -- timings               # what Live has learned about your step durations
+cargo run --example dashboard      # a live full-screen dashboard
 cargo run --example deploy         # small, copyable examples: hello, deploy, parallel, status, questions, errors
 ```
 
@@ -271,6 +296,7 @@ cargo run --example deploy         # small, copyable examples: hello, deploy, pa
 | **code** | `diff` · `Code` excerpts with syntax colouring (Rust, TOML, JSON, YAML, shell, Python, JS), a highlighted line and a caret under the problem |
 | **documents** | `markdown` · `json` · `Help` with an animated entrance · `Block::page` |
 | **inline** | `badge` · `link` (clickable) · `Card` · `paint`, `bold`, `dim`, `italic`, `underline`, `gradient` |
+| **apps** | `app::run` full-screen apps · `Panel` · `List` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys, mouse and resize events · `app::snapshot` for tests |
 | **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` · `multiselect` (filter as you type) · `editor` · suggestions and path completion · `confirm_typing` |
 | **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_accent` · `set_theme` · `set_color_mode` · `timings` |
 | **helpers** | `text::{width, pad, truncate, wrap, strip_ansi}` · `format::{bytes, duration, count, ago, plural}` |

@@ -4,6 +4,12 @@
 
 First release.
 
+- `app`: full-screen terminal apps. An `App` trait (`view`, `event`, `fps`, `mouse`) run by
+  `app::run`, with keys, mouse, ticks and resizes as `Event`s, only changed rows redrawn, and
+  the screen given back on quit or panic; `Rect` layout (`rows`, `columns`, gaps, `center`);
+  `Panel` (shimmering when focused), `List`, `Tabs`, `Plot`, `Stat`, `big`, `hints`,
+  `Sparkles`, and every `Block`-drawing type as a `Widget`; `navigate`; `app::snapshot` for
+  tests; `examples/dashboard.rs`
 - `Live` steps that learn their usual duration and show an estimate next run
 - Focus awareness: calmer animation while you're away, a notification when a long run finishes
   unnoticed, a twinkle for what finished when you return; `tinsel::notify`
