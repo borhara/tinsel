@@ -314,6 +314,9 @@ impl Frame {
     pub(crate) fn diff(&self, prev: Option<&Frame>) -> String {
         let prev = prev.filter(|p| p.width == self.width && p.height == self.height);
         let mut out = String::new();
+        if self.width == 0 {
+            return out;
+        }
         for y in 0..self.height {
             let span = y * self.width..(y + 1) * self.width;
             if prev.is_some_and(|p| p.cells[span.clone()] == self.cells[span]) {
@@ -321,7 +324,12 @@ impl Frame {
             }
             out.push_str(&format!("\x1b[{};1H\x1b[0m", y + 1));
             out.push_str(&self.row_text(y));
-            out.push_str("\x1b[K");
+            // with wrapping off, a full row leaves the cursor on its last cell, which erasing
+            // to the end of the line would take with it
+            let last = self.cells[(y + 1) * self.width - 1];
+            if last.ch == ' ' && last.style.blank() {
+                out.push_str("\x1b[K");
+            }
         }
         out
     }
@@ -366,5 +374,15 @@ mod tests {
         let diff = b.diff(Some(&a));
         assert!(diff.contains("\x1b[3;1H") && !diff.contains("\x1b[1;1H"));
         assert_eq!(b.diff(Some(&b)), "");
+    }
+
+    #[test]
+    fn full_rows_keep_their_last_cell() {
+        let mut f = Frame::new(3, 2);
+        f.print(f.area(), 0, "abc");
+        f.print(f.area(), 1, "ab");
+        let diff = f.diff(None);
+        assert!(diff.contains("abc\x1b[2;1H"), "{diff:?}");
+        assert!(diff.ends_with("ab\x1b[K"), "{diff:?}");
     }
 }
