@@ -308,6 +308,9 @@ impl List {
 impl Widget for List {
     fn render(&self, area: Rect, frame: &mut Frame) {
         let (n, h) = (self.items.len(), area.height);
+        if area.is_empty() {
+            return;
+        }
         if n == 0 {
             frame.print(area, 0, &paint(MUTED, "nothing here yet"));
             return;
@@ -684,5 +687,13 @@ mod tests {
         assert!(shown.contains("› item 19") && !shown.contains("item 15"), "{shown}");
         // and a scrollbar, thumb at the bottom
         assert!(shown.lines().last().unwrap().ends_with('┃'));
+    }
+
+    #[test]
+    fn lists_in_panels_too_short_for_them_draw_nothing() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let mut f = Frame::new(10, 2);
+        f.render(f.area(), Panel::new("x").body(List::new(["a", "b"]).selected(1)));
+        assert_eq!(f.snapshot().plain(), "╭─ x ────╮\n╰────────╯");
     }
 }
