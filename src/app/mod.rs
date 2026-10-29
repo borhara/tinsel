@@ -279,12 +279,16 @@ impl Session {
         term::remember_terminal();
         let raw = term::RawMode::enter()?;
         // give the screen back before any panic message, which would otherwise be drawn on
-        // the alternate screen and vanish with it
+        // the alternate screen and vanish with it. Only a panic on this thread ends the app: a
+        // worker thread panicking leaves it running, so it has to keep the screen
         let hook: Arc<PanicHook> = Arc::new(std::panic::take_hook());
         let previous = hook.clone();
+        let owner = std::thread::current().id();
         std::panic::set_hook(Box::new(move |info| {
-            leave_screen();
-            term::restore_saved_terminal();
+            if std::thread::current().id() == owner {
+                leave_screen();
+                term::restore_saved_terminal();
+            }
             previous(info);
         }));
         ON_SCREEN.store(true, Ordering::SeqCst);
