@@ -111,11 +111,12 @@ impl Rect {
     }
 
     /// The part of this rectangle that's also inside `other`.
+    /// When they don't overlap, the result is empty and sits on `other`'s edge.
     pub fn intersect(self, other: Rect) -> Rect {
-        let x = self.x.max(other.x);
-        let y = self.y.max(other.y);
         let right = (self.x + self.width).min(other.x + other.width);
         let bottom = (self.y + self.height).min(other.y + other.height);
+        let x = self.x.max(other.x).min(other.x + other.width);
+        let y = self.y.max(other.y).min(other.y + other.height);
         Rect::new(x, y, right.saturating_sub(x), bottom.saturating_sub(y))
     }
 }
@@ -171,5 +172,12 @@ mod tests {
         assert_eq!(r.center(100, 100), r);
         assert_eq!(r.shrink(2, 1), Rect::new(2, 1, 76, 22));
         assert_eq!(Rect::new(0, 0, 3, 1).shrink(2, 2).width, 0);
+    }
+
+    #[test]
+    fn intersections_that_miss_stay_on_the_edge() {
+        let screen = Rect::new(0, 0, 10, 3);
+        assert_eq!(Rect::new(15, 2, 5, 1).intersect(screen), Rect::new(10, 2, 0, 1));
+        assert_eq!(Rect::new(2, 9, 4, 4).intersect(screen), Rect::new(2, 3, 4, 0));
     }
 }

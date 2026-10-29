@@ -213,6 +213,9 @@ impl Frame {
 
     fn fill(&mut self, area: Rect, cell: Cell) {
         let area = area.intersect(self.area());
+        if area.is_empty() {
+            return;
+        }
         for y in area.y..area.y + area.height {
             self.cells[y * self.width + area.x..y * self.width + area.x + area.width].fill(cell);
         }
@@ -374,6 +377,14 @@ mod tests {
         let diff = b.diff(Some(&a));
         assert!(diff.contains("\x1b[3;1H") && !diff.contains("\x1b[1;1H"));
         assert_eq!(b.diff(Some(&b)), "");
+    }
+
+    #[test]
+    fn clearing_off_screen_does_nothing() {
+        let mut f = Frame::new(10, 3);
+        f.clear(Rect::new(15, 2, 5, 1));
+        f.render(Rect::new(12, 0, 5, 5), super::super::Panel::new("gone"));
+        assert_eq!(f.snapshot().plain(), "\n\n");
     }
 
     #[test]
