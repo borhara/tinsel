@@ -142,10 +142,10 @@ pub fn run<A: App>(mut app: A) -> io::Result<A> {
     crate::style::theme();
     crate::style::color_mode();
 
-    let session = Session::enter(app.mouse())?;
+    let mut session = Session::enter(app.mouse())?;
     let (tx, rx) = mpsc::channel();
     let stop = session.stop.clone();
-    let reader = std::thread::spawn(move || listen(&tx, &stop));
+    session.reader = Some(std::thread::spawn(move || listen(&tx, &stop)));
 
     let start = Instant::now();
     let tick = Duration::from_secs_f64(1.0 / app.fps().clamp(1, 240) as f64);
@@ -192,10 +192,6 @@ pub fn run<A: App>(mut app: A) -> io::Result<A> {
             }
         }
     }
-    // the reader has to finish while reads still time out: once the terminal is back in line
-    // mode, a read waits for Enter
-    session.stop.store(true, Ordering::Relaxed);
-    let _ = reader.join();
     drop(session);
     Ok(app)
 }
@@ -268,6 +264,7 @@ const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
 struct Session {
     _raw: term::RawMode,
     stop: Arc<AtomicBool>,
+    reader: Option<std::thread::JoinHandle<()>>,
     hook: Arc<PanicHook>,
 }
 
@@ -287,25 +284,38 @@ impl Session {
         std::panic::set_hook(Box::new(move |info| {
             if std::thread::current().id() == owner {
                 leave_screen();
-                term::restore_saved_terminal();
+                // unwinding drops the session, which puts the terminal back once the reader
+                // has stopped; with panic = "abort" nothing else will
+                if cfg!(panic = "abort") {
+                    term::restore_saved_terminal();
+                }
             }
             previous(info);
         }));
         ON_SCREEN.store(true, Ordering::SeqCst);
+        // made before writing anything, so a failed write still puts everything back
+        let session = Session {
+            _raw: raw,
+            stop: Arc::new(AtomicBool::new(false)),
+            reader: None,
+            hook,
+        };
         let mut out = io::stdout();
         write!(out, "{ENTER}{}", if mouse { MOUSE_ON } else { "" })?;
         out.flush()?;
-        Ok(Session {
-            _raw: raw,
-            stop: Arc::new(AtomicBool::new(false)),
-            hook,
-        })
+        Ok(session)
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // the reader has to finish while reads still time out, on every way out of `run`:
+        // once the terminal is back in line mode, a read waits for Enter and would take the
+        // first key of whatever reads stdin next
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
         leave_screen();
         term::forget_terminal();
         if !std::thread::panicking() {
