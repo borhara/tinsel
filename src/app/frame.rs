@@ -277,7 +277,9 @@ impl Frame {
         if old.ch == '\0' && col > 0 {
             self.cells[row + col - 1].ch = ' ';
         }
-        if char_width(old.ch) == 2 && cell.ch != '\0' && col + 1 < self.width {
+        // even when the new cell is itself a wide character's tail: the old one's tail is one
+        // further on, and would be left without its character
+        if char_width(old.ch) == 2 && col + 1 < self.width {
             self.cells[row + col + 1].ch = ' ';
         }
         self.cells[row + col] = cell;
@@ -366,6 +368,14 @@ mod tests {
         // writing over half of one blanks the other half
         f.print(Rect::new(3, 0, 3, 1), 0, "x");
         assert_eq!(crate::text::strip_ansi(&f.row_text(0)), "ab x本");
+    }
+
+    #[test]
+    fn wide_characters_drawn_over_each_other_stay_aligned() {
+        let mut f = Frame::new(6, 1);
+        f.print(f.area(), 0, "a日|");
+        f.print(f.area(), 0, "本");
+        assert_eq!(f.row_text(0), "本 |");
     }
 
     #[test]
