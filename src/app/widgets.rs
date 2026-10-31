@@ -725,8 +725,9 @@ pub fn big(text: &str) -> Block {
         } else {
             glyph.map(String::from)
         };
-        // a little space between digits, none around punctuation
-        let gap = i > 0 && text::width(&glyph[0]) > 1;
+        // a little space between glyphs, punctuation included, so a clock's colon sits
+        // evenly between its digits
+        let gap = i > 0;
         for (row, part) in rows.iter_mut().zip(glyph) {
             if gap {
                 row.push(' ');
