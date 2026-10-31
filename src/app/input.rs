@@ -117,6 +117,24 @@ pub(crate) fn parse(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, u
 /// `ESC [ params final`: arrows, Home/End and friends, function keys, and SGR mouse reports.
 fn csi(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, usize)> {
     use super::Event;
+    // older terminals ignore SGR mouse mode and send `ESC [ M` and three raw bytes instead,
+    // which mustn't be read as keys (a click in column 81 would be a `q`)
+    if bytes.get(2) == Some(&b'M') {
+        return match bytes.get(3..6) {
+            Some(&[b, x, y]) => {
+                let params = format!(
+                    "{};{};{}",
+                    b.saturating_sub(32),
+                    x.saturating_sub(32),
+                    y.saturating_sub(32)
+                );
+                // in this encoding a release is button 3, so anything else is a press
+                Some((mouse(&params, true), 6))
+            }
+            _ if done => Some((None, bytes.len())),
+            _ => None,
+        };
+    }
     let Some(end) = bytes.iter().skip(2).position(|b| (0x40..=0x7E).contains(b)) else {
         // a pause halfway through: give up on it as Esc, and read the rest as typed
         return if done {
@@ -240,6 +258,27 @@ mod tests {
         assert_eq!(parse(b"\x1b[1", false), None);
         assert_eq!(parse("✦".as_bytes().get(..2).unwrap(), false), None);
         assert_eq!(parse(b"\x1b", true), Some((Some(Event::Key(Key::Esc)), 1)));
+    }
+
+    #[test]
+    fn reads_legacy_mouse_reports_without_typing_their_bytes() {
+        // a click at column 81, row 1: the x byte is `q`
+        assert_eq!(
+            keys(b"\x1b[M qA\x1b[M#qA\x1b[Ma!!"),
+            [
+                Event::Mouse(Mouse {
+                    kind: MouseKind::Click,
+                    x: 80,
+                    y: 32
+                }),
+                Event::Mouse(Mouse {
+                    kind: MouseKind::ScrollDown,
+                    x: 0,
+                    y: 0
+                }),
+            ]
+        );
+        assert_eq!(parse(b"\x1b[M q", false), None);
     }
 
     #[test]
