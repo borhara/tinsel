@@ -355,6 +355,14 @@ impl Card {
     /// The card as lines, with a blank line above so it sits apart from what came before.
     pub fn lines(&self) -> Block {
         let width = self.width.unwrap_or_else(|| content_width().saturating_sub(2));
+        let mut out = Block::new();
+        out.push("");
+        out.extend(self.boxed(width).into_iter().map(|l| format!("  {l}")).collect());
+        out
+    }
+
+    /// Just the box, `width` columns wide, with no margin or blank line around it.
+    pub(crate) fn boxed(&self, width: usize) -> Block {
         let inner = width.saturating_sub(2);
         let rule = "─".repeat(inner);
         let side = paint(LINE, "│");
@@ -369,14 +377,18 @@ impl Card {
         rows.extend(&self.rows);
 
         let mut out = Block::new();
-        out.push("");
-        out.push(format!("  {}", paint(LINE, &format!("╭{rule}╮"))));
+        out.push(paint(LINE, &format!("╭{rule}╮")));
         for row in rows {
             let pad = inner.saturating_sub(2 + row.width());
-            out.push(format!("  {side}  {row}{}{side}", " ".repeat(pad)));
+            out.push(format!("{side}  {row}{}{side}", " ".repeat(pad)));
         }
-        out.push(format!("  {}", paint(LINE, &format!("╰{rule}╯"))));
+        out.push(paint(LINE, &format!("╰{rule}╯")));
         out
+    }
+
+    /// The width set with [`width`](Card::width), if any.
+    pub(crate) fn fixed_width(&self) -> Option<usize> {
+        self.width
     }
 
     /// Print the card.

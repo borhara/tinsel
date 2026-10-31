@@ -126,7 +126,15 @@ macro_rules! via_lines {
     )*};
 }
 
-via_lines!(Table, Tree, Card, Code);
+via_lines!(Table, Tree, Code);
+
+/// Cards fill the width they're given (unless they were given one of their own), without the
+/// blank line above them that printing adds.
+impl Widget for Card {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        frame.lines(area, &self.boxed(self.fixed_width().unwrap_or(area.width)));
+    }
+}
 
 // MARK: - Panel
 
@@ -675,6 +683,14 @@ mod tests {
         f.render(f.area(), Block::from(vec!["  a".to_string(), "    b".to_string()]));
         assert_eq!(f.snapshot().plain(), "a\n  b");
         assert_eq!(drop_columns("\x1b[1m  x", 2), "\x1b[1mx");
+    }
+
+    #[test]
+    fn cards_fit_the_area_they_are_drawn_in() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let mut f = Frame::new(30, 3);
+        f.render(Rect::new(0, 0, 14, 3), Card::success("done"));
+        assert_eq!(f.snapshot().plain(), "╭────────────╮\n│  ● done    │\n╰────────────╯");
     }
 
     #[test]
