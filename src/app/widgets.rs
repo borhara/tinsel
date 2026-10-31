@@ -49,13 +49,144 @@ impl<W: Widget + ?Sized> Widget for Box<W> {
     }
 }
 
-/// Text is word-wrapped to fit. Styled text is fine.
+/// Text is word-wrapped to fit. Styled text is fine: colours carry on across wrapped lines.
 impl Widget for str {
     fn render(&self, area: Rect, frame: &mut Frame) {
-        let lines = self.lines().flat_map(|l| text::wrap(l, area.width.max(1)));
-        for (row, line) in lines.take(area.height).enumerate() {
+        for (row, line) in wrap(self, area.width).into_iter().take(area.height).enumerate() {
             frame.print(area, row, &line);
         }
+    }
+}
+
+/// Word-wrap styled text to `cols` columns. Words wider than a line are broken by columns
+/// (never inside an escape code), and each line starts by restating whatever styling was
+/// still on at the end of the one before, since every row is drawn from a clean slate.
+fn wrap(s: &str, cols: usize) -> Vec<String> {
+    let mut w = Wrap {
+        cols: cols.max(1),
+        ..Wrap::default()
+    };
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => {
+                let mut seq = String::from(c);
+                match chars.next() {
+                    Some('[') => {
+                        seq.push('[');
+                        for c in chars.by_ref() {
+                            seq.push(c);
+                            if ('@'..='~').contains(&c) {
+                                break;
+                            }
+                        }
+                    }
+                    Some(']') => {
+                        seq.push(']');
+                        while let Some(c) = chars.next() {
+                            seq.push(c);
+                            if c == '\x07' {
+                                break;
+                            }
+                            if c == '\x1b' && chars.next_if_eq(&'\\').is_some() {
+                                seq.push('\\');
+                                break;
+                            }
+                        }
+                    }
+                    Some(c) => seq.push(c),
+                    None => {}
+                }
+                w.escape(&seq);
+            }
+            '\n' => {
+                w.end_word();
+                w.end_line();
+                w.line.clone_from(&w.style);
+            }
+            ' ' => {
+                w.end_word();
+                w.space = true;
+            }
+            c => w.char(c),
+        }
+    }
+    w.end_word();
+    w.end_line();
+    w.lines
+}
+
+#[derive(Default)]
+struct Wrap {
+    cols: usize,
+    lines: Vec<String>,
+    line: String,
+    line_w: usize,
+    word: String,
+    word_w: usize,
+    /// The colour codes in effect now, to restate at the start of a line.
+    style: String,
+    /// The same, as they were when the current word began.
+    word_style: String,
+    /// Whether a space goes before the next word.
+    space: bool,
+}
+
+impl Wrap {
+    fn begin_word(&mut self) {
+        if self.word.is_empty() {
+            self.word_style.clone_from(&self.style);
+        }
+    }
+
+    fn escape(&mut self, seq: &str) {
+        self.begin_word();
+        self.word.push_str(seq);
+        if let Some(params) = seq.strip_prefix("\x1b[").and_then(|p| p.strip_suffix('m')) {
+            if params.is_empty() || params == "0" {
+                self.style.clear();
+            } else {
+                self.style.push_str(seq);
+            }
+        }
+    }
+
+    fn char(&mut self, c: char) {
+        let cw = text::char_width(c);
+        if self.word_w > 0 && self.word_w + cw > self.cols {
+            // a word wider than a line: break it here
+            self.end_word();
+        }
+        self.begin_word();
+        self.word.push(c);
+        self.word_w += cw;
+    }
+
+    fn end_word(&mut self) {
+        if self.word.is_empty() {
+            return;
+        }
+        if self.word_w > 0 {
+            let gap = (self.space && self.line_w > 0) as usize;
+            if self.line_w > 0 && self.line_w + gap + self.word_w > self.cols {
+                self.end_line();
+                self.line.clone_from(&self.word_style);
+            } else if gap == 1 {
+                self.line.push(' ');
+                self.line_w += 1;
+            }
+            self.space = false;
+        }
+        self.line.push_str(&self.word);
+        self.line_w += self.word_w;
+        self.word.clear();
+        self.word_w = 0;
+    }
+
+    fn end_line(&mut self) {
+        self.lines.push(std::mem::take(&mut self.line));
+        self.line_w = 0;
+        self.space = false;
     }
 }
 
@@ -691,6 +822,23 @@ mod tests {
         let mut f = Frame::new(30, 3);
         f.render(Rect::new(0, 0, 14, 3), Card::success("done"));
         assert_eq!(f.snapshot().plain(), "╭────────────╮\n│  ● done    │\n╰────────────╯");
+    }
+
+    #[test]
+    fn wrapping_carries_styles_and_measures_columns() {
+        assert_eq!(wrap("the quick brown fox", 9), ["the quick", "brown fox"]);
+        assert_eq!(wrap("a\n\nb", 5), ["a", "", "b"]);
+        assert_eq!(
+            wrap("\x1b[31maa bb cc\x1b[39m", 2),
+            ["\x1b[31maa", "\x1b[31mbb", "\x1b[31mcc\x1b[39m"]
+        );
+        // a long styled word is broken by columns, not inside its escape code
+        assert_eq!(
+            wrap("\x1b[38;2;1;2;3mabcdef", 3),
+            ["\x1b[38;2;1;2;3mabc", "\x1b[38;2;1;2;3mdef"]
+        );
+        assert_eq!(wrap("日本語です", 4), ["日本", "語で", "す"]);
+        assert_eq!(wrap("\x1b[1mbold\x1b[0m plain", 5), ["\x1b[1mbold\x1b[0m", "plain"]);
     }
 
     #[test]
