@@ -153,8 +153,20 @@ impl Frame {
         }
     }
 
-    pub(crate) fn at(mut self, time: f32) -> Self {
-        self.time = time;
+    /// The frame as it is `seconds` after the app started, for testing anything animated.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Panel};
+    ///
+    /// let draw = |t| {
+    ///     let mut frame = Frame::new(12, 3).at(t);
+    ///     frame.render(frame.area(), Panel::new("hi").focused(true));
+    ///     frame.snapshot()
+    /// };
+    /// assert_eq!(draw(0.0).plain(), draw(1.0).plain());   // the same text…
+    /// ```
+    pub fn at(mut self, seconds: f32) -> Self {
+        self.time = seconds;
         self
     }
 
