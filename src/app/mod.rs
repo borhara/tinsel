@@ -145,21 +145,33 @@ pub fn run<A: App>(mut app: A) -> io::Result<A> {
     let mut session = Session::enter(app.mouse())?;
     let (tx, rx) = mpsc::channel();
     let stop = session.stop.clone();
-    session.reader = Some(std::thread::spawn(move || listen(&tx, &stop)));
+    session.reader = Some(std::thread::spawn(move || listen(term::read_byte, &tx, &stop)));
+    drive(&mut app, &rx, &mut io::stdout(), || (term::width(), term::height()))?;
+    drop(session);
+    Ok(app)
+}
 
+/// The loop itself: draw, wait for an event or the next tick, and go round again until the app
+/// quits, Ctrl-C is pressed or the events stop. Kept apart from the terminal so it can be
+/// tested with any events, output and screen size.
+fn drive<A: App + ?Sized>(
+    app: &mut A,
+    rx: &mpsc::Receiver<Event>,
+    out: &mut impl Write,
+    mut screen: impl FnMut() -> (usize, usize),
+) -> io::Result<()> {
     let start = Instant::now();
     let tick = Duration::from_secs_f64(1.0 / app.fps().clamp(1, 240) as f64);
     let mut next_tick = start + tick;
-    let mut size = (term::width(), term::height());
+    let mut size = screen();
     let mut shown: Option<Frame> = None;
-    let mut out = io::stdout();
-    'run: loop {
-        let now_size = (term::width(), term::height());
+    loop {
+        let now_size = screen();
         if now_size != size {
             size = now_size;
             shown = None;
             if app.event(&Event::Resize(size.0, size.1)) == Flow::Quit {
-                break;
+                return Ok(());
             }
         }
         let mut frame = Frame::new(size.0, size.1).at(start.elapsed().as_secs_f32());
@@ -176,11 +188,11 @@ pub fn run<A: App>(mut app: A) -> io::Result<A> {
             Ok(event) => Some(event),
             Err(mpsc::RecvTimeoutError::Timeout) => None,
             // the reader stopped: stdin is gone, so nothing more can be typed
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         };
         for event in first.into_iter().chain(rx.try_iter()) {
             if event == Event::Key(Key::Ctrl('c')) || app.event(&event) == Flow::Quit {
-                break 'run;
+                return Ok(());
             }
         }
         let now = Instant::now();
@@ -188,12 +200,10 @@ pub fn run<A: App>(mut app: A) -> io::Result<A> {
             // after a stall, carry on from now rather than sending a burst of ticks
             next_tick = (next_tick + tick).max(now);
             if app.event(&Event::Tick) == Flow::Quit {
-                break;
+                return Ok(());
             }
         }
     }
-    drop(session);
-    Ok(app)
 }
 
 /// One frame of an app at `width` by `height`, as text: for tests, and for printing what a
@@ -334,12 +344,13 @@ fn leave_screen() {
     }
 }
 
-/// Read keys and mouse reports until told to stop, sending each as an event.
-fn listen(tx: &mpsc::Sender<Event>, stop: &AtomicBool) {
+/// Read keys and mouse reports until told to stop, sending each as an event. `read` gives
+/// one byte, or `None` after a short pause with nothing typed.
+fn listen(mut read: impl FnMut() -> io::Result<Option<u8>>, tx: &mpsc::Sender<Event>, stop: &AtomicBool) {
     let mut pending: Vec<u8> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
         // reads give up after 0.1s, so `stop` is checked often and a pause can end a sequence
-        let paused = match term::read_byte() {
+        let paused = match read() {
             Ok(Some(b)) => {
                 pending.push(b);
                 false
@@ -355,5 +366,189 @@ fn listen(tx: &mpsc::Sender<Event>, stop: &AtomicBool) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Remembers every event, and quits when told to.
+    #[derive(Default)]
+    struct Recorder {
+        seen: Vec<Event>,
+        quit_on: Option<Event>,
+        quit_after_ticks: Option<usize>,
+    }
+
+    impl App for Recorder {
+        fn view(&self, frame: &mut Frame) {
+            frame.print(frame.area(), 0, &format!("seen {}", self.seen.len()));
+        }
+
+        fn event(&mut self, event: &Event) -> Flow {
+            self.seen.push(*event);
+            let ticks = self.seen.iter().filter(|e| **e == Event::Tick).count();
+            if Some(*event) == self.quit_on || self.quit_after_ticks == Some(ticks) {
+                return Flow::Quit;
+            }
+            Flow::Continue
+        }
+
+        fn fps(&self) -> u32 {
+            240
+        }
+    }
+
+    fn keys(rx_events: &[Event]) -> mpsc::Receiver<Event> {
+        let (tx, rx) = mpsc::channel();
+        for e in rx_events {
+            tx.send(*e).unwrap();
+        }
+        // kept open, so the loop waits on ticks rather than seeing the events stop
+        std::mem::forget(tx);
+        rx
+    }
+
+    #[test]
+    fn the_loop_hands_events_over_and_stops_on_ctrl_c() {
+        let mut app = Recorder::default();
+        let rx = keys(&[
+            Event::Key(Key::Char('x')),
+            Event::Key(Key::Ctrl('c')),
+            Event::Key(Key::Char('y')),
+        ]);
+        let mut out = Vec::new();
+        drive(&mut app, &rx, &mut out, || (20, 2)).unwrap();
+        // Ctrl-C quits without the app seeing it, and nothing after it is handled
+        assert_eq!(app.seen, [Event::Key(Key::Char('x'))]);
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("seen 0") && out.starts_with("\x1b[?2026h"), "{out:?}");
+    }
+
+    #[test]
+    fn the_loop_ticks_resizes_and_quits_when_the_app_says() {
+        let mut app = Recorder {
+            quit_after_ticks: Some(2),
+            ..Recorder::default()
+        };
+        let rx = keys(&[]);
+        let sizes = std::cell::Cell::new(0);
+        let screen = || {
+            sizes.set(sizes.get() + 1);
+            if sizes.get() > 2 { (30, 4) } else { (20, 2) }
+        };
+        drive(&mut app, &rx, &mut Vec::new(), screen).unwrap();
+        assert_eq!(app.seen.iter().filter(|e| **e == Event::Tick).count(), 2);
+        assert!(app.seen.contains(&Event::Resize(30, 4)), "{:?}", app.seen);
+
+        // and a resize the app quits on ends it there
+        let mut app = Recorder {
+            quit_on: Some(Event::Resize(9, 9)),
+            ..Recorder::default()
+        };
+        let mut first = true;
+        let screen = || if std::mem::take(&mut first) { (5, 5) } else { (9, 9) };
+        drive(&mut app, &rx, &mut Vec::new(), screen).unwrap();
+        assert_eq!(app.seen, [Event::Resize(9, 9)]);
+    }
+
+    #[test]
+    fn the_loop_ends_when_the_events_do() {
+        let (tx, rx) = mpsc::channel();
+        drop(tx);
+        let mut app = Recorder::default();
+        drive(&mut app, &rx, &mut Vec::new(), || (10, 1)).unwrap();
+        assert!(app.seen.is_empty());
+    }
+
+    #[test]
+    fn the_loop_reports_output_that_fails() {
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("gone"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let rx = keys(&[]);
+        assert!(drive(&mut Recorder::default(), &rx, &mut Broken, || (10, 1)).is_err());
+    }
+
+    #[test]
+    fn the_reader_turns_bytes_into_events_and_pauses_into_esc() {
+        let mut script = vec![
+            Ok(Some(b'a')),
+            Ok(Some(0x1b)),
+            Ok(None),
+            Ok(Some(0x1b)),
+            Ok(Some(b'[')),
+            Ok(Some(b'A')),
+            Err(io::Error::other("closed")),
+        ]
+        .into_iter();
+        let (tx, rx) = mpsc::channel();
+        listen(move || script.next().unwrap(), &tx, &AtomicBool::new(false));
+        let got: Vec<Event> = rx.try_iter().collect();
+        assert_eq!(
+            got,
+            [Event::Key(Key::Char('a')), Event::Key(Key::Esc), Event::Key(Key::Up)]
+        );
+    }
+
+    #[test]
+    fn the_reader_stops_when_told_or_when_nobody_listens() {
+        let (tx, _rx) = mpsc::channel();
+        listen(|| panic!("read after stop"), &tx, &AtomicBool::new(true));
+
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+        listen(|| Ok(Some(b'q')), &tx, &AtomicBool::new(false));
+    }
+
+    #[test]
+    fn navigation_covers_every_key() {
+        use MouseKind::*;
+        let scroll = |kind| Event::Mouse(Mouse { kind, x: 0, y: 0 });
+        let mut at = 5;
+        let steps = [
+            (Event::Key(Key::Up), 4),
+            (Event::Key(Key::Char('k')), 3),
+            (Event::Key(Key::Down), 4),
+            (Event::Key(Key::Char('j')), 5),
+            (Event::Key(Key::PageDown), 15),
+            (Event::Key(Key::PageDown), 19),
+            (Event::Key(Key::PageUp), 9),
+            (Event::Key(Key::Home), 0),
+            (Event::Key(Key::Char('G')), 19),
+            (Event::Key(Key::Char('g')), 0),
+            (scroll(ScrollDown), 1),
+            (scroll(ScrollUp), 0),
+            (Event::Key(Key::End), 19),
+        ];
+        for (event, want) in steps {
+            navigate(&mut at, 20, &event);
+            assert_eq!(at, want, "after {event:?}");
+        }
+        assert!(!navigate(&mut at, 20, &Event::Key(Key::End)));
+        assert!(!navigate(&mut at, 20, &Event::Tick));
+        assert!(!navigate(&mut at, 20, &scroll(Click)));
+        let mut empty = 0;
+        assert!(!navigate(&mut empty, 0, &Event::Key(Key::Down)));
+    }
+
+    #[test]
+    fn the_default_app_quits_on_q_and_esc() {
+        struct Plain;
+        impl App for Plain {
+            fn view(&self, _: &mut Frame) {}
+        }
+        let mut app = Plain;
+        assert_eq!(app.event(&Event::Key(Key::Char('q'))), Flow::Quit);
+        assert_eq!(app.event(&Event::Key(Key::Esc)), Flow::Quit);
+        assert_eq!(app.event(&Event::Tick), Flow::Continue);
+        assert_eq!((app.fps(), app.mouse()), (30, false));
     }
 }
