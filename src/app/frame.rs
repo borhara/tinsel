@@ -370,6 +370,51 @@ mod tests {
     }
 
     #[test]
+    fn styles_round_trip_through_escape_codes() {
+        let mut s = Style::default();
+        s.apply("1;2;3;4;5;7;31;92;43;104");
+        assert_eq!((s.fg, s.bg), (Ink::Indexed(10), Ink::Indexed(12)));
+        let mut out = String::new();
+        s.sgr(&mut out);
+        assert_eq!(out, "\x1b[0;1;2;3;4;5;7;92;104m");
+        let mut back = Style::default();
+        back.apply(out.trim_start_matches("\x1b[").trim_end_matches('m'));
+        assert_eq!(back, s);
+        assert!(!s.blank());
+
+        s.apply("22;23;24;25;27;39;49;38;5;3;48;9");
+        assert_eq!((s.fg, s.bg, s.attrs), (Ink::Indexed(3), Ink::Default, 0));
+        out.clear();
+        s.sgr(&mut out);
+        assert_eq!(out, "\x1b[0;33m");
+        s.apply("0");
+        assert_eq!(s, Style::default());
+        s.apply("41;48;2;1;2;3");
+        assert_eq!(s.bg, Ink::Rgb(1, 2, 3));
+        s.apply("4");
+        assert!(!s.blank());
+    }
+
+    #[test]
+    fn writes_text_and_blocks_and_drops_what_it_cant_keep() {
+        let mut f = Frame::new(8, 3).at(1.5);
+        assert_eq!(f.time(), 1.5);
+        // a hyperlink keeps its text, tabs become spaces, other controls and combining marks go
+        let n = f.print(f.area(), 0, "\x1b]8;;https://x.y\x1b\\li\x1b]8;;\x07nk\ta\u{7}e\u{301}");
+        assert_eq!((f.row_text(0).as_str(), n), ("link ae", 7));
+        assert_eq!(f.print(f.area(), 5, "past the bottom"), 0);
+        f.lines(
+            Rect::new(2, 1, 6, 1),
+            &Block::from(vec!["one".to_string(), "two".to_string()]),
+        );
+        assert_eq!(f.row_text(1), "  one");
+        f.tint(f.area(), crate::palette::ROSE);
+        f.clear(Rect::new(0, 0, 4, 1));
+        assert_eq!(f.row_text(0), "     ae");
+        assert_eq!(Frame::new(0, 2).diff(None), "");
+    }
+
+    #[test]
     fn clips_and_keeps_wide_characters_whole() {
         let mut f = Frame::new(6, 2);
         f.print(f.area(), 0, "\x1b[38;2;1;2;3mab日本\x1b[39m");
