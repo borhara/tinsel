@@ -7,6 +7,7 @@ description = "Clean, pink-hued terminal output with a little sparkle: live step
 authors = ["borhara"]
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/borhara/tinsel"
 documentation = "https://docs.rs/tinsel"
 keywords = ["cli", "terminal", "spinner", "progress", "prompt"]
 categories = ["command-line-interface"]
