@@ -175,6 +175,28 @@ mod tests {
     }
 
     #[test]
+    fn cuts_rows_and_columns_and_answers_questions() {
+        let r = Rect::new(2, 1, 10, 4);
+        assert_eq!(
+            r.columns([Fixed(3), Fill(1)]),
+            [Rect::new(2, 1, 3, 4), Rect::new(5, 1, 7, 4)]
+        );
+        assert_eq!(
+            r.rows([Percent(50), Fill(1)]),
+            [Rect::new(2, 1, 10, 2), Rect::new(2, 3, 10, 2)]
+        );
+        assert_eq!(r.row(1), Rect::new(2, 2, 10, 1));
+        assert!(r.row(9).is_empty() && r.row(9).y == 5);
+        assert!(r.contains(2, 1) && r.contains(11, 4));
+        assert!(!r.contains(12, 1) && !r.contains(2, 5) && !r.contains(1, 1));
+        assert!(Rect::new(0, 0, 0, 3).is_empty() && !r.is_empty());
+        // weights of zero get nothing, and no fills at all leaves the rest unused
+        assert_eq!(split(10, 0, &[Fill(0), Fill(1)]), [0, 10]);
+        assert_eq!(split(10, 0, &[Fixed(2)]), [2]);
+        assert_eq!(split(10, 0, &[Fill(0)]), [0]);
+    }
+
+    #[test]
     fn intersections_that_miss_stay_on_the_edge() {
         let screen = Rect::new(0, 0, 10, 3);
         assert_eq!(Rect::new(15, 2, 5, 1).intersect(screen), Rect::new(10, 2, 0, 1));

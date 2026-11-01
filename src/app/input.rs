@@ -253,6 +253,65 @@ mod tests {
     }
 
     #[test]
+    fn reads_every_named_key() {
+        let k = Event::Key;
+        let cases: &[(&[u8], &[Event])] = &[
+            (b"\t\x08\n", &[k(Key::Tab), k(Key::Backspace), k(Key::Enter)]),
+            (
+                b"\x1b[B\x1b[C\x1b[D\x1b[H\x1b[F",
+                &[k(Key::Down), k(Key::Right), k(Key::Left), k(Key::Home), k(Key::End)],
+            ),
+            (
+                b"\x1bOA\x1bOC\x1bOD\x1bOH\x1bOF\x1bOS",
+                &[
+                    k(Key::Up),
+                    k(Key::Right),
+                    k(Key::Left),
+                    k(Key::Home),
+                    k(Key::End),
+                    k(Key::F(4)),
+                ],
+            ),
+            (
+                b"\x1b[1~\x1b[7~\x1b[4~\x1b[8~\x1b[3~\x1b[6~",
+                &[
+                    k(Key::Home),
+                    k(Key::Home),
+                    k(Key::End),
+                    k(Key::End),
+                    k(Key::Delete),
+                    k(Key::PageDown),
+                ],
+            ),
+            (
+                b"\x1b[11~\x1b[17~\x1b[21~\x1b[23~\x1b[24~",
+                &[k(Key::F(1)), k(Key::F(6)), k(Key::F(10)), k(Key::F(11)), k(Key::F(12))],
+            ),
+            // Alt-x arrives as Esc then x
+            (b"\x1bx", &[k(Key::Esc), k(Key::Char('x'))]),
+        ];
+        for (bytes, want) in cases {
+            assert_eq!(keys(bytes), *want, "{bytes:?}");
+        }
+    }
+
+    #[test]
+    fn lets_go_of_what_it_doesnt_know() {
+        // unknown sequences, stray control and continuation bytes, and broken UTF-8
+        assert_eq!(
+            keys(b"\x1b[99~\x1b[5;3X\x1bOZ\x1c\x80\xc3("),
+            [Event::Key(Key::Char('('))]
+        );
+        // unfinished sequences give up as Esc when nothing more is coming
+        assert_eq!(parse(b"\x1bO", false), None);
+        assert_eq!(parse(b"\x1bO", true), Some((Some(Event::Key(Key::Esc)), 1)));
+        assert_eq!(parse(b"\x1b[12", true), Some((Some(Event::Key(Key::Esc)), 1)));
+        assert_eq!(parse(b"\xe2\x9c", true), Some((None, 2)));
+        assert_eq!(parse(b"\x1b[M", true), Some((None, 3)));
+        assert_eq!(parse(b"", true), None);
+    }
+
+    #[test]
     fn waits_for_the_rest_of_a_sequence_unless_done() {
         assert_eq!(parse(b"\x1b", false), None);
         assert_eq!(parse(b"\x1b[1", false), None);
@@ -279,6 +338,15 @@ mod tests {
             ]
         );
         assert_eq!(parse(b"\x1b[M q", false), None);
+    }
+
+    #[test]
+    fn reads_every_kind_of_mouse_report() {
+        let at = |kind| Event::Mouse(Mouse { kind, x: 1, y: 1 });
+        assert_eq!(
+            keys(b"\x1b[<2;2;2M\x1b[<64;2;2M\x1b[<2;2;2m\x1b[<1;2;2M\x1b[<0;;2M"),
+            [at(MouseKind::RightClick), at(MouseKind::ScrollUp)]
+        );
     }
 
     #[test]
