@@ -842,6 +842,94 @@ mod tests {
         assert_eq!(wrap("\x1b[1mbold\x1b[0m plain", 5), ["\x1b[1mbold\x1b[0m", "plain"]);
     }
 
+    fn drawn(w: usize, h: usize, widget: impl Widget) -> String {
+        crate::set_color_mode(crate::ColorMode::None);
+        let mut f = Frame::new(w, h);
+        f.render(f.area(), widget);
+        f.snapshot().plain()
+    }
+
+    #[test]
+    fn stats_go_big_when_there_is_room() {
+        let stat = Stat::new("p95", "12").note("ms", crate::palette::SOFT);
+        assert_eq!(drawn(10, 5, &stat), "p95\n╶┐  ╶─╮\n │  ╭─╯\n╶┴╴ ╰─╴\nms");
+        // too narrow for big digits: plain, with the note right under
+        assert_eq!(drawn(4, 5, &stat), "p95\n12\nms\n\n");
+        assert_eq!(drawn(10, 4, Stat::new("n", "7")), "n\n╶─┐\n  │\n  ╵");
+    }
+
+    #[test]
+    fn big_draws_punctuation_and_falls_back_for_letters() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let rows = |s: &str| big(s).plain();
+        assert_eq!(rows("3:4"), "╶─╮   ╷ ╷\n ─┤ • ╰─┤\n╶─╯ •   ╵");
+        assert_eq!(rows("-+"), "      \n╶╴ ╶┼╴\n      ");
+        assert_eq!(rows("5%"), "╭─╴ ◦ ╱\n╰─╮  ╱ \n╶─╯ ╱ ◦");
+        assert_eq!(rows("6/8,9 0"), big("6/8,9 0").plain());
+        assert_eq!(rows("1k"), "╶┐   \n │   \n╶┴╴ k");
+        assert_eq!(rows("日"), "  \n  \n日");
+    }
+
+    #[test]
+    fn plots_take_a_range_and_a_colour_and_keep_the_latest_values() {
+        let values = [10.0, 0.0, 5.0];
+        assert_eq!(drawn(3, 1, Plot::new(&values).range(0.0, 10.0)), "█ ▄");
+        assert_eq!(drawn(3, 1, Plot::new(&values).range(5.0, 10.0)), "█");
+        assert_eq!(drawn(2, 1, Plot::new(&values).color(crate::palette::SAGE)), " █");
+        // fewer values than columns sit at the right
+        assert_eq!(drawn(5, 1, Plot::new(&[1.0])), "    █");
+        // below zero, the chart starts at the lowest value
+        assert_eq!(drawn(3, 1, Plot::new(&[-1.0, 1.0])), "  █");
+    }
+
+    #[test]
+    fn sparkles_scatter_stars_and_leave_the_rest_alone() {
+        let all = drawn(4, 2, Sparkles::new().density(1.0));
+        assert_eq!(all.chars().filter(|c| !c.is_whitespace()).count(), 8);
+        assert_eq!(drawn(4, 2, Sparkles::default().density(0.0)), "\n");
+        assert_eq!(Sparkles::new().density(7.0).density, 1.0);
+    }
+
+    #[test]
+    fn panels_pad_title_and_focus() {
+        let panel = Panel::new("t").body("x").padding(2, 1).focused(true);
+        assert_eq!(panel.inner(Rect::new(0, 0, 10, 5)), Rect::new(3, 2, 4, 1));
+        assert_eq!(
+            drawn(10, 5, panel),
+            "╭─ ✦ t ──╮\n│        │\n│  x     │\n│        │\n╰────────╯"
+        );
+        assert_eq!(drawn(6, 2, Panel::new("").footer("too long")), "╭────╮\n╰────╯");
+        assert_eq!(drawn(1, 1, Panel::new("tiny")), "");
+    }
+
+    #[test]
+    fn tabs_find_what_was_clicked() {
+        let tabs = Tabs::new(["a", "bb"]);
+        let area = Rect::new(2, 1, 20, 1);
+        assert_eq!(tabs.at(area, 2, 1), Some(0));
+        assert_eq!(tabs.at(area, 5, 1), None); // the gap
+        assert_eq!(tabs.at(area, 6, 1), Some(1));
+        assert_eq!(tabs.at(area, 10, 1), None);
+        assert_eq!(tabs.at(area, 2, 0), None);
+        assert_eq!(tabs.at(area, 1, 1), None);
+        assert_eq!(drawn(10, 1, tabs), " a   bb");
+    }
+
+    #[test]
+    fn everything_printable_is_a_widget() {
+        assert_eq!(drawn(4, 1, String::from("hi")), "hi");
+        assert_eq!(drawn(4, 1, Line::new().push("ok", TEXT)), "ok");
+        assert_eq!(drawn(9, 2, Box::new("boxed up") as Box<dyn Widget>), "boxed up\n");
+        assert_eq!(
+            drawn(12, 2, Table::new(["a", "b"]).row(["1", "2"])).lines().next(),
+            Some("a   b")
+        );
+        assert_eq!(drawn(6, 2, Tree::new("root").leaf("x")).lines().next(), Some("root"));
+        assert!(drawn(12, 1, Code::new("let x = 1;")).contains("let x"));
+        assert_eq!(drawn(12, 1, List::new(Vec::<String>::new())), "nothing here");
+        assert_eq!(drawn(10, 1, hints(&[("q", "quit")])), "q quit");
+    }
+
     #[test]
     fn long_lists_scroll_to_the_selection() {
         crate::set_color_mode(crate::ColorMode::None);
