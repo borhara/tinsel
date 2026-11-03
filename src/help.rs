@@ -1,7 +1,7 @@
 //! `--help` output in tinsel's style, with a short entrance on a terminal.
 
 use std::fmt;
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -158,7 +158,7 @@ impl Help {
     /// Print the help with a short entrance on a terminal (about a second); just print it
     /// anywhere else.
     pub fn animate(&self) {
-        if output::output() != output::Output::Pretty || !std::io::stdout().is_terminal() {
+        if output::output() != output::Output::Pretty || !output::is_terminal() {
             return self.print();
         }
         crate::style::theme();
@@ -175,7 +175,7 @@ impl Help {
         let end = settle + 0.5;
 
         let prev = term::guard_interrupt();
-        let mut out = std::io::stdout();
+        let mut out = output::writer();
         let _ = write!(out, "\x1b[?25l\x1b[?7l");
         let (start, mut drawn) = (Instant::now(), 0);
         loop {

@@ -60,15 +60,13 @@ impl Block {
         crate::text::strip_ansi(&self.to_string())
     }
 
-    /// Print every line to stdout. With [`Output::Json`](crate::Output::Json) the block is
+    /// Print every line to stdout (or the [`Target`](crate::Target)). With [`Output::Json`](crate::Output::Json) the block is
     /// one `{"event":"block","lines":[…]}` event instead.
     pub fn print(&self) {
         if crate::output::json() {
             return self.emit();
         }
-        for line in &self.lines {
-            println!("{line}");
-        }
+        crate::output::write(&self.lines.iter().map(|l| format!("{l}\n")).collect::<String>());
     }
 
     /// Print every line to stderr (or, as JSON, to stdout like everything else).
@@ -92,7 +90,8 @@ impl Block {
     /// ```
     pub fn page(&self) {
         use std::io::{IsTerminal, Write};
-        if crate::output::json() || !std::io::stdout().is_terminal() || self.len() < crate::term::height() {
+        let paged = crate::output::target() == crate::Target::Stdout && std::io::stdout().is_terminal();
+        if crate::output::json() || !paged || self.len() < crate::term::height() {
             return self.print();
         }
         let pager = std::env::var("PAGER").ok().filter(|p| !p.trim().is_empty());

@@ -1,4 +1,4 @@
-use std::io::{IsTerminal, Read, Write};
+use std::io::Read;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
@@ -59,6 +59,18 @@ enum Mode {
     Quiet,
     /// Nothing at all, on a clock that only moves when told: for tests.
     Headless,
+}
+
+impl Mode {
+    /// How a display shows itself, given the output shape and whether it's drawn on a terminal.
+    fn pick(out: output::Output, terminal: bool) -> Mode {
+        match out {
+            output::Output::Json => Mode::Json,
+            output::Output::Quiet => Mode::Quiet,
+            output::Output::Pretty if terminal => Mode::Draw,
+            output::Output::Pretty => Mode::Plain,
+        }
+    }
 }
 
 struct StepData {
@@ -132,7 +144,8 @@ impl Shared {
 /// - **It stays out of the way of typing.** Keys pressed during the run don't scribble over
 ///   the display; they're handed back to the shell when it ends.
 ///
-/// When stdout isn't a terminal it does none of this and prints one plain line per finished
+/// It draws on stdout, or stderr after [`set_target`](crate::set_target). When that isn't a
+/// terminal it does none of this and prints one plain line per finished
 /// step, so CI logs stay readable. With [`Output::Json`](crate::Output::Json) every change is
 /// a JSON event instead, and with [`Output::Quiet`](crate::Output::Quiet) only failures print.
 pub struct Live {
@@ -222,8 +235,7 @@ pub(crate) fn abandon_all() -> bool {
         }
         paint_frame(&mut s, true);
         s.abandoned = true;
-        print!("{SHOW_CURSOR}");
-        let _ = std::io::stdout().flush();
+        output::write(SHOW_CURSOR);
         any = true;
     }
     any
@@ -234,17 +246,12 @@ impl Live {
     ///
     /// It starts drawing straight away; add steps with [`Live::step`].
     pub fn new(title: impl Into<String>, target: impl Into<String>) -> Self {
-        let mode = match output::output() {
-            output::Output::Json => Mode::Json,
-            output::Output::Quiet => Mode::Quiet,
-            output::Output::Pretty if std::io::stdout().is_terminal() => Mode::Draw,
-            output::Output::Pretty => Mode::Plain,
-        };
+        let mode = Mode::pick(output::output(), output::is_terminal());
         let mut live = Live::with_mode(title.into(), target.into(), mode);
         match mode {
             Mode::Plain => {
                 let s = lock(&live.shared);
-                println!("{} {}", s.title, s.target);
+                output::line(&format!("{} {}", s.title, s.target));
             }
             Mode::Json => {
                 let s = lock(&live.shared);
@@ -329,7 +336,7 @@ impl Live {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(Arc::downgrade(&self.shared));
-        print!("{HIDE_CURSOR}");
+        output::write(HIDE_CURSOR);
         let (shared, stop) = (self.shared.clone(), self.stop.clone());
         let focus = self.watch.as_ref().map(|w| w.focus.clone());
         self.thread = Some(thread::spawn(move || {
@@ -489,7 +496,7 @@ impl Live {
         match self.mode {
             Mode::Plain => {
                 for line in &lock(&self.shared).footer {
-                    println!("{line}");
+                    output::line(line);
                 }
                 return;
             }
@@ -523,8 +530,7 @@ impl Live {
         if let Some(mut watch) = self.watch.take() {
             watch.stop();
         }
-        print!("{SHOW_CURSOR}");
-        let _ = std::io::stdout().flush();
+        output::write(SHOW_CURSOR);
         term::restore_interrupt(self.prev_interrupt.take());
 
         let s = lock(&self.shared);
@@ -587,8 +593,8 @@ fn log(shared: &Mutex<Shared>, step: Option<usize>, text: &str) {
             s.logs.push(line);
         }
         Mode::Plain => match &label {
-            Some(l) => println!("    {l}: {text}"),
-            None => println!("    {text}"),
+            Some(l) => output::line(&format!("    {l}: {text}")),
+            None => output::line(&format!("    {text}")),
         },
         Mode::Json => {
             let step = label.unwrap_or_default();
@@ -807,7 +813,7 @@ impl Step {
             }
         }
         match mode {
-            Mode::Plain => println!("{}", plain_line(&s.steps[self.idx], secs)),
+            Mode::Plain => output::line(&plain_line(&s.steps[self.idx], secs)),
             Mode::Quiet if state == State::Fail => eprintln!("{}", plain_line(&s.steps[self.idx], secs)),
             Mode::Json => emit_step(&s, self.idx, Some(secs)),
             _ => {}
@@ -1226,9 +1232,7 @@ fn paint_frame(s: &mut Shared, settled: bool) {
     buf += "\x1b[J\x1b[?7h";
     s.drawn = tail.len();
     s.committed += commit.len();
-    let mut out = std::io::stdout().lock();
-    let _ = out.write_all(buf.as_bytes());
-    let _ = out.flush();
+    output::write(&buf);
 }
 
 fn header(s: &Shared) -> Vec<String> {
@@ -1389,6 +1393,15 @@ mod tests {
         assert!(estimated_fraction(1000.0, 42.0) < 0.991);
         // and keep creeping forward
         assert!(estimated_fraction(60.0, 42.0) > estimated_fraction(50.0, 42.0));
+    }
+
+    #[test]
+    fn only_a_terminal_gets_a_drawn_display() {
+        use output::Output;
+        assert_eq!(Mode::pick(Output::Pretty, true), Mode::Draw);
+        assert_eq!(Mode::pick(Output::Pretty, false), Mode::Plain);
+        assert_eq!(Mode::pick(Output::Json, true), Mode::Json);
+        assert_eq!(Mode::pick(Output::Quiet, true), Mode::Quiet);
     }
 
     #[test]
