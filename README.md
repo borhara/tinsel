@@ -55,7 +55,7 @@ finishes.
 - **One shape for everything:** one-liners print; anything bigger is a `Block` you can print, format, or test
 - **Builders that read like the output:** `Card::success("deployed").kv("url", …)`
 - **Errors you can match on:** prompts return `prompt::Error::Cancelled`, not a mystery `io::Error`
-- **Behaves in CI:** no colour or animation when piped, `NO_COLOR` respected, plain `[ok] Build (1.2s)` lines in logs
+- **Behaves in CI:** no colour or animation when piped (or on stderr, with `set_target`), `NO_COLOR` respected, plain `[ok] Build (1.2s)` lines in logs
 - **Panics stay tidy:** a panic mid-run leaves the last frame on screen and prints a proper report, not a scrambled terminal
 - **Testable:** `set_color_mode(ColorMode::None)` and `.plain()` give you exact text to assert on, and `Live::headless` runs a display on a clock you control
 
@@ -267,6 +267,13 @@ tinsel::set_output(tinsel::Output::Json);   // or TINSEL_OUTPUT=json
 {"event":"error","title":"couldn't start","causes":["couldn't read app.toml"],"code":[],"hint":"…"}
 ```
 
+**When stdout isn't yours**, because it carries a command's output or data for another
+program, draw on stderr instead:
+
+```rust
+tinsel::set_target(tinsel::Target::Stderr);   // or TINSEL_TARGET=stderr
+```
+
 ---
 
 ## See it
@@ -298,7 +305,7 @@ cargo run --example deploy         # small, copyable examples: hello, deploy, pa
 | **inline** | `badge` · `link` (clickable) · `Card` · `paint`, `bold`, `dim`, `italic`, `underline`, `gradient` |
 | **apps** | `app::run` full-screen apps · `Panel` · `List` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys, mouse and resize events · `app::snapshot` for tests |
 | **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` · `multiselect` (filter as you type) · `editor` · suggestions and path completion · `confirm_typing` |
-| **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_accent` · `set_theme` · `set_color_mode` · `timings` |
+| **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_accent` · `set_theme` · `set_color_mode` · `timings` |
 | **helpers** | `text::{width, pad, truncate, wrap, strip_ansi}` · `format::{bytes, duration, count, ago, plural}` |
 
 Full reference with examples for every item: **[docs.rs/tinsel](https://docs.rs/tinsel)**.

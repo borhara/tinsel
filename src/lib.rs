@@ -32,7 +32,7 @@
 //! | **apps** | [`app`]: full-screen dashboards and tools, with [`app::Panel`]s, [`app::List`]s, [`app::Tabs`], [`app::Plot`]s, [`app::Stat`]s and [`app::big`] text laid out in [`app::Rect`]s; [`app::snapshot`] to test them |
 //! | **questions** | [`prompt`]: confirm, input (validation, suggestions, path completion), password, number, date, select and multiselect (filter as you type), editor, confirm by typing |
 //! | **helpers** | [`text`] (width-aware pad, truncate, wrap) and [`format`](mod@format) (bytes, durations, ago) |
-//! | **setup** | [`install_panic_hook`], [`set_output`] for `--json` and `--quiet`, [`set_accent`], [`set_theme`], [`set_color_mode`], [`timings`] |
+//! | **setup** | [`install_panic_hook`], [`set_output`] for `--json` and `--quiet`, [`set_target`] to draw on stderr, [`set_accent`], [`set_theme`], [`set_color_mode`], [`timings`] |
 //!
 //! # How the pieces fit
 //!
@@ -57,6 +57,10 @@
 //! tinsel draws in truecolor when `COLORTERM` says the terminal supports it, otherwise in
 //! 256 colours. It respects `NO_COLOR`, and when stdout isn't a terminal (CI, a pipe, a log
 //! file) it drops colour and animation and writes plain lines like `[ok] Build (1.2s)`.
+//!
+//! Everything is drawn on stdout unless [`set_target`] (or `TINSEL_TARGET=stderr`) moves it
+//! to stderr, for tools whose stdout carries something else; then it's stderr that has to
+//! be a terminal.
 //!
 //! [`set_color_mode`] overrides all of that, for a `--color` flag or to get predictable text
 //! in tests:
@@ -107,7 +111,7 @@ pub use live::{Live, RunError, Step, StepCommand};
 pub use markdown::markdown;
 pub use message::{Callout, Report, Tone, callout, counter, error, hint, info, rule, success, title, warn};
 pub use notify::notify;
-pub use output::{Output, output, set_output};
+pub use output::{Output, Target, output, set_output, set_target, target};
 pub use panic::install_panic_hook;
 pub use spin::{Progress, ProgressIterator, WithProgress, spin, try_spin};
 pub use style::{

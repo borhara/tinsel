@@ -51,5 +51,8 @@ First release.
   `Code::numbers(false)`
 - `Help`, with `animate` for an entrance on a terminal; `tinsel help` uses it
 - `markdown`, `json` (`JsonError`) and `Block::page`
+- `set_target(Target::Stderr)` and `TINSEL_TARGET=stderr` draw everything on stderr, for tools
+  whose stdout carries something else; colour and animation then follow whether stderr is a
+  terminal
 - `prompt::Input::suggestions`, `complete` and `paths` (Tab completes, → takes the
   suggestion); `prompt::confirm_typing`

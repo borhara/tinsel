@@ -1,7 +1,5 @@
 //! Desktop notifications through the terminal, so they come from the window you started in.
 
-use std::io::{IsTerminal, Write};
-
 enum Kind {
     /// OSC 9: iTerm2, WezTerm, Ghostty, Windows Terminal.
     Osc9,
@@ -41,13 +39,13 @@ fn clean(s: &str) -> String {
 ///
 /// Uses whatever the terminal understands (OSC 9, kitty's OSC 99, OSC 777, or Notification
 /// Center for macOS Terminal), passed through tmux if needed, and falls back to the bell.
-/// Does nothing when stdout isn't a terminal.
+/// Does nothing when stdout (or the [`Target`](crate::Target)) isn't a terminal.
 ///
 /// ```no_run
 /// tinsel::notify("backup", "● finished in 12m04s");
 /// ```
 pub fn notify(title: &str, body: &str) {
-    if !std::io::stdout().is_terminal() {
+    if !crate::output::is_terminal() {
         return;
     }
     let (title, body) = (clean(title), clean(body));
@@ -72,7 +70,5 @@ pub fn notify(title: &str, body: &str) {
     } else {
         seq
     };
-    let mut out = std::io::stdout();
-    let _ = out.write_all(seq.as_bytes());
-    let _ = out.flush();
+    crate::output::write(&seq);
 }

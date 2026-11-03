@@ -58,6 +58,7 @@ fn hook(info: &PanicHookInfo<'_>) {
         report = report.hint("run with RUST_BACKTRACE=1 to see where it came from");
     }
     let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
     if interrupted {
         eprintln!();
     }

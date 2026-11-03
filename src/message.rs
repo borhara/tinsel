@@ -45,7 +45,8 @@ impl Tone {
         format!("  {}  {}", paint(color, glyph), paint(text_color, msg))
     }
 
-    /// Print the message: errors to stderr, everything else to stdout. In
+    /// Print the message: errors to stderr, everything else to stdout (or the
+    /// [`Target`](crate::Target)). In
     /// [`Output::Quiet`](crate::Output::Quiet) only warnings and errors print.
     pub fn print(self, msg: &str) {
         if output::json() {
@@ -56,7 +57,7 @@ impl Tone {
         }
         match self {
             Tone::Error => eprintln!("{}", self.line(msg)),
-            _ => println!("{}", self.line(msg)),
+            _ => output::line(&self.line(msg)),
         }
     }
 }
@@ -113,7 +114,11 @@ pub fn counter(n: usize, total: usize, msg: &str) {
         return;
     }
     let w = total.to_string().len();
-    println!("  {}  {}", paint(MUTED, &format!("{n:>w$}/{total}")), paint(TEXT, msg));
+    output::line(&format!(
+        "  {}  {}",
+        paint(MUTED, &format!("{n:>w$}/{total}")),
+        paint(TEXT, msg)
+    ));
 }
 
 /// Prints a heading with an optional quieter subtitle beside it, with a blank line either side.
@@ -126,7 +131,7 @@ pub fn title(text: &str, subtitle: Option<&str>) {
         return;
     }
     let sub = subtitle.map(|s| format!("  {}", paint(SOFT, s))).unwrap_or_default();
-    println!("\n  {}{sub}\n", bold(&paint(ROSE, text)));
+    output::line(&format!("\n  {}{sub}\n", bold(&paint(ROSE, text))));
 }
 
 /// A thin divider across the content width, with an optional label in it.
