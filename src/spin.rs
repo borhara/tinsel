@@ -1,7 +1,6 @@
 //! One-line live output for a single task: `spin` around a closure, or a standalone `Progress`.
 
 use std::fmt::Display;
-use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -24,14 +23,13 @@ impl Ticker {
     fn start(frame: impl Fn(f32) -> String + Send + 'static) -> Ticker {
         let prev_interrupt = term::guard_interrupt();
         // no cursor, and no wrapping: an over-long line is cut at the edge instead of breaking the redraw
-        print!("\x1b[?25l\x1b[?7l");
+        output::write("\x1b[?25l\x1b[?7l");
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let thread = thread::spawn(move || {
             let t0 = Instant::now();
             while !flag.load(Ordering::Relaxed) {
-                print!("\r{}\x1b[K", frame(t0.elapsed().as_secs_f32()));
-                let _ = std::io::stdout().flush();
+                output::write(&format!("\r{}\x1b[K", frame(t0.elapsed().as_secs_f32())));
                 thread::sleep(Duration::from_millis(33));
             }
         });
@@ -48,8 +46,7 @@ impl Ticker {
         };
         self.stop.store(true, Ordering::Relaxed);
         let _ = thread.join();
-        print!("\r{last}\x1b[K\n\x1b[?7h\x1b[?25h");
-        let _ = std::io::stdout().flush();
+        output::write(&format!("\r{last}\x1b[K\n\x1b[?7h\x1b[?25h"));
         term::restore_interrupt(self.prev_interrupt.take());
     }
 }
@@ -94,12 +91,12 @@ pub fn try_spin<T, E: Display>(label: &str, f: impl FnOnce() -> Result<T, E>) ->
         output::emit("task", &fields);
         return result;
     }
-    if output::quiet() || !std::io::stdout().is_terminal() {
+    if output::quiet() || !output::is_terminal() {
         let result = f();
         let took = format::duration(start.elapsed());
         match &result {
             Err(e) => eprintln!("  [FAIL] {label} ({took}) - {e}"),
-            Ok(_) if !output::quiet() => println!("  [ok] {label} ({took})"),
+            Ok(_) if !output::quiet() => output::line(&format!("  [ok] {label} ({took})")),
             Ok(_) => {}
         }
         return result;
@@ -112,7 +109,7 @@ pub fn try_spin<T, E: Display>(label: &str, f: impl FnOnce() -> Result<T, E>) ->
         Err(e) => {
             let took = paint(RED, &format::duration(start.elapsed()));
             ticker.finish(&format!("  {}  {}  {took}", paint(RED, "✕"), paint(RED, label)));
-            println!("     {}", paint(mix(RED, SOFT, 0.3), &e.to_string()));
+            output::line(&format!("     {}", paint(mix(RED, SOFT, 0.3), &e.to_string())));
         }
     }
     result
@@ -165,7 +162,7 @@ impl Progress {
             bar: BarStyle::default(),
         }));
         let start = Instant::now();
-        let drawn = output::output() == output::Output::Pretty && std::io::stdout().is_terminal();
+        let drawn = output::output() == output::Output::Pretty && output::is_terminal();
         let ticker = drawn.then(|| {
             let (counts, label) = (counts.clone(), label.clone());
             Ticker::start(move |t| progress_line(&label, &lock(&counts), start.elapsed(), t))
@@ -251,7 +248,7 @@ impl Progress {
             }
             output::emit("progress", &fields);
         } else if !output::quiet() {
-            println!("  [ok] {} ({})", self.label, format::duration(took));
+            output::line(&format!("  [ok] {} ({})", self.label, format::duration(took)));
         }
     }
 }

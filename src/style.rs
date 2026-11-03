@@ -1,6 +1,5 @@
 use std::fmt;
-use std::io::IsTerminal;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// A colour as red, green and blue, 0-255 each.
@@ -54,8 +53,11 @@ pub enum ColorMode {
 
 // 0 = not decided yet; otherwise 1 + the ColorMode's position
 static MODE: AtomicU8 = AtomicU8::new(0);
+/// Whether MODE was worked out rather than chosen, so it can be worked out again for another stream.
+static DETECTED: AtomicBool = AtomicBool::new(false);
 
-/// The colour mode in use. Decided once, from `NO_COLOR`, whether stdout is a terminal, and
+/// The colour mode in use. Decided once, from `NO_COLOR`, whether stdout (or the
+/// [`Target`](crate::Target)) is a terminal, and
 /// `COLORTERM`, unless [`set_color_mode`] has chosen one.
 pub fn color_mode() -> ColorMode {
     match MODE.load(Ordering::Relaxed) {
@@ -65,8 +67,16 @@ pub fn color_mode() -> ColorMode {
         _ => {
             let mode = detect();
             set_color_mode(mode);
+            DETECTED.store(true, Ordering::Relaxed);
             mode
         }
+    }
+}
+
+/// Decide the colour mode again next time, unless it was chosen with [`set_color_mode`].
+pub(crate) fn forget_detected() {
+    if DETECTED.swap(false, Ordering::Relaxed) {
+        MODE.store(0, Ordering::Relaxed);
     }
 }
 
@@ -82,12 +92,13 @@ pub fn set_color_mode(mode: ColorMode) {
         ColorMode::Ansi256 => 2,
         ColorMode::TrueColor => 3,
     };
+    DETECTED.store(false, Ordering::Relaxed);
     MODE.store(code, Ordering::Relaxed);
 }
 
 fn detect() -> ColorMode {
     let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-    if no_color || !std::io::stdout().is_terminal() {
+    if no_color || !crate::output::is_terminal() {
         return ColorMode::None;
     }
     crate::term::enable_escapes();

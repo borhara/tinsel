@@ -1,7 +1,8 @@
-//! What shape output takes: drawn for people, JSON lines for programs, or only what matters.
+//! What shape output takes (drawn for people, JSON lines for programs, or only what matters),
+//! and where it goes.
 
 use std::fmt::Write as _;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// What shape tinsel's output takes. Set it from a `--json` or `--quiet` flag with
@@ -17,7 +18,7 @@ pub enum Output {
     /// For people: colour and animation on a terminal, plain `[ok] Build (1.2s)` lines elsewhere.
     #[default]
     Pretty,
-    /// For programs: one JSON object per line on stdout, for every message, step, report and
+    /// For programs: one JSON object per line on stdout (or the [`Target`]), for every message, step, report and
     /// block. Each has an `"event"` field saying what it is. Prompts still ask on the terminal.
     Json,
     /// Only what needs attention: warnings, errors, failed steps and anything printed
@@ -57,6 +58,124 @@ pub fn set_output(out: Output) {
     OUTPUT.store(code, Ordering::Relaxed);
 }
 
+/// Where tinsel draws: stdout (the default) or stderr. Choose stderr when stdout belongs to
+/// something else, like the output of a command your tool runs or data piped to another
+/// program. Set it with [`set_target`] or `TINSEL_TARGET=stderr`.
+///
+/// ```
+/// tinsel::set_target(tinsel::Target::Stderr);
+/// tinsel::success("checked");    // on stderr, coloured if stderr is a terminal
+/// # tinsel::set_target(tinsel::Target::Stdout);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Target {
+    /// Standard output.
+    #[default]
+    Stdout,
+    /// Standard error.
+    Stderr,
+}
+
+// 0 = not decided yet, 1 = stdout, 2 = stderr
+static TARGET: AtomicU8 = AtomicU8::new(0);
+
+/// Where tinsel draws. Decided once from `TINSEL_TARGET` (`stderr` or `stdout`), unless
+/// [`set_target`] has chosen.
+pub fn target() -> Target {
+    match TARGET.load(Ordering::Relaxed) {
+        1 => Target::Stdout,
+        2 => Target::Stderr,
+        _ => {
+            let target = parse_target(std::env::var("TINSEL_TARGET").ok().as_deref());
+            TARGET.store(target_code(target), Ordering::Relaxed);
+            target
+        }
+    }
+}
+
+/// Send everything tinsel draws to stdout or stderr: [`Live`](crate::Live) displays,
+/// spinners and [`Progress`](crate::Progress) bars, messages,
+/// printed [`Block`](crate::Block)s and JSON events. Whether to draw in colour and animate
+/// is then decided by whether that stream is a terminal. Errors and
+/// [`Report`](crate::Report)s go to stderr either way, and prompts still ask on the terminal.
+///
+/// Call it early, before anything is drawn.
+///
+/// ```
+/// tinsel::set_target(tinsel::Target::Stderr);
+/// tinsel::spin("Checking", || std::thread::sleep(std::time::Duration::from_millis(10)));
+/// # tinsel::set_target(tinsel::Target::Stdout);
+/// ```
+pub fn set_target(target: Target) {
+    let before = TARGET.swap(target_code(target), Ordering::Relaxed);
+    if before != target_code(target) {
+        crate::style::forget_detected();
+    }
+}
+
+fn target_code(target: Target) -> u8 {
+    match target {
+        Target::Stdout => 1,
+        Target::Stderr => 2,
+    }
+}
+
+fn parse_target(env: Option<&str>) -> Target {
+    match env.map(str::trim) {
+        Some(v) if v.eq_ignore_ascii_case("stderr") => Target::Stderr,
+        _ => Target::Stdout,
+    }
+}
+
+/// Whether the stream `target` names is a terminal, asking only about that one.
+fn on_terminal(target: Target, stdout: &dyn Fn() -> bool, stderr: &dyn Fn() -> bool) -> bool {
+    match target {
+        Target::Stdout => stdout(),
+        Target::Stderr => stderr(),
+    }
+}
+
+/// Whether the stream tinsel draws on is a terminal.
+pub(crate) fn is_terminal() -> bool {
+    on_terminal(target(), &|| std::io::stdout().is_terminal(), &|| {
+        std::io::stderr().is_terminal()
+    })
+}
+
+/// The file descriptor tinsel draws on.
+pub(crate) fn fd() -> i32 {
+    match target() {
+        Target::Stdout => 1,
+        Target::Stderr => 2,
+    }
+}
+
+/// [`fd`] as already decided, deciding nothing: safe in a signal handler.
+#[cfg(unix)]
+pub(crate) fn fd_now() -> i32 {
+    if TARGET.load(Ordering::Relaxed) == 2 { 2 } else { 1 }
+}
+
+/// The stream tinsel draws on.
+pub(crate) fn writer() -> Box<dyn Write> {
+    match target() {
+        Target::Stdout => Box::new(std::io::stdout().lock()),
+        Target::Stderr => Box::new(std::io::stderr().lock()),
+    }
+}
+
+/// Write to the stream tinsel draws on, and flush.
+pub(crate) fn write(s: &str) {
+    let mut out = writer();
+    let _ = out.write_all(s.as_bytes());
+    let _ = out.flush();
+}
+
+/// Write a line to the stream tinsel draws on.
+pub(crate) fn line(s: &str) {
+    write(&format!("{s}\n"));
+}
+
 pub(crate) fn json() -> bool {
     output() == Output::Json
 }
@@ -72,7 +191,7 @@ pub(crate) enum Val<'a> {
     List(&'a [String]),
 }
 
-/// Write one JSON event line to stdout: `{"event":"…", …fields}`. Text is stripped of styling.
+/// Write one JSON event line to the stream tinsel draws on: `{"event":"…", …fields}`. Text is stripped of styling.
 pub(crate) fn emit(event: &str, fields: &[(&str, Val)]) {
     let mut line = format!("{{\"event\":{}", quote(event));
     for (key, val) in fields {
@@ -88,9 +207,7 @@ pub(crate) fn emit(event: &str, fields: &[(&str, Val)]) {
         }
     }
     line += "}\n";
-    let mut out = std::io::stdout().lock();
-    let _ = out.write_all(line.as_bytes());
-    let _ = out.flush();
+    write(&line);
 }
 
 /// A JSON string literal, styling removed.
@@ -115,7 +232,29 @@ pub(crate) fn quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::quote;
+    use super::{Target, on_terminal, parse_target, quote};
+
+    #[test]
+    fn target_comes_from_the_environment() {
+        assert_eq!(parse_target(None), Target::Stdout);
+        assert_eq!(parse_target(Some("stderr")), Target::Stderr);
+        assert_eq!(parse_target(Some(" STDERR ")), Target::Stderr);
+        assert_eq!(parse_target(Some("stdout")), Target::Stdout);
+        assert_eq!(parse_target(Some("nonsense")), Target::Stdout);
+    }
+
+    #[test]
+    fn the_chosen_stream_decides_whether_to_draw() {
+        let (yes, no) = (&|| true, &|| false);
+        // stdout piped somewhere, stderr on the terminal
+        assert!(!on_terminal(Target::Stdout, no, yes));
+        assert!(on_terminal(Target::Stderr, no, yes));
+        // and the other way round
+        assert!(on_terminal(Target::Stdout, yes, no));
+        assert!(!on_terminal(Target::Stderr, yes, no));
+        // the other stream is never asked about
+        assert!(on_terminal(Target::Stderr, &|| panic!("asked about stdout"), yes));
+    }
 
     #[test]
     fn quotes_strings_safely() {

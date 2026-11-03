@@ -10,7 +10,8 @@ pub fn content_width() -> usize {
     width().min(76)
 }
 
-/// Columns in the terminal attached to stdout, falling back to `$COLUMNS`, then 80.
+/// Columns in the terminal tinsel draws on (stdout, or the [`Target`](crate::Target)), falling
+/// back to `$COLUMNS`, then 80.
 pub fn width() -> usize {
     ioctl_size()
         .map(|(cols, _)| cols)
@@ -19,7 +20,7 @@ pub fn width() -> usize {
         .unwrap_or(80)
 }
 
-/// Rows in the terminal attached to stdout, falling back to `$LINES`, then 24.
+/// Rows in the terminal tinsel draws on, falling back to `$LINES`, then 24.
 pub(crate) fn height() -> usize {
     ioctl_size()
         .map(|(_, rows)| rows)
@@ -167,7 +168,7 @@ fn ioctl_size() -> Option<(usize, usize)> {
         ypixel: 0,
     };
     // SAFETY: TIOCGWINSZ writes exactly one winsize struct through the pointer.
-    let ok = unsafe { ioctl(1, TIOCGWINSZ, &mut ws as *mut WinSize) } == 0;
+    let ok = unsafe { ioctl(crate::output::fd(), TIOCGWINSZ, &mut ws as *mut WinSize) } == 0;
     (ok && ws.cols > 0).then_some((ws.cols as usize, ws.rows as usize))
 }
 
@@ -202,7 +203,10 @@ pub(crate) fn utc_offset_secs(secs: i64) -> i64 {
     // SAFETY: localtime_r fills one struct tm, whose leading fields have this layout on both
     // platforms; it returns null on failure, leaving gmtoff at 0.
     unsafe { localtime_r(&secs, &mut tm) };
-    tm.gmtoff as i64
+    // c_long is 32 bits on some targets
+    #[allow(clippy::unnecessary_cast)]
+    let offset = tm.gmtoff as i64;
+    offset
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -353,8 +357,13 @@ mod win {
 
     pub(super) fn size() -> Option<(usize, usize)> {
         let mut info = ScreenBufferInfo::default();
+        let which = if crate::output::fd() == 2 {
+            STD_ERROR_HANDLE
+        } else {
+            STD_OUTPUT_HANDLE
+        };
         // SAFETY: GetConsoleScreenBufferInfo fills one struct through the pointer.
-        let ok = unsafe { GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &mut info) } != 0;
+        let ok = unsafe { GetConsoleScreenBufferInfo(GetStdHandle(which), &mut info) } != 0;
         let w = (info.right - info.left + 1) as usize;
         let h = (info.bottom - info.top + 1) as usize;
         (ok && w > 0).then_some((w, h))
@@ -433,7 +442,7 @@ pub(crate) fn restore_saved_terminal() {
         // SAFETY: SAVED_TERMIOS holds exactly what tcgetattr wrote.
         unsafe { tcsetattr(0, TCSANOW, (&raw const SAVED_TERMIOS).cast()) };
     }
-    print!("\x1b[?1004l\x1b[?25h\x1b[?7h");
+    crate::output::write("\x1b[?1004l\x1b[?25h\x1b[?7h");
 }
 
 #[cfg(unix)]
@@ -467,7 +476,7 @@ extern "C" fn on_interrupt(_: i32) {
         if HAVE_SAVED.load(std::sync::atomic::Ordering::SeqCst) {
             tcsetattr(0, TCSANOW, (&raw const SAVED_TERMIOS).cast());
         }
-        write(1, msg.as_ptr().cast(), msg.len());
+        write(crate::output::fd_now(), msg.as_ptr().cast(), msg.len());
         _exit(130)
     }
 }
@@ -488,7 +497,7 @@ pub(crate) fn forget_terminal() {}
 
 #[cfg(not(unix))]
 pub(crate) fn restore_saved_terminal() {
-    print!("\x1b[?25h\x1b[?7h");
+    crate::output::write("\x1b[?25h\x1b[?7h");
 }
 
 #[cfg(test)]

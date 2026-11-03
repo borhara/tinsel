@@ -3,13 +3,13 @@
 //! `ESC [ O` when it loses it. Reading those means reading stdin, so anything else typed
 //! meanwhile is kept and handed back to the terminal afterwards.
 
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::term;
+use crate::{output, term};
 
 /// How long someone has to be away before their return counts as coming back to look.
 const AWAY_LONG_ENOUGH: Duration = Duration::from_secs(3);
@@ -69,16 +69,15 @@ pub(crate) struct Watch {
 }
 
 impl Watch {
-    /// Start listening for focus changes, if there's an interactive terminal and the
-    /// `TINSEL_NO_FOCUS` environment variable isn't set.
+    /// Start listening for focus changes, if someone's typing at a terminal we're drawing on
+    /// and the `TINSEL_NO_FOCUS` environment variable isn't set.
     pub(crate) fn start() -> Option<Watch> {
-        if !term::interactive() || std::env::var_os("TINSEL_NO_FOCUS").is_some() {
+        if !io::stdin().is_terminal() || !output::is_terminal() || std::env::var_os("TINSEL_NO_FOCUS").is_some() {
             return None;
         }
         term::remember_terminal();
         let saved = term::enter_cbreak().ok()?;
-        print!("\x1b[?1004h");
-        let _ = io::stdout().flush();
+        output::write("\x1b[?1004h");
 
         let focus = Arc::new(Focus {
             focused: AtomicBool::new(true),
@@ -102,8 +101,7 @@ impl Watch {
         let Some(thread) = self.thread.take() else { return };
         self.stop.store(true, Ordering::Relaxed);
         let _ = thread.join();
-        print!("\x1b[?1004l");
-        let _ = io::stdout().flush();
+        output::write("\x1b[?1004l");
         let _ = term::stty(&[&self.saved]);
         term::forget_terminal();
         let typed = std::mem::take(&mut *self.focus.typed.lock().unwrap_or_else(|e| e.into_inner()));
