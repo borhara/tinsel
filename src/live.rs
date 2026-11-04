@@ -125,6 +125,10 @@ struct Shared {
     bar: BarStyle,
     history: Option<History>,
     focus: Option<Arc<Focus>>,
+    /// Listening for focus reports. Started from the drawing thread after its first frame,
+    /// so [`Live::no_focus`] gets in first.
+    watch: Option<Watch>,
+    wants_focus: bool,
 }
 
 impl Shared {
@@ -168,7 +172,6 @@ pub struct Live {
     shared: Arc<Mutex<Shared>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
-    watch: Option<Watch>,
     notify_after: Option<Duration>,
     mode: Mode,
     closed: bool,
@@ -326,10 +329,11 @@ impl Live {
                 bar: BarStyle::default(),
                 history: None,
                 focus: None,
+                watch: None,
+                wants_focus: false,
             })),
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
-            watch: None,
             notify_after: Some(DEFAULT_NOTIFY_AFTER),
             mode,
             closed: false,
@@ -342,11 +346,10 @@ impl Live {
         // finding it out can mean asking the terminal and reading its reply
         crate::style::theme();
         self.prev_interrupt = term::guard_interrupt();
-        self.watch = Watch::start();
         {
             let mut s = lock(&self.shared);
             s.history = History::open(&History::default_app());
-            s.focus = self.watch.as_ref().map(|w| w.focus.clone());
+            s.wants_focus = true;
         }
         DRAWING
             .lock()
@@ -354,14 +357,40 @@ impl Live {
             .push(Arc::downgrade(&self.shared));
         output::write(HIDE_CURSOR);
         let (shared, stop) = (self.shared.clone(), self.stop.clone());
-        let focus = self.watch.as_ref().map(|w| w.focus.clone());
         self.thread = Some(thread::spawn(move || {
+            let mut first = true;
             while !stop.load(Ordering::Relaxed) {
                 draw(&shared, false);
-                let away = focus.as_ref().is_some_and(|f| f.away());
+                if std::mem::take(&mut first) {
+                    thread::sleep(FRAME);
+                    watch_focus(&shared);
+                    continue;
+                }
+                let away = lock(&shared).focus.as_ref().is_some_and(|f| f.away());
                 thread::sleep(if away { AWAY_FRAME } else { FRAME });
             }
         }));
+    }
+
+    /// Don't listen for focus reports: no calmer animation while you're away, no notification
+    /// when the run finishes, and stdin is left alone, for a tool that hands stdin to
+    /// something else. [`set_focus`](crate::set_focus) or the `TINSEL_NO_FOCUS` environment
+    /// variable does the same for every display.
+    ///
+    /// ```no_run
+    /// let live = tinsel::Live::new("deploy", "my-app").no_focus();
+    /// ```
+    pub fn no_focus(self) -> Self {
+        let watch = {
+            let mut s = lock(&self.shared);
+            s.wants_focus = false;
+            s.focus = None;
+            s.watch.take()
+        };
+        if let Some(mut watch) = watch {
+            watch.stop();
+        }
+        self
     }
 
     /// Add a pending step. Declaring every step up front shows the whole plan from the start.
@@ -413,8 +442,9 @@ impl Live {
         self
     }
 
-    /// Don't remember step timings, or show estimates from earlier runs. Setting the
-    /// `TINSEL_NO_HISTORY` environment variable does the same for every program.
+    /// Don't remember step timings, or show estimates from earlier runs.
+    /// [`set_history`](crate::set_history) or the `TINSEL_NO_HISTORY` environment variable
+    /// does the same for every display.
     pub fn no_history(self) -> Self {
         lock(&self.shared).history = None;
         self
@@ -542,8 +572,9 @@ impl Live {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|w| w.upgrade().is_some_and(|s| !Arc::ptr_eq(&s, &self.shared)));
-        let away = self.watch.as_ref().is_some_and(|w| w.focus.away());
-        if let Some(mut watch) = self.watch.take() {
+        let watch = lock(&self.shared).watch.take();
+        let away = watch.as_ref().is_some_and(|w| w.focus.away());
+        if let Some(mut watch) = watch {
             watch.stop();
         }
         output::write(SHOW_CURSOR);
@@ -560,6 +591,22 @@ impl Live {
 impl Drop for Live {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+/// Start listening for focus reports, unless the display has been told not to.
+fn watch_focus(shared: &Mutex<Shared>) {
+    if !lock(shared).wants_focus {
+        return;
+    }
+    let Some(mut watch) = Watch::start() else { return };
+    let mut s = lock(shared);
+    if s.wants_focus {
+        s.focus = Some(watch.focus.clone());
+        s.watch = Some(watch);
+    } else {
+        drop(s);
+        watch.stop();
     }
 }
 

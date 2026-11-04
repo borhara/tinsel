@@ -309,7 +309,7 @@ cargo run --example deploy         # small, copyable examples: hello, deploy, pa
 | **inline** | `badge` · `link` (clickable) · `Card` · `paint`, `bold`, `dim`, `italic`, `underline`, `gradient` |
 | **apps** | `app::run` full-screen apps · `Panel` · `List` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys, mouse and resize events · `app::snapshot` for tests |
 | **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` · `multiselect` (filter as you type) · `editor` · suggestions and path completion · `confirm_typing` |
-| **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_accent` · `set_theme` · `set_color_mode` · `timings` |
+| **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_focus` · `set_history` · `set_accent` · `set_theme` · `set_color_mode` · `timings` |
 | **helpers** | `text::{width, pad, truncate, wrap, strip_ansi}` · `format::{bytes, duration, count, ago, plural}` |
 
 Full reference with examples for every item: **[docs.rs/tinsel](https://docs.rs/tinsel)**.
@@ -355,14 +355,15 @@ fn deploy_shows_the_build_time() {
 `$XDG_CACHE_HOME/tinsel`), one small file per program. A step with no progress of its own
 gets an estimate bar from its recent median, and says `slower than usual` when it is. Only
 successful steps on a terminal are recorded. `Live::remember_as("name")` picks the file,
-`.no_history()` or `TINSEL_NO_HISTORY=1` turns it off. `tinsel::timings(Some("my-app"))`
+`.no_history()`, `tinsel::set_history(false)` or `TINSEL_NO_HISTORY=1` turns it off. `tinsel::timings(Some("my-app"))`
 shows what's been learned, and flags a step whose last run was unusually slow.
 
 **Focus.** In terminals that report window focus (iTerm2, kitty, WezTerm, Ghostty,
 Alacritty, foot, …), animation slows while you're away, a run of 10s or more that finishes
 while you're away sends a notification (`.notify_after(…)`, `.no_notify()`), and returning
 re-twinkles what finished. Keys typed during a run are held back from the display and handed
-to the shell afterwards. `TINSEL_NO_FOCUS=1` turns all of this off. `tinsel::notify` sends a
+to the shell afterwards. `.no_focus()`, `tinsel::set_focus(false)` or `TINSEL_NO_FOCUS=1`
+turns all of this off, and leaves stdin alone. `tinsel::notify` sends a
 notification yourself.
 
 **Tall displays.** A `Live` display taller than the terminal leaves its top rows in

@@ -4,7 +4,7 @@
 //! meanwhile is kept and handed back to the terminal afterwards.
 
 use std::io::{self, IsTerminal, Read};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -61,6 +61,31 @@ impl Focus {
     }
 }
 
+// 0 = up to TINSEL_NO_FOCUS, 1 = on, 2 = off
+static ENABLED: AtomicU8 = AtomicU8::new(0);
+
+/// Turn focus awareness on or off for every [`Live`](crate::Live) display: calmer animation
+/// while you're in another window, a notification when a long run finishes unseen, and a
+/// twinkle for what finished when you come back. Reading focus reports means reading stdin
+/// while a display runs, so turn it off in tests, or in a tool that hands stdin to something
+/// else. Without this, setting `TINSEL_NO_FOCUS` turns it off. [`Live::no_focus`](crate::Live::no_focus)
+/// turns it off for one display.
+///
+/// ```
+/// tinsel::set_focus(false);
+/// ```
+pub fn set_focus(on: bool) {
+    ENABLED.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+}
+
+fn enabled() -> bool {
+    match ENABLED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => std::env::var_os("TINSEL_NO_FOCUS").is_none(),
+    }
+}
+
 pub(crate) struct Watch {
     pub(crate) focus: Arc<Focus>,
     stop: Arc<AtomicBool>,
@@ -70,9 +95,9 @@ pub(crate) struct Watch {
 
 impl Watch {
     /// Start listening for focus changes, if someone's typing at a terminal we're drawing on
-    /// and the `TINSEL_NO_FOCUS` environment variable isn't set.
+    /// and focus awareness hasn't been turned off.
     pub(crate) fn start() -> Option<Watch> {
-        if !io::stdin().is_terminal() || !output::is_terminal() || std::env::var_os("TINSEL_NO_FOCUS").is_some() {
+        if !enabled() || !io::stdin().is_terminal() || !output::is_terminal() {
             return None;
         }
         term::remember_terminal();
@@ -153,5 +178,20 @@ fn listen(focus: &Focus, stop: &AtomicBool) {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .extend_from_slice(&pending);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn can_be_turned_off_from_code() {
+        set_focus(false);
+        assert!(!enabled());
+        assert!(Watch::start().is_none());
+        set_focus(true);
+        assert!(enabled());
+        ENABLED.store(0, Ordering::Relaxed);
     }
 }

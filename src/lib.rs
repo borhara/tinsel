@@ -32,7 +32,7 @@
 //! | **apps** | [`app`]: full-screen dashboards and tools, with [`app::Panel`]s, [`app::List`]s, [`app::Tabs`], [`app::Plot`]s, [`app::Stat`]s and [`app::big`] text laid out in [`app::Rect`]s; [`app::snapshot`] to test them |
 //! | **questions** | [`prompt`]: confirm, input (validation, suggestions, path completion), password, number, date, select and multiselect (filter as you type), editor, confirm by typing |
 //! | **helpers** | [`text`] (width-aware pad, truncate, wrap) and [`format`](mod@format) (bytes, durations, ago) |
-//! | **setup** | [`install_panic_hook`], [`set_output`] for `--json` and `--quiet`, [`set_target`] to draw on stderr, [`set_accent`], [`set_theme`], [`set_color_mode`], [`timings`] |
+//! | **setup** | [`install_panic_hook`], [`set_output`] for `--json` and `--quiet`, [`set_target`] to draw on stderr, [`set_accent`], [`set_theme`], [`set_color_mode`], [`set_focus`] and [`set_history`], [`timings`] |
 //!
 //! # How the pieces fit
 //!
@@ -105,6 +105,7 @@ pub use block::Block;
 pub use chart::{bars, heatmap, histogram, meter, sparkline};
 pub use help::Help;
 pub use highlight::Lang;
+pub use history::set_history;
 pub use json::{JsonError, json};
 pub use layout::{Code, IntoLang, badge, columns, diff, link, pairs};
 pub use live::{Live, RunError, Step, StepCommand};
@@ -121,6 +122,7 @@ pub use style::{
 pub use table::{Align, Border, Table};
 pub use term::{content_width, width};
 pub use tree::Tree;
+pub use watch::set_focus;
 pub use widgets::{BarStyle, Card, Spinner, bar, live_bar, live_waveform, pop, shimmer, waveform};
 
 /// What [`Live`] displays have learned about how long steps take, as a table per program:
