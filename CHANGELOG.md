@@ -55,6 +55,8 @@ First release.
   `⊘` and `◌`, as `[skip]`, `[cancelled]` and `[wait]` lines, and as `skipped`, `cancelled`
   and `waiting` JSON states; a finished or failed step can `start` again, timed afresh and
   remembered once
+- `Live::no_focus`, `set_focus` and `set_history` turn focus awareness and remembered
+  timings off from code, alongside `TINSEL_NO_FOCUS` and `TINSEL_NO_HISTORY`
 - `set_target(Target::Stderr)` and `TINSEL_TARGET=stderr` draw everything on stderr, for tools
   whose stdout carries something else; colour and animation then follow whether stderr is a
   terminal
