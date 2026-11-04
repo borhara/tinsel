@@ -55,7 +55,7 @@ finishes.
 - **One shape for everything:** one-liners print; anything bigger is a `Block` you can print, format, or test
 - **Builders that read like the output:** `Card::success("deployed").kv("url", …)`
 - **Errors you can match on:** prompts return `prompt::Error::Cancelled`, not a mystery `io::Error`
-- **Behaves in CI:** no colour or animation when piped (or on stderr, with `set_target`), `NO_COLOR` respected, plain `[ok] Build (1.2s)` lines in logs
+- **Behaves in CI:** no colour or animation when piped, `NO_COLOR` respected, plain `[ok] Build (1.2s)` lines in logs
 - **Panics stay tidy:** a panic mid-run leaves the last frame on screen and prints a proper report, not a scrambled terminal
 - **Testable:** `set_color_mode(ColorMode::None)` and `.plain()` give you exact text to assert on, and `Live::headless` runs a display on a clock you control
 
@@ -93,6 +93,10 @@ std::thread::scope(|s| {
 build.done();
 live.log("signed with Developer ID");                          // printed above, kept on screen
 ```
+
+Steps that don't run can say why: `lint.skip("nothing changed")`, `upload.cancel("stopped
+by hand")`, or `release.wait("waiting for approval")` until someone says go, then
+`release.start()`. A failed step can `start()` again, and its timer starts over.
 
 Progress bars can be a thin line (the default) or a waveform that lights up as it plays
 through, like an audio track: `Live::new(…).with_bar(BarStyle::Waveform)`.

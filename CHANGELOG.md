@@ -51,6 +51,10 @@ First release.
   `Code::numbers(false)`
 - `Help`, with `animate` for an entrance on a terminal; `tinsel help` uses it
 - `markdown`, `json` (`JsonError`) and `Block::page`
+- `Step::skip`, `Step::cancel` and `Step::wait` (on someone, like an approval), drawn as `–`,
+  `⊘` and `◌`, as `[skip]`, `[cancelled]` and `[wait]` lines, and as `skipped`, `cancelled`
+  and `waiting` JSON states; a finished or failed step can `start` again, timed afresh and
+  remembered once
 - `set_target(Target::Stderr)` and `TINSEL_TARGET=stderr` draw everything on stderr, for tools
   whose stdout carries something else; colour and animation then follow whether stderr is a
   terminal
