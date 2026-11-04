@@ -40,6 +40,21 @@ impl History {
         })
     }
 
+    /// A history kept nowhere, for tests.
+    #[cfg(test)]
+    pub(crate) fn scratch() -> History {
+        History {
+            path: PathBuf::from("/nonexistent/x.tsv"),
+            runs: BTreeMap::new(),
+            dirty: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runs(&self, key: &str) -> &[f64] {
+        self.runs.get(key).map_or(&[], Vec::as_slice)
+    }
+
     /// The program's own name, used when nothing else is given.
     pub(crate) fn default_app() -> String {
         std::env::current_exe()
@@ -209,11 +224,7 @@ mod tests {
     use super::*;
 
     fn history() -> History {
-        History {
-            path: PathBuf::from("/nonexistent/x.tsv"),
-            runs: BTreeMap::new(),
-            dirty: false,
-        }
+        History::scratch()
     }
 
     #[test]

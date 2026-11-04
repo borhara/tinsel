@@ -32,6 +32,12 @@ enum State {
     Done,
     Warn,
     Fail,
+    /// Not run, and not going to be.
+    Skipped,
+    /// Stopped before it could finish, by someone rather than by a failure.
+    Cancelled,
+    /// Held up until someone (or something) else acts.
+    Waiting,
 }
 
 impl State {
@@ -42,6 +48,9 @@ impl State {
             State::Done => "done",
             State::Warn => "warn",
             State::Fail => "fail",
+            State::Skipped => "skipped",
+            State::Cancelled => "cancelled",
+            State::Waiting => "waiting",
         }
     }
 }
@@ -82,6 +91,8 @@ struct StepData {
     state: State,
     started: Option<Instant>,
     ended: Option<Instant>,
+    /// When it started waiting, while it is.
+    waiting_since: Option<Instant>,
     detail: String,
     note: String,
     progress: Option<(f32, String)>,
@@ -131,6 +142,11 @@ impl Shared {
 /// and can be moved to other threads, and every active step animates on its own. Steps can
 /// have sub-steps ([`Step::step`]), and [`log`](Live::log) prints a line above the display
 /// without disturbing it.
+///
+/// A step is pending (`○`) until it [starts](Step::start), then ends [done](Step::done) (`●`),
+/// with a [warning](Step::warn) (`▲`) or [failed](Step::fail) (`✕`). It can also be
+/// [skipped](Step::skip) (`–`), [cancelled](Step::cancel) (`⊘`), or left [waiting](Step::wait)
+/// on someone (`◌`), and a finished step can start again.
 ///
 /// Beyond spinners and timings, a `Live` display does three things on its own:
 ///
@@ -533,13 +549,11 @@ impl Live {
         output::write(SHOW_CURSOR);
         term::restore_interrupt(self.prev_interrupt.take());
 
-        let s = lock(&self.shared);
+        let mut s = lock(&self.shared);
         if away && self.notify_after.is_some_and(|after| s.t0.elapsed() >= after) {
             notify::notify(&format!("{} {}", s.title, s.target), &summary(&s));
         }
-        if let Some(history) = &s.history {
-            history.save();
-        }
+        record_history(&mut s);
     }
 }
 
@@ -564,6 +578,7 @@ fn add_step(shared: &Arc<Mutex<Shared>>, parent: Option<usize>, label: String) -
         state: State::Pending,
         started: None,
         ended: None,
+        waiting_since: None,
         detail: String::new(),
         note: String::new(),
         progress: None,
@@ -611,10 +626,30 @@ fn log(shared: &Mutex<Shared>, step: Option<usize>, text: &str) {
     }
 }
 
-/// `ok`, `warn` or `fail`: how the run went overall.
+/// Remember how long each step that succeeded took, once the run is over, so a step that ran
+/// more than once counts only its last go. Failures stop early and skipped or cancelled steps
+/// never ran in full, so their times would drag the estimate down.
+fn record_history(s: &mut Shared) {
+    let Some(mut history) = s.history.take() else { return };
+    for step in s
+        .steps
+        .iter()
+        .filter(|st| matches!(st.state, State::Done | State::Warn))
+    {
+        if let (Some(began), Some(ended)) = (step.started, step.ended) {
+            history.record(&step.key, (ended - began).as_secs_f64());
+        }
+    }
+    history.save();
+    s.history = Some(history);
+}
+
+/// `ok`, `warn`, `cancelled` or `fail`: how the run went overall.
 fn outcome(s: &Shared) -> &'static str {
     if s.steps.iter().any(|st| st.state == State::Fail) {
         "fail"
+    } else if s.steps.iter().any(|st| st.state == State::Cancelled) {
+        "cancelled"
     } else if s.steps.iter().any(|st| st.state == State::Warn) {
         "warn"
     } else {
@@ -627,6 +662,9 @@ fn summary(s: &Shared) -> String {
     let took = format::duration(s.t0.elapsed());
     if let Some(failed) = s.steps.iter().find(|st| st.state == State::Fail) {
         return format!("✕ {} failed after {took}", failed.label);
+    }
+    if let Some(cancelled) = s.steps.iter().find(|st| st.state == State::Cancelled) {
+        return format!("⊘ {} cancelled after {took}", cancelled.label);
     }
     match s.steps.iter().filter(|st| st.state == State::Warn).count() {
         0 => format!("● finished in {took}"),
@@ -659,6 +697,18 @@ impl Step {
 
     /// Mark the step as running: its spinner starts and its timer begins. If it has run
     /// before, its usual duration is looked up so it can show an estimate.
+    ///
+    /// A step that has finished, failed or been waiting can start again, like a job that's
+    /// retried: its timer starts over, and only its last run is remembered.
+    ///
+    /// ```
+    /// let live = tinsel::Live::new("deploy", "my-app");
+    /// let upload = live.step("Upload");
+    /// upload.start();
+    /// upload.fail("connection reset");
+    /// upload.start();
+    /// upload.done();
+    /// ```
     pub fn start(&self) {
         let mut s = lock(&self.shared);
         let now = s.now();
@@ -666,6 +716,9 @@ impl Step {
         let step = &mut s.steps[self.idx];
         step.state = State::Active;
         step.started = Some(now);
+        step.ended = None;
+        step.waiting_since = None;
+        step.note.clear();
         step.estimate = estimate;
         if s.mode == Mode::Json {
             emit_step(&s, self.idx, None);
@@ -703,6 +756,61 @@ impl Step {
     /// Mark the step as failed, with the reason shown under it.
     pub fn fail(&self, note: impl Into<String>) {
         self.end(State::Fail, note.into());
+    }
+
+    /// Mark the step as skipped: it didn't run and won't. The reason, if not empty, shows
+    /// under it. Skipped steps aren't trouble, so they fold away with their parent.
+    ///
+    /// ```
+    /// let live = tinsel::Live::new("check", "my-app");
+    /// live.step("Lint").skip("no source files changed");
+    /// ```
+    pub fn skip(&self, reason: impl Into<String>) {
+        self.end(State::Skipped, reason.into());
+    }
+
+    /// Mark the step as cancelled: stopped, or never started, because someone called it off
+    /// rather than because it failed. The reason, if not empty, shows under it.
+    ///
+    /// ```
+    /// let live = tinsel::Live::new("deploy", "my-app");
+    /// let upload = live.step("Upload");
+    /// upload.start();
+    /// upload.cancel("stopped by hand");
+    /// ```
+    pub fn cancel(&self, reason: impl Into<String>) {
+        self.end(State::Cancelled, reason.into());
+    }
+
+    /// Mark the step as waiting on someone or something, said under it, with how long it's
+    /// been waiting on the right. [`start`](Step::start) it once it can go on. Waiting is
+    /// worth noticing, so it prints in quiet output too.
+    ///
+    /// ```
+    /// let live = tinsel::Live::new("deploy", "my-app → production");
+    /// let release = live.step("Release");
+    /// release.wait("waiting for approval");
+    /// // … once someone approves
+    /// release.start();
+    /// release.done();
+    /// ```
+    pub fn wait(&self, on: impl Into<String>) {
+        let mut s = lock(&self.shared);
+        let now = s.now();
+        let mode = s.mode;
+        let step = &mut s.steps[self.idx];
+        step.state = State::Waiting;
+        step.waiting_since = Some(now);
+        step.ended = None;
+        step.detail.clear();
+        step.progress = None;
+        step.note = on.into();
+        match mode {
+            Mode::Plain => output::line(&plain_line(step, None)),
+            Mode::Quiet => eprintln!("{}", plain_line(step, None)),
+            Mode::Json => emit_step(&s, self.idx, None),
+            _ => {}
+        }
     }
 
     /// Run `f` as this step: started if it hasn't been, then done on `Ok` or failed on `Err`,
@@ -798,40 +906,49 @@ impl Step {
         let now = s.now();
         let mode = s.mode;
         let step = &mut s.steps[self.idx];
-        let started = *step.started.get_or_insert(now);
+        // a skipped step never ran, and a cancelled one only took time if it was running
+        let ran = match state {
+            State::Skipped => false,
+            State::Cancelled => step.state == State::Active,
+            _ => true,
+        };
+        let started = if ran {
+            Some(*step.started.get_or_insert(now))
+        } else {
+            step.started = None;
+            None
+        };
         step.state = state;
         step.ended = Some(now);
+        step.waiting_since = None;
         step.detail.clear();
         step.progress = None;
         step.note = note;
-        let secs = (now - started).as_secs_f64();
-        let key = step.key.clone();
-        // failures stop early, so their times would drag the estimate down
-        if state != State::Fail {
-            if let Some(history) = s.history.as_mut() {
-                history.record(&key, secs);
-            }
-        }
+        let secs = started.map(|b| (now - b).as_secs_f64());
         match mode {
             Mode::Plain => output::line(&plain_line(&s.steps[self.idx], secs)),
             Mode::Quiet if state == State::Fail => eprintln!("{}", plain_line(&s.steps[self.idx], secs)),
-            Mode::Json => emit_step(&s, self.idx, Some(secs)),
+            Mode::Json => emit_step(&s, self.idx, secs),
             _ => {}
         }
     }
 }
 
 /// `  [ok] Build (1.2s)`, indented under its parent if it has one.
-fn plain_line(step: &StepData, secs: f64) -> String {
+fn plain_line(step: &StepData, secs: Option<f64>) -> String {
     let mark = match step.state {
         State::Warn => "warn",
         State::Fail => "FAIL",
+        State::Skipped => "skip",
+        State::Cancelled => "cancelled",
+        State::Waiting => "wait",
         _ => "ok",
     };
     let indent = "  ".repeat(step.depth + 1);
     let mut note = step.note.lines();
     let tail = note.next().map(|first| format!(" - {first}")).unwrap_or_default();
-    let mut out = format!("{indent}[{mark}] {} ({}){tail}", step.label, fmt_secs(secs));
+    let took = secs.map(|s| format!(" ({})", fmt_secs(s))).unwrap_or_default();
+    let mut out = format!("{indent}[{mark}] {}{took}{tail}", step.label);
     for line in note {
         out += &format!("\n{indent}    | {line}");
     }
@@ -1159,6 +1276,8 @@ fn timeline(s: &Shared, width: usize) -> Vec<String> {
             State::Done => ROSE,
             State::Warn => AMBER,
             State::Fail => RED,
+            State::Cancelled => MUTED,
+            State::Waiting => mix(AMBER, MUTED, 0.35),
             _ => crate::style::palette::BLUSH,
         };
         let bar = "━".repeat(b.saturating_sub(a).max(1));
@@ -1275,7 +1394,7 @@ fn render(s: &Shared, now: Instant, width: usize, settled: bool) -> Vec<String> 
 fn walk(s: &Shared, idx: usize, frame: &Frame, out: &mut Vec<String>) {
     let step = &s.steps[idx];
     step_lines(step, frame, out);
-    let folded = step.state == State::Done && step.children.iter().all(|&c| !troubled(s, c));
+    let folded = matches!(step.state, State::Done | State::Skipped) && step.children.iter().all(|&c| !troubled(s, c));
     if !folded {
         for &child in &step.children {
             walk(s, child, frame, out);
@@ -1283,10 +1402,13 @@ fn walk(s: &Shared, idx: usize, frame: &Frame, out: &mut Vec<String>) {
     }
 }
 
-/// Whether a step or anything under it warned or failed.
+/// Whether a step or anything under it warned, failed, was cancelled or is waiting.
 fn troubled(s: &Shared, idx: usize) -> bool {
     let step = &s.steps[idx];
-    matches!(step.state, State::Warn | State::Fail) || step.children.iter().any(|&c| troubled(s, c))
+    matches!(
+        step.state,
+        State::Warn | State::Fail | State::Cancelled | State::Waiting
+    ) || step.children.iter().any(|&c| troubled(s, c))
 }
 
 fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
@@ -1299,11 +1421,12 @@ fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
         .started
         .map(|b| fmt_secs((st.ended.unwrap_or(f.now) - b).as_secs_f64()))
         .unwrap_or_default();
-    let row = |glyph: Line, label: Line, right_color: Rgb| {
+    let row_with = |glyph: Line, label: Line, right: &str, right_color: Rgb| {
         let left = Line::new().space(2 + nest).append(glyph).space(2).append(label);
-        let pad = f.width.saturating_sub(left.width() + took.chars().count() + 2).max(1);
-        format!("{left}{}{}", " ".repeat(pad), paint(right_color, &took))
+        let pad = f.width.saturating_sub(left.width() + right.chars().count() + 2).max(1);
+        format!("{left}{}{}", " ".repeat(pad), paint(right_color, right))
     };
+    let row = |glyph: Line, label: Line, right_color: Rgb| row_with(glyph, label, &took, right_color);
     let centred = |mark: Line| {
         Line::new()
             .space((gutter - 1) / 2)
@@ -1379,6 +1502,36 @@ fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
             out.push(row(g, l, RED));
             note(mix(RED, SOFT, 0.3), out);
         }
+        State::Skipped => {
+            let (g, l) = plain("–", MUTED, MUTED);
+            out.push(row_with(g, l, "skipped", MUTED));
+            note(MUTED, out);
+        }
+        State::Cancelled => {
+            let (g, l) = plain("⊘", SOFT, SOFT);
+            let right = if st.started.is_some() {
+                took.as_str()
+            } else {
+                "cancelled"
+            };
+            out.push(row_with(g, l, right, MUTED));
+            note(MUTED, out);
+        }
+        State::Waiting => {
+            // a slow breath, so it reads as patient rather than busy
+            let glow = if f.settled {
+                AMBER
+            } else {
+                mix(AMBER, MUTED, 0.5 - 0.5 * (f.t * 2.4).cos())
+            };
+            let (g, l) = plain("◌", glow, TEXT);
+            let waited = st
+                .waiting_since
+                .map(|w| fmt_secs((f.now - w).as_secs_f64()))
+                .unwrap_or_default();
+            out.push(row_with(g, l, &waited, MUTED));
+            note(mix(AMBER, MUTED, 0.35), out);
+        }
     }
 }
 
@@ -1393,6 +1546,29 @@ mod tests {
         assert!(estimated_fraction(1000.0, 42.0) < 0.991);
         // and keep creeping forward
         assert!(estimated_fraction(60.0, 42.0) > estimated_fraction(50.0, 42.0));
+    }
+
+    #[test]
+    fn history_keeps_one_time_per_step_and_only_for_steps_that_ran() {
+        let live = Live::headless("deploy", "my-app");
+        lock(&live.shared).history = Some(History::scratch());
+        let (upload, lint, ship) = (live.step("Upload"), live.step("Lint"), live.step("Ship"));
+        upload.start();
+        live.advance(Duration::from_secs(2));
+        upload.done();
+        upload.start();
+        live.advance(Duration::from_secs(3));
+        upload.done();
+        lint.skip("");
+        ship.start();
+        live.advance(Duration::from_secs(1));
+        ship.cancel("");
+        let mut s = lock(&live.shared);
+        record_history(&mut s);
+        let history = s.history.as_ref().unwrap();
+        assert_eq!(history.runs("deploy › Upload"), [3.0]);
+        assert!(history.runs("deploy › Lint").is_empty());
+        assert!(history.runs("deploy › Ship").is_empty());
     }
 
     #[test]
