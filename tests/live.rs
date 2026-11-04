@@ -151,3 +151,100 @@ fn commands_show_their_last_lines_when_they_fail() {
     );
     assert!(!snap.contains("       one"));
 }
+
+#[test]
+fn steps_can_be_skipped_cancelled_or_waiting() {
+    set_color_mode(ColorMode::None);
+    let live = Live::headless("deploy", "my-app");
+    let (lint, test, approve, ship) = (
+        live.step("Lint"),
+        live.step("Test"),
+        live.step("Approve"),
+        live.step("Ship"),
+    );
+    lint.skip("nothing changed");
+    test.start();
+    live.advance(Duration::from_millis(800));
+    test.cancel("stopped by hand");
+    approve.wait("waiting for approval");
+    live.advance(Duration::from_secs(3));
+    ship.cancel("");
+    assert_eq!(
+        squashed(&live)[3..],
+        [
+            "– Lint skipped",
+            "nothing changed",
+            "⊘ Test 0.8s",
+            "stopped by hand",
+            "◌ Approve 3.0s",
+            "waiting for approval",
+            "⊘ Ship cancelled",
+        ]
+    );
+}
+
+#[test]
+fn a_waiting_step_can_start_once_someone_says_so() {
+    set_color_mode(ColorMode::None);
+    let live = Live::headless("deploy", "my-app");
+    let approve = live.step("Approve");
+    approve.wait("waiting for approval");
+    live.advance(Duration::from_secs(5));
+    approve.start();
+    live.advance(Duration::from_millis(400));
+    approve.done();
+    assert_eq!(squashed(&live)[3..], ["● Approve 0.4s"]);
+}
+
+#[test]
+fn a_finished_step_can_run_again_with_a_fresh_timer() {
+    set_color_mode(ColorMode::None);
+    let live = Live::headless("deploy", "my-app");
+    let upload = live.step("Upload");
+    upload.start();
+    live.advance(Duration::from_secs(2));
+    upload.fail("connection reset");
+    upload.start();
+    live.advance(Duration::from_millis(500));
+    let running = squashed(&live);
+    assert_eq!(running.len(), 4, "{running:?}");
+    assert!(running[3].ends_with("Upload 0.5s"), "{running:?}");
+    upload.done();
+    assert_eq!(squashed(&live)[3..], ["● Upload 0.5s"]);
+}
+
+#[test]
+fn skipped_sub_steps_fold_away_but_cancelled_ones_stay() {
+    set_color_mode(ColorMode::None);
+    let live = Live::headless("release", "v2");
+    let build = live.step("Build");
+    let (api, docs) = (build.step("api"), build.step("docs"));
+    build.start();
+    api.start();
+    api.done();
+    docs.skip("");
+    build.done();
+    assert_eq!(squashed(&live)[3..], ["● Build 0.0s"]);
+
+    let ship = live.step("Ship");
+    let (web, worker) = (ship.step("web"), ship.step("worker"));
+    ship.start();
+    web.start();
+    web.done();
+    worker.cancel("");
+    ship.done();
+    assert_eq!(
+        squashed(&live)[4..],
+        ["● Ship 0.0s", "● web 0.0s", "⊘ worker cancelled"]
+    );
+}
+
+#[test]
+fn a_skipped_parent_folds_its_sub_steps() {
+    set_color_mode(ColorMode::None);
+    let live = Live::headless("release", "v2");
+    let docs = live.step("Docs");
+    docs.step("reference");
+    docs.skip("");
+    assert_eq!(squashed(&live)[3..], ["– Docs skipped"]);
+}
