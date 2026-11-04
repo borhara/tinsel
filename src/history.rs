@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use crate::block::Block;
@@ -18,6 +19,21 @@ use crate::{format, sparkline};
 
 const KEEP: usize = 10;
 
+// 0 = up to TINSEL_NO_HISTORY, 1 = on, 2 = off
+static ENABLED: AtomicU8 = AtomicU8::new(0);
+
+/// Turn remembered step timings on or off for every [`Live`](crate::Live) display: with it
+/// off, nothing is read from or written to the cache, and steps show no estimates. Without
+/// this, setting `TINSEL_NO_HISTORY` turns it off. [`Live::no_history`](crate::Live::no_history)
+/// turns it off for one display.
+///
+/// ```
+/// tinsel::set_history(false);
+/// ```
+pub fn set_history(on: bool) {
+    ENABLED.store(if on { 1 } else { 2 }, Ordering::Relaxed);
+}
+
 pub(crate) struct History {
     path: PathBuf,
     runs: BTreeMap<String, Vec<f64>>,
@@ -25,10 +41,14 @@ pub(crate) struct History {
 }
 
 impl History {
-    /// The history for a program, or `None` if there's nowhere to keep it or
-    /// `TINSEL_NO_HISTORY` is set.
+    /// The history for a program, or `None` if there's nowhere to keep it or it's turned off.
     pub(crate) fn open(app: &str) -> Option<History> {
-        if std::env::var_os("TINSEL_NO_HISTORY").is_some() {
+        let on = match ENABLED.load(Ordering::Relaxed) {
+            1 => true,
+            2 => false,
+            _ => std::env::var_os("TINSEL_NO_HISTORY").is_none(),
+        };
+        if !on {
             return None;
         }
         let path = cache_dir()?.join(format!("{}.tsv", sanitize(app)));
@@ -254,6 +274,13 @@ mod tests {
         let parsed = parse("deploy › Build\t41.20 39.80\nbroken line\n");
         assert_eq!(parsed["deploy › Build"], vec![41.2, 39.8]);
         assert_eq!(parsed.len(), 1);
+    }
+
+    #[test]
+    fn can_be_turned_off_from_code() {
+        set_history(false);
+        assert!(History::open("tinsel-test").is_none());
+        ENABLED.store(0, Ordering::Relaxed);
     }
 
     #[test]
