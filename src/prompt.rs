@@ -6,9 +6,10 @@
 //!
 //! Every question returns a [`Result`], whose error says what happened in a way you can
 //! match on: [`Error::Cancelled`] when someone presses Ctrl-C or Esc, [`Error::NotATerminal`]
-//! when there's no one to ask. Without a terminal on stdin, `confirm` returns its default and
-//! the text questions (`input`, `number`, `date`) read a line, so scripts can still drive
-//! them; an answer read that way that fails validation is an [`Error::Invalid`].
+//! when there's no one to ask. Without a terminal on stdin, `confirm` and the text questions
+//! (`input`, `number`, `date`) read a line, so scripts can still drive them
+//! (`echo yes | my-cli`); an answer read that way that doesn't make sense or fails validation
+//! is an [`Error::Invalid`].
 //!
 //! ```no_run
 //! use tinsel::prompt;
@@ -334,11 +335,32 @@ fn read_piped_line() -> Result<String> {
 // MARK: - Yes or no
 
 /// Yes or no. Enter takes the default.
+///
+/// Without a terminal it reads a line instead: `y`, `yes`, `n` or `no` in any case, and an
+/// empty line (or the end of the input) takes the default. Anything else is an
+/// [`Error::Invalid`].
+///
+/// ```no_run
+/// if tinsel::prompt::confirm("Deploy to production?", false)? {
+///     tinsel::success("deploying");
+/// }
+/// # Ok::<(), tinsel::prompt::Error>(())
+/// ```
 pub fn confirm(question: &str, default: bool) -> Result<bool> {
     if !io::stdin().is_terminal() {
-        return Ok(default);
+        return yes_or_no(&read_piped_line()?, default);
     }
     run_confirm(question, default, &mut Ui::terminal()?)
+}
+
+/// A yes or no answer read from a pipe.
+fn yes_or_no(line: &str, default: bool) -> Result<bool> {
+    match line.trim().to_lowercase().as_str() {
+        "" => Ok(default),
+        "y" | "yes" => Ok(true),
+        "n" | "no" => Ok(false),
+        _ => Err(Error::Invalid(format!("“{}” isn't yes or no", line.trim()))),
+    }
 }
 
 fn run_confirm(question: &str, default: bool, ui: &mut Ui) -> Result<bool> {
@@ -1429,5 +1451,16 @@ mod tests {
             run_multiselect("Pick", &["a", "b"], &[], &mut Ui::script(&keys)).unwrap(),
             [0, 1]
         );
+    }
+
+    #[test]
+    fn confirm_reads_piped_answers() {
+        for (line, want) in [("y", true), ("YES", true), (" no ", false), ("N", false)] {
+            assert_eq!(yes_or_no(line, false).unwrap(), want, "{line}");
+        }
+        // an empty line, or nothing at all, takes the default
+        assert!(yes_or_no("", true).unwrap());
+        assert!(!yes_or_no("", false).unwrap());
+        assert!(matches!(yes_or_no("maybe", true), Err(Error::Invalid(_))));
     }
 }
