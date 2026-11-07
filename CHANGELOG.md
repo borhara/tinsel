@@ -55,6 +55,9 @@ First release.
   `⊘` and `◌`, as `[skip]`, `[cancelled]` and `[wait]` lines, and as `skipped`, `cancelled`
   and `waiting` JSON states; a finished or failed step can `start` again, timed afresh and
   remembered once
+- `Region`: any `Block` redrawn in place at a set rate (`fps`), cleared when it finishes
+  unless `keep`, with `log` printing above it; off a terminal only logged lines and a kept
+  last frame print; `Region::headless` and `snapshot` for tests
 - `Live::no_focus`, `set_focus` and `set_history` turn focus awareness and remembered
   timings off from code, alongside `TINSEL_NO_FOCUS` and `TINSEL_NO_HISTORY`
 - `set_target(Target::Stderr)` and `TINSEL_TARGET=stderr` draw everything on stderr, for tools
