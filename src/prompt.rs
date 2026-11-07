@@ -140,10 +140,11 @@ enum Key {
     Other,
 }
 
-fn read_key() -> io::Result<Key> {
+/// The next key, from bytes that `read` gives one at a time (`None` after a pause).
+fn read_key(read: &mut impl FnMut() -> io::Result<Option<u8>>) -> io::Result<Key> {
     let first = loop {
         // reads time out every 0.1s, which is what lets a lone Esc be told apart
-        if let Some(b) = read_byte()? {
+        if let Some(b) = read()? {
             break b;
         }
     };
@@ -153,8 +154,8 @@ fn read_key() -> io::Result<Key> {
         b'\t' => Key::Tab,
         b' ' => Key::Space,
         127 | 8 => Key::Backspace,
-        27 => match read_byte()? {
-            Some(b'[' | b'O') => match read_byte()? {
+        27 => match read()? {
+            Some(b'[' | b'O') => match read()? {
                 Some(b'A') => Key::Up,
                 Some(b'B') => Key::Down,
                 Some(b'C') => Key::Right,
@@ -164,7 +165,7 @@ fn read_key() -> io::Result<Key> {
                 // ESC [ n ~
                 Some(n @ b'1'..=b'8') => {
                     let mut code = vec![n];
-                    while let Some(b) = read_byte()? {
+                    while let Some(b) = read()? {
                         if b == b'~' {
                             break;
                         }
@@ -195,7 +196,7 @@ fn read_key() -> io::Result<Key> {
             };
             let mut buf = vec![b];
             for _ in 1..len {
-                buf.extend(read_byte()?);
+                buf.extend(read()?);
             }
             String::from_utf8(buf)
                 .ok()
@@ -210,10 +211,18 @@ fn read_key() -> io::Result<Key> {
 #[derive(Default)]
 struct Frame {
     drawn: usize,
+    /// What was last drawn, kept for tests.
+    lines: Vec<String>,
+    /// Keep the lines without printing them.
+    offscreen: bool,
 }
 
 impl Frame {
     fn draw(&mut self, lines: &[String]) {
+        self.lines = lines.to_vec();
+        if self.offscreen {
+            return;
+        }
         let mut s = if self.drawn > 0 {
             format!("\x1b[{}F", self.drawn)
         } else {
@@ -227,6 +236,52 @@ impl Frame {
         eprint!("{s}");
         let _ = io::stderr().flush();
         self.drawn = lines.len();
+    }
+}
+
+/// Where a question reads keys and draws: the terminal in raw mode, or a script in tests.
+struct Ui {
+    keys: Box<dyn FnMut() -> io::Result<Key>>,
+    frame: Frame,
+    _raw: Option<Raw>,
+}
+
+impl Ui {
+    fn terminal() -> io::Result<Ui> {
+        let raw = Raw::enter()?;
+        Ok(Ui {
+            keys: Box::new(|| read_key(&mut read_byte)),
+            frame: Frame::default(),
+            _raw: Some(raw),
+        })
+    }
+
+    /// Keys typed from a list, drawing nowhere; running out of keys is an error.
+    #[cfg(test)]
+    fn script(keys: &[Key]) -> Ui {
+        let mut keys = Vec::from(keys).into_iter();
+        Ui {
+            keys: Box::new(move || keys.next().ok_or_else(|| io::ErrorKind::UnexpectedEof.into())),
+            frame: Frame {
+                offscreen: true,
+                ..Frame::default()
+            },
+            _raw: None,
+        }
+    }
+
+    fn key(&mut self) -> io::Result<Key> {
+        (self.keys)()
+    }
+
+    fn draw(&mut self, lines: &[String]) {
+        self.frame.draw(lines);
+    }
+
+    /// The last thing drawn, without colour.
+    #[cfg(test)]
+    fn shown(&self) -> Vec<String> {
+        self.frame.lines.iter().map(|l| text::strip_ansi(l)).collect()
     }
 }
 
@@ -283,22 +338,24 @@ pub fn confirm(question: &str, default: bool) -> Result<bool> {
     if !io::stdin().is_terminal() {
         return Ok(default);
     }
-    let _raw = Raw::enter()?;
-    let mut frame = Frame::default();
-    frame.draw(&[format!(
+    run_confirm(question, default, &mut Ui::terminal()?)
+}
+
+fn run_confirm(question: &str, default: bool, ui: &mut Ui) -> Result<bool> {
+    ui.draw(&[format!(
         "{}  {}",
         ask(question),
         paint(MUTED, if default { "Y/n" } else { "y/N" })
     )]);
     loop {
-        let answer = match read_key()? {
+        let answer = match ui.key()? {
             Key::Char('y' | 'Y') => true,
             Key::Char('n' | 'N') => false,
             Key::Enter => default,
-            Key::Esc | Key::Interrupt => return Err(cancel(&mut frame, question)),
+            Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
             _ => continue,
         };
-        frame.draw(&[answered(question, if answer { "yes" } else { "no" })]);
+        ui.draw(&[answered(question, if answer { "yes" } else { "no" })]);
         return Ok(answer);
     }
 }
@@ -400,22 +457,26 @@ impl<'a> Input<'a> {
         self.validate.as_ref().map_or(Ok(()), |check| check(value))
     }
 
+    /// What was typed, or the default when nothing was.
+    fn resolve(&self, typed: String) -> String {
+        if typed.is_empty() {
+            self.default.clone().unwrap_or_default()
+        } else {
+            typed
+        }
+    }
+
     /// Ask the question.
     pub fn ask(self) -> Result<String> {
-        let resolve = |typed: String| {
-            if typed.is_empty() {
-                self.default.clone().unwrap_or_default()
-            } else {
-                typed
-            }
-        };
         if !io::stdin().is_terminal() {
-            let value = resolve(read_piped_line()?);
+            let value = self.resolve(read_piped_line()?);
             self.check(&value).map_err(Error::Invalid)?;
             return Ok(value);
         }
-        let _raw = Raw::enter()?;
-        let mut frame = Frame::default();
+        self.run(&mut Ui::terminal()?)
+    }
+
+    fn run(&self, ui: &mut Ui) -> Result<String> {
         let mut edit = LineEdit::default();
         let mut trouble: Option<String> = None;
         let dots = |n: usize| "•".repeat(n);
@@ -482,10 +543,10 @@ impl<'a> Input<'a> {
                 };
                 lines.push(format!("     {}{}", list.join("  "), paint(MUTED, &more)));
             }
-            frame.draw(&lines);
-            match read_key()? {
+            ui.draw(&lines);
+            match ui.key()? {
                 Key::Enter => {
-                    let value = resolve(edit.text.clone());
+                    let value = self.resolve(edit.text.clone());
                     match self.check(&value) {
                         Ok(()) => {
                             let shown = if self.secret {
@@ -493,13 +554,13 @@ impl<'a> Input<'a> {
                             } else {
                                 value.clone()
                             };
-                            frame.draw(&[answered(&self.question, &shown)]);
+                            ui.draw(&[answered(&self.question, &shown)]);
                             return Ok(value);
                         }
                         Err(why) => trouble = Some(why),
                     }
                 }
-                Key::Esc | Key::Interrupt => return Err(cancel(&mut frame, &self.question)),
+                Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, &self.question)),
                 Key::Tab if !offered.is_empty() => {
                     let next = match &cycle {
                         Some((base, n)) => (base.clone(), (n + 1) % offered.len()),
@@ -845,8 +906,10 @@ pub fn select(question: &str, options: &[&str]) -> Result<usize> {
     if options.is_empty() {
         return Err(Error::NoOptions);
     }
-    let _raw = Raw::enter()?;
-    let mut frame = Frame::default();
+    run_select(question, options, &mut Ui::terminal()?)
+}
+
+fn run_select(question: &str, options: &[&str], ui: &mut Ui) -> Result<usize> {
     let mut picker = Picker::new(options);
     let hint = if picker.filterable {
         "type to filter · ↑↓ move · enter choose"
@@ -863,11 +926,11 @@ pub fn select(question: &str, options: &[&str]) -> Result<usize> {
             }
         }));
         lines.push(keys(hint));
-        frame.draw(&lines);
-        match read_key()? {
+        ui.draw(&lines);
+        match ui.key()? {
             Key::Enter => {
                 if let Some(i) = picker.current() {
-                    frame.draw(&[answered(question, options[i])]);
+                    ui.draw(&[answered(question, options[i])]);
                     return Ok(i);
                 }
             }
@@ -876,7 +939,7 @@ pub fn select(question: &str, options: &[&str]) -> Result<usize> {
                 picker.filter.clear();
                 picker.refilter();
             }
-            Key::Esc | Key::Interrupt => return Err(cancel(&mut frame, question)),
+            Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
             key => {
                 picker.key(key);
             }
@@ -892,8 +955,10 @@ pub fn multiselect(question: &str, options: &[&str], preselected: &[usize]) -> R
     if options.is_empty() {
         return Ok(Vec::new());
     }
-    let _raw = Raw::enter()?;
-    let mut frame = Frame::default();
+    run_multiselect(question, options, preselected, &mut Ui::terminal()?)
+}
+
+fn run_multiselect(question: &str, options: &[&str], preselected: &[usize], ui: &mut Ui) -> Result<Vec<usize>> {
     let mut picker = Picker::new(options);
     let mut picked: Vec<bool> = (0..options.len()).map(|i| preselected.contains(&i)).collect();
     let hint = if picker.filterable {
@@ -913,8 +978,8 @@ pub fn multiselect(question: &str, options: &[&str], preselected: &[usize]) -> R
             format!("    {pointer} {mark} {label}")
         }));
         lines.push(keys(hint));
-        frame.draw(&lines);
-        match read_key()? {
+        ui.draw(&lines);
+        match ui.key()? {
             Key::Space => {
                 if let Some(i) = picker.current() {
                     picked[i] = !picked[i];
@@ -934,7 +999,7 @@ pub fn multiselect(question: &str, options: &[&str], preselected: &[usize]) -> R
                 picker.filter.clear();
                 picker.refilter();
             }
-            Key::Esc | Key::Interrupt => return Err(cancel(&mut frame, question)),
+            Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
             key => {
                 picker.key(key);
             }
@@ -947,7 +1012,7 @@ pub fn multiselect(question: &str, options: &[&str], preselected: &[usize]) -> R
     } else {
         text::truncate(&names.join(", "), 40)
     };
-    frame.draw(&[answered(question, &summary)]);
+    ui.draw(&[answered(question, &summary)]);
     Ok(chosen)
 }
 
@@ -1093,15 +1158,14 @@ pub fn date(question: &str, default: Option<Date>) -> Result<Date> {
         }
         return line.parse().map_err(Error::Invalid);
     }
-    let _raw = Raw::enter()?;
-    let mut frame = Frame::default();
+    let mut ui = Ui::terminal()?;
     let mut at = start;
     loop {
         let mut lines = vec![format!("{}  {}", ask(question), paint(BLUSH, &at.to_string()))];
         lines.extend(calendar(at, today));
         lines.push(keys("←→ day · ↑↓ week · pgup/pgdn month · t today · enter choose"));
-        frame.draw(&lines);
-        at = match read_key()? {
+        ui.draw(&lines);
+        at = match ui.key()? {
             Key::Left | Key::Char('h') => at.add_days(-1),
             Key::Right | Key::Char('l') => at.add_days(1),
             Key::Up | Key::Char('k') => at.add_days(-7),
@@ -1110,11 +1174,11 @@ pub fn date(question: &str, default: Option<Date>) -> Result<Date> {
             Key::PageDown | Key::Char(']') => at.add_months(1),
             Key::Char('t') => today,
             Key::Enter => break,
-            Key::Esc | Key::Interrupt => return Err(cancel(&mut frame, question)),
+            Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
             _ => at,
         };
     }
-    frame.draw(&[answered(question, &at.to_string())]);
+    ui.draw(&[answered(question, &at.to_string())]);
     Ok(at)
 }
 
@@ -1260,5 +1324,110 @@ mod tests {
         e.key(Key::End);
         e.key(Key::Ctrl('u'));
         assert_eq!(e.text, "");
+    }
+
+    fn keys_of(bytes: &[u8]) -> Vec<Key> {
+        let at = std::cell::Cell::new(0);
+        let mut read = || {
+            at.set(at.get() + 1);
+            Ok(bytes.get(at.get() - 1).copied())
+        };
+        let mut keys = Vec::new();
+        while at.get() < bytes.len() {
+            keys.push(read_key(&mut read).unwrap());
+        }
+        keys
+    }
+
+    #[test]
+    fn bytes_become_keys() {
+        assert_eq!(keys_of(b"\x1b[D"), [Key::Left]);
+        assert_eq!(keys_of(b"\x1b[5~a\r"), [Key::PageUp, Key::Char('a'), Key::Enter]);
+        assert_eq!(keys_of("é\x03".as_bytes()), [Key::Char('é'), Key::Interrupt]);
+        assert_eq!(keys_of(b"\x1b"), [Key::Esc]);
+    }
+
+    fn typed(s: &str) -> Vec<Key> {
+        s.chars()
+            .map(|c| if c == ' ' { Key::Space } else { Key::Char(c) })
+            .collect()
+    }
+
+    #[test]
+    fn confirm_takes_keys_and_the_default() {
+        assert!(!run_confirm("Go?", true, &mut Ui::script(&[Key::Char('N')])).unwrap());
+        let mut ui = Ui::script(&[Key::Down, Key::Enter]);
+        assert!(run_confirm("Go?", true, &mut ui).unwrap());
+        assert_eq!(ui.shown(), ["  ●  Go?  yes"]);
+        assert!(matches!(
+            run_confirm("Go?", true, &mut Ui::script(&[Key::Esc])),
+            Err(Error::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn input_edits_and_validates() {
+        let q = Input::new("Name").validate(|s| if s.len() > 2 { Ok(()) } else { Err("too short".into()) });
+        let mut keys = typed("ab");
+        keys.push(Key::Enter);
+        let mut ui = Ui::script(&keys);
+        assert!(q.run(&mut ui).is_err());
+        assert_eq!(ui.shown()[1], "     ✕ too short");
+        keys.extend([Key::Home, Key::Char('>'), Key::Enter]);
+        let mut ui = Ui::script(&keys);
+        assert_eq!(q.run(&mut ui).unwrap(), ">ab");
+        assert_eq!(ui.shown(), ["  ●  Name  >ab"]);
+    }
+
+    const LONG: [&str; 10] = [
+        "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet",
+    ];
+
+    #[test]
+    fn select_moves_and_wraps() {
+        let pick = |keys: &[Key]| run_select("Pick", &["a", "b", "c"], &mut Ui::script(keys));
+        assert_eq!(pick(&[Key::Down, Key::Down, Key::Enter]).unwrap(), 2);
+        assert_eq!(pick(&[Key::Up, Key::Enter]).unwrap(), 2);
+        assert_eq!(pick(&[Key::Char('j'), Key::Enter]).unwrap(), 1);
+    }
+
+    #[test]
+    fn esc_clears_the_filter_before_cancelling() {
+        let mut keys = typed("ho");
+        // the cursor stays on what it was on
+        keys.extend([Key::Esc, Key::Down, Key::Enter]);
+        assert_eq!(run_select("Pick", &LONG, &mut Ui::script(&keys)).unwrap(), 5);
+        let mut ui = Ui::script(&typed("ho"));
+        let _ = run_select("Pick", &LONG, &mut ui);
+        assert_eq!(ui.shown()[0], "  ?  Pick  ho▏");
+        assert_eq!(ui.shown()[1], "    › echo");
+        let mut keys = typed("ho");
+        keys.extend([Key::Esc, Key::Esc]);
+        assert!(matches!(
+            run_select("Pick", &LONG, &mut Ui::script(&keys)),
+            Err(Error::Cancelled)
+        ));
+        let mut keys = typed("zz");
+        keys.extend([Key::Esc, Key::Space, Key::Enter]);
+        assert_eq!(
+            run_multiselect("Pick", &LONG, &[], &mut Ui::script(&keys)).unwrap(),
+            [0]
+        );
+    }
+
+    #[test]
+    fn multiselect_toggles() {
+        let keys = [Key::Space, Key::Down, Key::Space, Key::Down, Key::Space, Key::Enter];
+        let mut ui = Ui::script(&keys);
+        assert_eq!(
+            run_multiselect("Pick", &["a", "b", "c"], &[1], &mut ui).unwrap(),
+            [0, 2]
+        );
+        assert_eq!(ui.shown(), ["  ●  Pick  a, c"]);
+        let keys = [Key::Char('a'), Key::Enter];
+        assert_eq!(
+            run_multiselect("Pick", &["a", "b"], &[], &mut Ui::script(&keys)).unwrap(),
+            [0, 1]
+        );
     }
 }
