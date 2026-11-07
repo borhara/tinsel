@@ -8,7 +8,7 @@ use crate::style::paint;
 use crate::style::palette::MUTED;
 
 /// Show panics as a tinsel [`Report`] instead of Rust's default message, and put the terminal
-/// back first if a [`Live`](crate::Live) display was mid-draw: running steps are marked as
+/// back first if a [`Live`](crate::Live) display or a [`Region`](crate::Region) was mid-draw: running steps are marked as
 /// interrupted, the last frame is left on screen, and the cursor comes back.
 ///
 /// Call it once, early in `main`. With `RUST_BACKTRACE` set the backtrace is printed under
@@ -29,7 +29,7 @@ pub fn install_panic_hook() {
 }
 
 fn hook(info: &PanicHookInfo<'_>) {
-    let interrupted = crate::live::abandon_all();
+    let interrupted = crate::live::abandon_all() | crate::region::abandon_all();
     // with panic = "abort", no destructors run, so nothing else will put the terminal back
     if cfg!(panic = "abort") {
         crate::term::restore_saved_terminal();
