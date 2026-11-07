@@ -34,8 +34,10 @@ Tests compare plain text: call `tinsel::set_color_mode(ColorMode::None)` and ass
 their own file under `tests/` (see `tests/styled.rs`). For `Live`, use `Live::headless` and
 `advance` its clock, then compare `snapshot()`s (see `tests/live.rs`).
 
-Prompts and the live redraw can't be unit-tested in a pipe. Try them in a real terminal, and
-if you can, on macOS, Linux and Windows. CI checks that all three build.
+Prompts read keys through a `Ui`, so their tests type a script of keys with `Ui::script` and
+check what was drawn last (see the tests in `src/prompt.rs`). The live redraw can't be
+unit-tested in a pipe. Try both in a real terminal, and if you can, on macOS, Linux and
+Windows. CI checks that all three build.
 
 ## Recording the demo
 
