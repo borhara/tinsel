@@ -248,3 +248,17 @@ fn a_skipped_parent_folds_its_sub_steps() {
     docs.skip("");
     assert_eq!(squashed(&live)[3..], ["– Docs skipped"]);
 }
+
+#[test]
+fn progress_says_how_long_is_left_once_it_can_tell() {
+    set_color_mode(ColorMode::None);
+    let live = Live::headless("deploy", "my-app");
+    let upload = live.step("Upload");
+    upload.start();
+    upload.progress(0.02, "1 / 20 MB");
+    assert!(!live.snapshot().plain().contains("left"));
+    live.advance(Duration::from_secs(4));
+    upload.progress(0.25, "5 / 20 MB");
+    let lines = squashed(&live);
+    assert!(lines[4].ends_with(" 25% 5 / 20 MB · 12s left"), "{lines:?}");
+}

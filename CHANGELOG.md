@@ -55,6 +55,7 @@ First release.
   `⊘` and `◌`, as `[skip]`, `[cancelled]` and `[wait]` lines, and as `skipped`, `cancelled`
   and `waiting` JSON states; a finished or failed step can `start` again, timed afresh and
   remembered once
+- `Live` progress bars say how long is left at the rate so far
 - `Region`: any `Block` redrawn in place at a set rate (`fps`), cleared when it finishes
   unless `keep`, with `log` printing above it; off a terminal only logged lines and a kept
   last frame print; `Region::headless` and `snapshot` for tests
