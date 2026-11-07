@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 
 use crate::output::{self, Val};
 use crate::style::palette::{MUTED, RED, ROSE, SOFT, TEXT};
-use crate::style::{mix, paint};
+use crate::style::{Rgb, mix, paint};
 use crate::widgets::{BarStyle, Spinner, shimmer};
-use crate::{format, term};
+use crate::{format, term, text};
 
 /// Redraws one line in place from a background thread until finished.
 struct Ticker {
@@ -57,16 +57,29 @@ impl Drop for Ticker {
     }
 }
 
-fn done_line(label: &str, took: Duration) -> String {
-    format!(
-        "  {}  {}  {}",
-        paint(ROSE, "●"),
-        paint(TEXT, label),
-        paint(MUTED, &format::duration(took))
-    )
+/// `  ●  label` with the time at the right edge, in the same columns as a [`crate::Live`] step:
+/// the mark sits in the middle of the spinner's column, so the label stays put.
+fn finished_line(mark: &str, color: Rgb, label: &str, label_color: Rgb, time_color: Rgb, took: Duration) -> String {
+    let gutter = Spinner::default().width();
+    let (before, after) = ((gutter - 1) / 2, gutter - 1 - (gutter - 1) / 2);
+    let left = format!(
+        "  {}{}{}  {}",
+        " ".repeat(before),
+        paint(color, mark),
+        " ".repeat(after),
+        paint(label_color, label)
+    );
+    let took = format::duration(took);
+    let pad = term::content_width().saturating_sub(text::width(&left) + took.chars().count() + 2);
+    format!("{left}{}{}", " ".repeat(pad.max(2)), paint(time_color, &took))
 }
 
-/// Run `f` with a spinner beside `label`, then leave a `●  label  1.2s` line.
+fn done_line(label: &str, took: Duration) -> String {
+    finished_line("●", ROSE, label, TEXT, MUTED, took)
+}
+
+/// Run `f` with a spinner beside `label`, then leave a `●  label` line with the time it took
+/// on the right, lined up with [`Live`](crate::Live) steps.
 pub fn spin<T>(label: &str, f: impl FnOnce() -> T) -> T {
     match try_spin(label, || Ok::<T, std::convert::Infallible>(f())) {
         Ok(v) => v,
@@ -107,9 +120,9 @@ pub fn try_spin<T, E: Display>(label: &str, f: impl FnOnce() -> Result<T, E>) ->
     match &result {
         Ok(_) => ticker.finish(&done_line(label, start.elapsed())),
         Err(e) => {
-            let took = paint(RED, &format::duration(start.elapsed()));
-            ticker.finish(&format!("  {}  {}  {took}", paint(RED, "✕"), paint(RED, label)));
-            output::line(&format!("     {}", paint(mix(RED, SOFT, 0.3), &e.to_string())));
+            ticker.finish(&finished_line("✕", RED, label, RED, RED, start.elapsed()));
+            let indent = " ".repeat(2 + Spinner::default().width() + 2);
+            output::line(&format!("{indent}{}", paint(mix(RED, SOFT, 0.3), &e.to_string())));
         }
     }
     result
@@ -223,7 +236,7 @@ impl Progress {
         c.total = Some(c.total.unwrap_or(0) + n);
     }
 
-    /// Stop drawing and leave a `●  label  2.6s` line.
+    /// Stop drawing and leave a `●  label` line, with the time it took on the right.
     pub fn finish(mut self) {
         self.end();
     }
