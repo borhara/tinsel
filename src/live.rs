@@ -210,6 +210,13 @@ fn approx(secs: f64) -> String {
     }
 }
 
+/// Seconds left at the rate so far, once there's enough to go on: a couple of seconds and a
+/// few percent in, so the first guess isn't wild.
+fn time_left(elapsed: f64, fraction: f32) -> Option<f64> {
+    let p = f64::from(fraction);
+    (elapsed >= 2.0 && (0.04..1.0).contains(&p)).then(|| elapsed * (1.0 - p) / p)
+}
+
 /// How far along a step probably is: in step with the clock until 90% of its usual time,
 /// then easing towards (but never reaching) the end, so it never looks finished early.
 fn estimated_fraction(elapsed: f64, usual: f64) -> f32 {
@@ -1502,7 +1509,10 @@ fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
             out.push(row(f.spinner.frame(f.t), widgets::shimmer(&st.label, f.t), MUTED));
             let usual = st.estimate.filter(|e| *e >= MIN_ESTIMATE);
             if let Some((p, text)) = &st.progress {
-                let stats = paint(SOFT, &format!("{:>3.0}%  {text}", p * 100.0));
+                let mut stats = paint(SOFT, &format!("{:>3.0}%  {text}", p * 100.0));
+                if let Some(left) = st.started.and_then(|b| time_left((f.now - b).as_secs_f64(), *p)) {
+                    stats += &paint(MUTED, &format!(" · {} left", approx(left)));
+                }
                 out.push(format!("{indent}{}  {stats}", f.bar.draw(*p, 30, f.t)));
             } else if let (Some(usual), Some(started)) = (usual, st.started) {
                 let elapsed = (f.now - started).as_secs_f64();
