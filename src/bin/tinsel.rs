@@ -9,7 +9,7 @@
 //!
 //! Add `--theme light|dark` or `--accent pink|violet|blue|teal|orange` to any of them to
 //! preview a look, `--bar waveform` to see the waveform progress bar in the deploy, and
-//! `--json` or `--quiet` to see the other output modes.
+//! `--json` or `--quiet` to see the other output modes, and `--stderr` to draw on stderr.
 //!
 //! Spinner names: sparkle, dots, comet, wave, arc, orbit, pulse.
 
@@ -18,10 +18,10 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use tinsel::{
-    Accent, Border, Callout, Card, Code, Help, Live, Output, Progress, ProgressIterator, RAMP, Report, Spinner, Step,
-    Table, Tree, badge, bars, callout, columns, counter, diff, error, format, gradient, heatmap, hint, histogram, info,
-    link, live_bar, live_waveform, meter, paint, pairs, palette, prompt, rule, shimmer, sparkline, spin, success,
-    title, try_spin, warn,
+    Accent, Border, Callout, Card, Code, Help, Live, Output, Progress, ProgressIterator, RAMP, Region, Report, Spinner,
+    Step, Table, Target, Tone, Tree, badge, bars, callout, columns, counter, diff, error, format, gradient, heatmap,
+    hint, histogram, info, link, live_bar, live_waveform, meter, paint, pairs, palette, prompt, rule, shimmer,
+    sparkline, spin, success, title, try_spin, warn,
 };
 
 /// What `tinsel help` shows, with an entrance when it's on a terminal.
@@ -47,6 +47,7 @@ fn help() -> Help {
     .flag("--bar <line|waveform>", "how the deploy draws its progress bars")
     .flag("--json", "every message, step and error as a line of JSON")
     .flag("--quiet", "only what needs attention")
+    .flag("--stderr", "draw on stderr, leaving stdout for something else")
     .example("tinsel showcase table", "just the tables")
     .example("tinsel demo --bar waveform --accent teal", "the deploy, in teal, with waveform progress")
     .example("tinsel demo --json | jq -r .event", "what a program reading tinsel's JSON sees")
@@ -138,6 +139,16 @@ const SECTIONS: &[Section] = &[
         timeline_section,
     ),
     (
+        "states",
+        "steps that are skipped, cancelled, waiting on someone, or run again",
+        states_section,
+    ),
+    (
+        "region",
+        "any block redrawn in place, with lines logged above it",
+        region_section,
+    ),
+    (
         "markdown",
         "changelogs and long help, drawn in the same colours",
         markdown_section,
@@ -158,6 +169,9 @@ fn main() {
             Some(accent) => tinsel::set_accent(accent),
             None => usage_error(&format!("there's no accent called {name}")),
         }
+    }
+    if args.iter().any(|a| a == "--stderr") {
+        tinsel::set_target(Target::Stderr);
     }
     if args.iter().any(|a| a == "--json") {
         tinsel::set_output(Output::Json);
@@ -731,6 +745,61 @@ fn timeline_section() {
     run(&publish, 0.7, &[]);
     publish.done();
     live.finish_with_timeline();
+}
+
+fn states_section() {
+    let live = Live::new("release", "my-app").no_history().no_notify();
+    let [lint, test, upload, approve, ship, announce] =
+        ["Lint", "Test", "Upload", "Approve", "Ship", "Announce"].map(|label| live.step(label));
+    lint.skip("no source files changed");
+    run(&test, 0.8, &["running 48 tests"]);
+    test.done();
+    run(&upload, 0.7, &["sending bundle"]);
+    upload.fail("connection reset");
+    sleep(Duration::from_millis(500));
+    // the same step again, timed afresh
+    run(&upload, 0.9, &["sending bundle"]);
+    upload.done();
+    approve.wait("waiting for approval");
+    sleep(Duration::from_millis(1800));
+    run(&approve, 0.3, &[]);
+    approve.done();
+    run(&ship, 0.8, &["rolling out"]);
+    ship.done();
+    announce.cancel("called off by hand");
+    live.finish();
+}
+
+fn region_section() {
+    use std::sync::{Arc, Mutex};
+    let services = ["api", "web", "worker", "scheduler"];
+    let ready = Arc::new(Mutex::new(0));
+    let shown = ready.clone();
+    let started = Instant::now();
+    let region = Region::new(move || {
+        let ready = *shown.lock().unwrap_or_else(|e| e.into_inner());
+        let t = started.elapsed().as_secs_f32();
+        let mut table = Table::new(["service", "status"]);
+        for (i, name) in services.iter().enumerate() {
+            let status = match i.cmp(&ready) {
+                std::cmp::Ordering::Less => badge("ready", palette::SAGE),
+                std::cmp::Ordering::Equal => {
+                    format!("{} {}", Spinner::default().frame(t), paint(palette::SOFT, "starting"))
+                }
+                std::cmp::Ordering::Greater => paint(palette::MUTED, "queued"),
+            };
+            table = table.row([name.to_string(), status]);
+        }
+        table.lines()
+    })
+    .fps(30)
+    .keep();
+    for (i, name) in services.iter().enumerate() {
+        sleep(Duration::from_millis(700));
+        *ready.lock().unwrap_or_else(|e| e.into_inner()) = i + 1;
+        region.log(Tone::Success.line(&format!("{name} is up")));
+    }
+    region.finish();
 }
 
 fn markdown_section() {
