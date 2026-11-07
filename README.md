@@ -126,6 +126,16 @@ fetch.retry(3, || download(url))?;      // any closure returning a Result
              0s                                          2.9s
 ```
 
+**Anything else, redrawn in place:** a `Region` calls your closure a few times a second and
+draws the `Block` it returns, a table of services say, with lines logged above it. It's
+cleared when it finishes, unless you `keep()` the last frame:
+
+```rust
+let region = tinsel::Region::new(move || status_table(&state.lock().unwrap())).keep();
+region.log("api is up");
+region.finish();
+```
+
 **A loop with a progress bar:**
 
 ```rust
@@ -300,7 +310,7 @@ cargo run --example deploy         # small, copyable examples: hello, deploy, pa
 
 | | |
 |---|---|
-| **live work** | `Live` step lists with sub-steps, parallel steps and `log` · commands as steps with timeouts and retries · `timeline` · `spin` / `try_spin` · `Progress` with rate and time left, unknown or growing totals · `.progress()` on any iterator · bars as a line or a `waveform` · seven `Spinner`s (`sparkle` twinkles, and is the default) |
+| **live work** | `Live` step lists with sub-steps, parallel steps and `log` · skipped, cancelled and waiting steps · `Region` for any block · commands as steps with timeouts and retries · `timeline` · `spin` / `try_spin` · `Progress` with rate and time left, unknown or growing totals · `.progress()` on any iterator · bars as a line or a `waveform` · seven `Spinner`s (`sparkle` twinkles, and is the default) |
 | **messages** | `success` · `info` · `warn` · `error` · `hint` · `counter` · `title` · `rule` · `callout` · `Report` (with code excerpts) |
 | **data** | `Table` (numbers right-align and sort by value, units and all; borders, wrapping, footers, highlighted rows) · `Tree` · `pairs` · `columns` |
 | **charts** | `sparkline` · `bars` · `meter` · `histogram` · `heatmap` |
