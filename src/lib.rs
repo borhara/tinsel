@@ -22,7 +22,7 @@
 //!
 //! | | |
 //! |---|---|
-//! | **live work** | [`Live`] step lists with sub-steps, parallel steps and [`Live::log`]; commands run as steps ([`Step::run`], [`Step::command`]) and [`Step::retry`]; a [`Live::timeline`] of where the time went; [`spin`] / [`try_spin`] around one task; a standalone [`Progress`] bar or [`ProgressIterator`] around any loop, drawn as a line or a [`BarStyle::Waveform`]; seven [`Spinner`]s |
+//! | **live work** | [`Live`] step lists with sub-steps, parallel steps and [`Live::log`]; a [`Region`] redrawing any block; commands run as steps ([`Step::run`], [`Step::command`]) and [`Step::retry`]; a [`Live::timeline`] of where the time went; [`spin`] / [`try_spin`] around one task; a standalone [`Progress`] bar or [`ProgressIterator`] around any loop, drawn as a line or a [`BarStyle::Waveform`]; seven [`Spinner`]s |
 //! | **messages** | [`success`], [`info`], [`warn`], [`error`], [`hint`], [`counter`], [`title`], [`rule`], [`callout`], [`Report`] |
 //! | **data** | [`Table`] (sorting, borders, wrapping, footers), [`Tree`], [`pairs`], [`columns`] |
 //! | **charts** | [`sparkline`], [`bars`], [`meter`], [`histogram`], [`heatmap`], [`waveform`] |
@@ -92,6 +92,7 @@ mod notify;
 mod output;
 mod panic;
 pub mod prompt;
+mod region;
 mod spin;
 mod style;
 mod table;
@@ -114,6 +115,7 @@ pub use message::{Callout, Report, Tone, callout, counter, error, hint, info, ru
 pub use notify::notify;
 pub use output::{Output, Target, output, set_output, set_target, target};
 pub use panic::install_panic_hook;
+pub use region::Region;
 pub use spin::{Progress, ProgressIterator, WithProgress, spin, try_spin};
 pub use style::{
     Accent, ColorMode, Line, RAMP, Rgb, Theme, blink, bold, color_mode, dim, gradient, italic, mix, paint, paint_bg,

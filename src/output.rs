@@ -94,7 +94,7 @@ pub fn target() -> Target {
 }
 
 /// Send everything tinsel draws to stdout or stderr: [`Live`](crate::Live) displays,
-/// spinners and [`Progress`](crate::Progress) bars, messages,
+/// [`Region`](crate::Region)s, spinners and [`Progress`](crate::Progress) bars, messages,
 /// printed [`Block`](crate::Block)s and JSON events. Whether to draw in colour and animate
 /// is then decided by whether that stream is a terminal. Errors and
 /// [`Report`](crate::Report)s go to stderr either way, and prompts still ask on the terminal.
