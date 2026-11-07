@@ -4,6 +4,9 @@
 
 First release.
 
+- `prompt::confirm` reads a piped answer (`y`, `yes`, `n`, `no`, or an empty line for the
+  default) when stdin isn't a terminal, so scripts can answer it
+
 - `app`: full-screen terminal apps. An `App` trait (`view`, `event`, `fps`, `mouse`) run by
   `app::run`, with keys, mouse, ticks and resizes as `Event`s, only changed rows redrawn, and
   the screen given back on quit or panic; `Rect` layout (`rows`, `columns`, gaps, `center`);
