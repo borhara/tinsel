@@ -15,7 +15,8 @@ First release.
 - `prompt::Dropdown` for long lists such as versions: a scrolling window with counts above
   and below, notes lined up on the right, badges, quieter options, and `allow_custom` to
   type an answer that isn't listed
-- Filtered lists show how many options match
+- Filtered lists show how many options match; the option under the cursor is bold, as in
+  app lists; several answers collapse to whole names and how many more (`api, web and 3 more`)
 
 - `app`: full-screen terminal apps. An `App` trait (`view`, `event`, `fps`, `mouse`) run by
   `app::run`, with keys, mouse, ticks and resizes as `Event`s, only changed rows redrawn, and
