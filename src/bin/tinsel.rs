@@ -893,6 +893,59 @@ fn prompts() {
         .default("app.toml")
         .ask()
         .unwrap_or_else(|e| quit(e));
+    // three questions in a row, where ← goes back to the one before
+    let services = ["web", "docs", "api", "worker"];
+    let (mut service, mut restart, mut version) = (0, Vec::new(), String::new());
+    let mut step = 0;
+    while step < 3 {
+        let asked = match step {
+            0 => prompt::Select::new("Service")
+                .heading("Frontend")
+                .option(services[0])
+                .disabled(services[1], "deploys paused")
+                .heading("Backend")
+                .options([services[2], services[3]])
+                .default(2)
+                .ask()
+                .map(|i| service = i),
+            1 => prompt::MultiSelect::new("Restart after")
+                .hint("the ones that read its config")
+                .options(services)
+                .validate(|picked| {
+                    if picked.is_empty() {
+                        Err("pick at least one".into())
+                    } else {
+                        Ok(())
+                    }
+                })
+                .back()
+                .ask()
+                .map(|picked| restart = picked),
+            _ => {
+                let mut tags = prompt::Dropdown::new("Version")
+                    .option("v1.12.0")
+                    .note("today")
+                    .badge("latest")
+                    .option("v1.12.0-rc.2")
+                    .note("yesterday")
+                    .dim()
+                    .option("v1.11.1")
+                    .note("6 days ago")
+                    .badge("current");
+                for minor in (0..11).rev() {
+                    tags = tags
+                        .option(format!("v1.{minor}.0"))
+                        .note(format!("{} weeks ago", 12 - minor));
+                }
+                tags.default(2).allow_custom().back().ask().map(|v| version = v)
+            }
+        };
+        match asked {
+            Ok(()) => step += 1,
+            Err(prompt::Error::Back) => step -= 1,
+            Err(e) => quit(e),
+        }
+    }
     if prompt::confirm("Write release notes in your editor?", false).unwrap_or_else(|e| quit(e)) {
         prompt::editor("Release notes", "## What's new\n\n").unwrap_or_else(|e| quit(e));
     }
@@ -909,6 +962,12 @@ fn prompts() {
             regions[region],
             spinners[pick],
             names.join(", ")
+        ));
+        let restarted: Vec<&str> = restart.iter().map(|&i| services[i]).collect();
+        info(&format!(
+            "{} on {version}, restarting {}",
+            services[service],
+            restarted.join(", ")
         ));
     } else {
         hint("nothing created");
