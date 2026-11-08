@@ -6,6 +6,9 @@ First release.
 
 - `prompt::confirm` reads a piped answer (`y`, `yes`, `n`, `no`, or an empty line for the
   default) when stdin isn't a terminal, so scripts can answer it
+- Going back in multi-question flows: questions asked with `.back()` return
+  `prompt::Error::Back` when ← is pressed (in typed answers, from the start of the line);
+  `prompt::Confirm` builder and `Input::back`
 
 - `app`: full-screen terminal apps. An `App` trait (`view`, `event`, `fps`, `mouse`) run by
   `app::run`, with keys, mouse, ticks and resizes as `Event`s, only changed rows redrawn, and

@@ -51,8 +51,14 @@ use crate::text;
 /// Why a question didn't get an answer.
 #[derive(Debug)]
 pub enum Error {
-    /// The person pressed Ctrl-C or Esc. Exiting with status 130 is the convention.
+    /// The person pressed Ctrl-C or Esc: they want to stop altogether. Exiting with status
+    /// 130 is the convention.
     Cancelled,
+    /// The person pressed ← to go back to the question before, to change their answer. Only
+    /// questions asked with `.back()` (on [`Confirm`] and [`Input`]) return it, so the caller
+    /// can ask the previous question again; the question is cleared from the screen. Unlike [`Error::Cancelled`], the person wants to
+    /// carry on.
+    Back,
     /// There's no terminal to ask on (stdin is a pipe or a file), and this question has no
     /// sensible non-interactive answer.
     NotATerminal,
@@ -69,6 +75,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Cancelled => f.write_str("cancelled"),
+            Error::Back => f.write_str("went back to the previous question"),
             Error::NotATerminal => f.write_str("this question needs a terminal to answer it"),
             Error::NoOptions => f.write_str("there was nothing to choose from"),
             Error::Invalid(why) => write!(f, "invalid answer: {why}"),
@@ -279,6 +286,12 @@ impl Ui {
         self.frame.draw(lines);
     }
 
+    /// Clear the question away, for the one before it to be asked again.
+    fn back(&mut self) -> Error {
+        self.frame.draw(&[]);
+        Error::Back
+    }
+
     /// The last thing drawn, without colour.
     #[cfg(test)]
     fn shown(&self) -> Vec<String> {
@@ -309,6 +322,15 @@ fn cancel(frame: &mut Frame, question: &str) -> Error {
     Error::Cancelled
 }
 
+/// "  ← back", for the end of a question's line, when going back is on.
+fn back_hint(back: bool) -> String {
+    if back {
+        format!("  {}", paint(MUTED, "← back"))
+    } else {
+        String::new()
+    }
+}
+
 fn keys(hint: &str) -> String {
     format!("    {}", paint(MUTED, hint))
 }
@@ -334,7 +356,7 @@ fn read_piped_line() -> Result<String> {
 
 // MARK: - Yes or no
 
-/// Yes or no. Enter takes the default.
+/// Yes or no. Enter takes the default. [`Confirm`] has more options.
 ///
 /// Without a terminal it reads a line instead: `y`, `yes`, `n` or `no` in any case, and an
 /// empty line (or the end of the input) takes the default. Anything else is an
@@ -347,10 +369,76 @@ fn read_piped_line() -> Result<String> {
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
 pub fn confirm(question: &str, default: bool) -> Result<bool> {
-    if !io::stdin().is_terminal() {
-        return yes_or_no(&read_piped_line()?, default);
+    Confirm::new(question).default(default).ask()
+}
+
+/// A yes or no question with options. [`confirm`] is the shortcut. Answers no unless given
+/// a [`default`](Confirm::default).
+///
+/// ```no_run
+/// use tinsel::prompt::Confirm;
+///
+/// let tag = Confirm::new("Tag the release?").default(true).back().ask()?;
+/// # Ok::<(), tinsel::prompt::Error>(())
+/// ```
+pub struct Confirm {
+    question: String,
+    default: bool,
+    back: bool,
+}
+
+impl Confirm {
+    /// A yes or no question.
+    pub fn new(question: impl Into<String>) -> Self {
+        Confirm {
+            question: question.into(),
+            default: false,
+            back: false,
+        }
     }
-    run_confirm(question, default, &mut Ui::terminal()?)
+
+    /// The answer when Enter is pressed (or an empty line is piped in).
+    pub fn default(mut self, yes: bool) -> Self {
+        self.default = yes;
+        self
+    }
+
+    /// Let ← go back to the question before, as [`Error::Back`].
+    pub fn back(mut self) -> Self {
+        self.back = true;
+        self
+    }
+
+    /// Ask the question. Without a terminal, reads the answer from stdin as [`confirm`] does.
+    pub fn ask(self) -> Result<bool> {
+        if !io::stdin().is_terminal() {
+            return yes_or_no(&read_piped_line()?, self.default);
+        }
+        self.run(&mut Ui::terminal()?)
+    }
+
+    fn run(&self, ui: &mut Ui) -> Result<bool> {
+        let question = self.question.as_str();
+        let choices = if self.default { "Y/n" } else { "y/N" };
+        ui.draw(&[format!(
+            "{}  {}{}",
+            ask(question),
+            paint(MUTED, choices),
+            back_hint(self.back)
+        )]);
+        loop {
+            let answer = match ui.key()? {
+                Key::Char('y' | 'Y') => true,
+                Key::Char('n' | 'N') => false,
+                Key::Enter => self.default,
+                Key::Left if self.back => return Err(ui.back()),
+                Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
+                _ => continue,
+            };
+            ui.draw(&[answered(question, if answer { "yes" } else { "no" })]);
+            return Ok(answer);
+        }
+    }
 }
 
 /// A yes or no answer read from a pipe.
@@ -360,25 +448,6 @@ fn yes_or_no(line: &str, default: bool) -> Result<bool> {
         "y" | "yes" => Ok(true),
         "n" | "no" => Ok(false),
         _ => Err(Error::Invalid(format!("“{}” isn't yes or no", line.trim()))),
-    }
-}
-
-fn run_confirm(question: &str, default: bool, ui: &mut Ui) -> Result<bool> {
-    ui.draw(&[format!(
-        "{}  {}",
-        ask(question),
-        paint(MUTED, if default { "Y/n" } else { "y/N" })
-    )]);
-    loop {
-        let answer = match ui.key()? {
-            Key::Char('y' | 'Y') => true,
-            Key::Char('n' | 'N') => false,
-            Key::Enter => default,
-            Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
-            _ => continue,
-        };
-        ui.draw(&[answered(question, if answer { "yes" } else { "no" })]);
-        return Ok(answer);
     }
 }
 
@@ -402,6 +471,7 @@ pub struct Input<'a> {
     secret: bool,
     validate: Option<Validator<'a>>,
     complete: Option<Completer<'a>>,
+    back: bool,
 }
 
 impl<'a> Input<'a> {
@@ -414,6 +484,7 @@ impl<'a> Input<'a> {
             secret: false,
             validate: None,
             complete: None,
+            back: false,
         }
     }
 
@@ -472,6 +543,24 @@ impl<'a> Input<'a> {
     /// is asked again. The default is checked too, if it's used.
     pub fn validate(mut self, check: impl Fn(&str) -> std::result::Result<(), String> + 'a) -> Self {
         self.validate = Some(Box::new(check));
+        self
+    }
+
+    /// Let ← go back to the question before, as [`Error::Back`], when the cursor is at the
+    /// start of the line (so ← still moves through what's typed).
+    ///
+    /// ```no_run
+    /// use tinsel::prompt::{Error, Input};
+    ///
+    /// match Input::new("Project name").back().ask() {
+    ///     Ok(name) => println!("{name}"),
+    ///     Err(Error::Back) => { /* ask the question before again */ }
+    ///     Err(e) => return Err(e),
+    /// }
+    /// # Ok::<(), Error>(())
+    /// ```
+    pub fn back(mut self) -> Self {
+        self.back = true;
         self
     }
 
@@ -546,7 +635,11 @@ impl<'a> Input<'a> {
                     paint(MUTED, &ghost)
                 )
             };
-            let mut lines = vec![format!("{}  {shown}", ask(&self.question))];
+            let mut lines = vec![format!(
+                "{}  {shown}{}",
+                ask(&self.question),
+                back_hint(self.back && edit.at == 0)
+            )];
             lines.extend(trouble.as_deref().map(problem));
             if offered.len() > 1 {
                 let list: Vec<String> = offered
@@ -583,6 +676,7 @@ impl<'a> Input<'a> {
                     }
                 }
                 Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, &self.question)),
+                Key::Left if self.back && edit.at == 0 => return Err(ui.back()),
                 Key::Tab if !offered.is_empty() => {
                     let next = match &cycle {
                         Some((base, n)) => (base.clone(), (n + 1) % offered.len()),
@@ -1377,14 +1471,12 @@ mod tests {
 
     #[test]
     fn confirm_takes_keys_and_the_default() {
-        assert!(!run_confirm("Go?", true, &mut Ui::script(&[Key::Char('N')])).unwrap());
+        let go = Confirm::new("Go?").default(true);
+        assert!(!go.run(&mut Ui::script(&[Key::Char('N')])).unwrap());
         let mut ui = Ui::script(&[Key::Down, Key::Enter]);
-        assert!(run_confirm("Go?", true, &mut ui).unwrap());
+        assert!(go.run(&mut ui).unwrap());
         assert_eq!(ui.shown(), ["  ●  Go?  yes"]);
-        assert!(matches!(
-            run_confirm("Go?", true, &mut Ui::script(&[Key::Esc])),
-            Err(Error::Cancelled)
-        ));
+        assert!(matches!(go.run(&mut Ui::script(&[Key::Esc])), Err(Error::Cancelled)));
     }
 
     #[test]
@@ -1462,5 +1554,26 @@ mod tests {
         assert!(yes_or_no("", true).unwrap());
         assert!(!yes_or_no("", false).unwrap());
         assert!(matches!(yes_or_no("maybe", true), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn going_back_is_opt_in() {
+        let go = Confirm::new("Go?");
+        assert!(!go.run(&mut Ui::script(&[Key::Left, Key::Enter])).unwrap());
+        let mut ui = Ui::script(&[Key::Left]);
+        assert!(matches!(go.back().run(&mut ui), Err(Error::Back)));
+        // going back leaves nothing behind
+        assert!(ui.shown().is_empty());
+
+        let name = Input::new("Name");
+        let mut keys = typed("ab");
+        keys.extend([Key::Left, Key::Left, Key::Left, Key::Enter]);
+        assert_eq!(name.run(&mut Ui::script(&keys)).unwrap(), "ab");
+        let name = name.back();
+        assert!(matches!(name.run(&mut Ui::script(&keys)), Err(Error::Back)));
+        // ← only goes back from the start of the line
+        let mut keys = typed("ab");
+        keys.extend([Key::Left, Key::Char('>'), Key::Enter]);
+        assert_eq!(name.run(&mut Ui::script(&keys)).unwrap(), "a>b");
     }
 }
