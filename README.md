@@ -173,6 +173,21 @@ let path = prompt::Input::new("Config").paths().ask()?;                  // like
 prompt::confirm_typing("Delete my-app?", "my-app")?;                       // type it to go on
 ```
 
+Lists can be grouped, and say why an option can't be picked:
+
+```rust
+let service = prompt::Select::new("Service")
+    .heading("Frontend").option("web").disabled("docs", "deploys paused")
+    .heading("Backend").options(["api", "worker"])
+    .back()                                       // ← returns prompt::Error::Back
+    .ask()?;
+let version = prompt::Dropdown::new("Roll back to")
+    .option("v1.2.0").note("3 days ago").badge("latest")
+    .option("v1.1.0").note("2 weeks ago")
+    .allow_custom()                               // or type a version that isn't listed
+    .ask()?;
+```
+
 **Help that looks like the rest of your CLI**, with a short entrance on a terminal: lines
 fade in one after another while the name shimmers:
 
@@ -318,7 +333,7 @@ cargo run --example deploy         # small, copyable examples: hello, deploy, pa
 | **documents** | `markdown` · `json` · `Help` with an animated entrance · `Block::page` |
 | **inline** | `badge` · `link` (clickable) · `Card` · `paint`, `bold`, `dim`, `italic`, `underline`, `gradient` |
 | **apps** | `app::run` full-screen apps · `Panel` · `List` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys, mouse and resize events · `app::snapshot` for tests |
-| **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` · `multiselect` (filter as you type) · `editor` · suggestions and path completion · `confirm_typing` |
+| **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` / `Select` · `multiselect` / `MultiSelect` (filter as you type, headings, disabled options with a reason, validation) · `Dropdown` for long lists (notes, badges, your own answer) · `.back()` to go back a question · `editor` · suggestions and path completion · `confirm_typing` |
 | **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_focus` · `set_history` · `set_accent` · `set_theme` · `set_color_mode` · `timings` |
 | **helpers** | `text::{width, pad, truncate, wrap, strip_ansi}` · `format::{bytes, duration, count, ago, plural}` |
 

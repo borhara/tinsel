@@ -9,6 +9,13 @@ First release.
 - Going back in multi-question flows: questions asked with `.back()` return
   `prompt::Error::Back` when ← is pressed (in typed answers, from the start of the line);
   `prompt::Confirm` builder and `Input::back`
+- `prompt::Select` and `prompt::MultiSelect` builders: a default, group headings, options
+  that can't be picked (shown with the reason), notes and badges, a hint under the
+  question, validation and `.back()`; the default is the answer without a terminal
+- `prompt::Dropdown` for long lists such as versions: a scrolling window with counts above
+  and below, notes lined up on the right, badges, quieter options, and `allow_custom` to
+  type an answer that isn't listed
+- Filtered lists show how many options match
 
 - `app`: full-screen terminal apps. An `App` trait (`view`, `event`, `fps`, `mouse`) run by
   `app::run`, with keys, mouse, ticks and resizes as `Event`s, only changed rows redrawn, and
