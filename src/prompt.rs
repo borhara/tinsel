@@ -1388,6 +1388,10 @@ impl<'a> Picker<'a> {
                 paint(color, ch.encode_utf8(&mut [0; 4]))
             })
             .collect();
+        // the row under the cursor stands out as it does in app lists
+        if here && base == TEXT {
+            s = bold(&s);
+        }
         for b in &c.badges {
             s += " ";
             s += &small_badge(b);
@@ -1736,12 +1740,21 @@ impl<'a> MultiSelect<'a> {
     }
 }
 
-/// The chosen names for an answered line, cut short with how many more there are.
+/// The chosen names for an answered line: as many whole names as fit, then how many more.
 fn summary(names: &[&str]) -> String {
-    if names.is_empty() {
+    let Some(first) = names.first() else {
         return "none".into();
+    };
+    let mut shown = text::truncate(first, 40);
+    for (k, name) in names.iter().enumerate().skip(1) {
+        let rest = names.len() - k - 1;
+        let tail = if rest > 0 { format!(" and {rest} more").len() } else { 0 };
+        if text::width(&shown) + 2 + text::width(name) + tail > 40 {
+            return format!("{shown} and {} more", names.len() - k);
+        }
+        shown = format!("{shown}, {name}");
     }
-    text::truncate(&names.join(", "), 40)
+    shown
 }
 
 /// One of a long list, such as versions or branches, as a dropdown: a window of rows that
@@ -2589,5 +2602,14 @@ mod tests {
 
         assert!(matches!(tags().unasked(), Err(Error::NotATerminal)));
         assert_eq!(tags().default(1).unasked().unwrap(), "v1.12.0-rc.1");
+    }
+
+    #[test]
+    fn summaries_keep_whole_names() {
+        assert_eq!(summary(&[]), "none");
+        assert_eq!(summary(&["api", "web"]), "api, web");
+        let many = ["api", "web", "worker", "scheduler", "gateway", "search", "billing"];
+        assert_eq!(summary(&many), "api, web, worker, scheduler and 3 more");
+        assert!(summary(&many).len() <= 40);
     }
 }
