@@ -30,7 +30,7 @@
 //! | **documents** | [`markdown`], [`json`], [`Help`] (with an entrance), and [`Block::page`] for anything long |
 //! | **inline** | [`badge`], [`link`], [`Card`], [`paint`], [`bold`] and friends |
 //! | **apps** | [`app`]: full-screen dashboards and tools, with [`app::Panel`]s, [`app::List`]s, [`app::Tabs`], [`app::Plot`]s, [`app::Stat`]s and [`app::big`] text laid out in [`app::Rect`]s; [`app::snapshot`] to test them |
-//! | **questions** | [`prompt`]: confirm, input (validation, suggestions, path completion), password, number, date, select and multiselect (filter as you type), editor, confirm by typing |
+//! | **questions** | [`prompt`]: confirm, input (validation, suggestions, path completion), password, number, date, select and multiselect (filter as you type, headings, disabled options), a dropdown for long lists, editor, confirm by typing; `.back()` to go back a question |
 //! | **helpers** | [`text`] (width-aware pad, truncate, wrap) and [`format`](mod@format) (bytes, durations, ago) |
 //! | **setup** | [`install_panic_hook`], [`set_output`] for `--json` and `--quiet`, [`set_target`] to draw on stderr, [`set_accent`], [`set_theme`], [`set_color_mode`], [`set_focus`] and [`set_history`], [`timings`] |
 //!
