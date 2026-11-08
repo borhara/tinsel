@@ -38,13 +38,41 @@
 //!     .ask()?;
 //! # Ok::<(), tinsel::prompt::Error>(())
 //! ```
+//!
+//! Lists have builders too: [`Select`] and [`MultiSelect`] add groups under headings,
+//! options that can't be picked (and why), a hint and validation, and [`Dropdown`] is for
+//! long lists like versions, with notes and badges and room to type an answer of your own.
+//!
+//! # Going back
+//!
+//! For questions asked one after another, `.back()` lets ← go back: the question returns
+//! [`Error::Back`] and you ask the one before it again.
+//!
+//! ```no_run
+//! use tinsel::prompt::{Error, Input, Select};
+//!
+//! let (mut name, mut target) = (String::new(), 0);
+//! let mut step = 0;
+//! while step < 2 {
+//!     let asked = match step {
+//!         0 => Input::new("Project name").ask().map(|n| name = n),
+//!         _ => Select::new("Deploy to").options(["staging", "production"]).back().ask().map(|t| target = t),
+//!     };
+//!     match asked {
+//!         Ok(()) => step += 1,
+//!         Err(Error::Back) => step -= 1,
+//!         Err(e) => return Err(e),
+//!     }
+//! }
+//! # Ok::<(), Error>(())
+//! ```
 
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::str::FromStr;
 
 use crate::style::palette::{BLUSH, MUTED, RED, ROSE, SOFT, TEXT, TRACK};
-use crate::style::{bold, mix, paint, paint_bg, underline};
+use crate::style::{bold, italic, mix, paint, paint_bg, underline};
 use crate::term::{RawMode, read_byte};
 use crate::text;
 
@@ -55,8 +83,9 @@ pub enum Error {
     /// 130 is the convention.
     Cancelled,
     /// The person pressed ← to go back to the question before, to change their answer. Only
-    /// questions asked with `.back()` (on [`Confirm`] and [`Input`]) return it, so the caller
-    /// can ask the previous question again; the question is cleared from the screen. Unlike [`Error::Cancelled`], the person wants to
+    /// questions asked with `.back()` (on [`Confirm`], [`Input`], [`Select`], [`MultiSelect`]
+    /// and [`Dropdown`]) return it, so the caller can ask the previous question again; the
+    /// question is cleared from the screen. Unlike [`Error::Cancelled`], the person wants to
     /// carry on.
     Back,
     /// There's no terminal to ask on (stdin is a pipe or a file), and this question has no
@@ -453,6 +482,9 @@ fn yes_or_no(line: &str, default: bool) -> Result<bool> {
 
 // MARK: - Text
 
+/// What a validation check returns: why the answer won't do, if it won't.
+type Checked = std::result::Result<(), String>;
+type ManyCheck<'a> = Box<dyn Fn(&[usize]) -> Checked + 'a>;
 type Validator<'a> = Box<dyn Fn(&str) -> std::result::Result<(), String> + 'a>;
 type Completer<'a> = Box<dyn Fn(&str) -> Vec<String> + 'a>;
 
@@ -893,11 +925,12 @@ fn kind_of_number<T>() -> &'static str {
 
 // MARK: - Lists
 
+/// How many rows a list shows at once, unless told otherwise.
 const VISIBLE: usize = 8;
 
 /// The slice of a long list to show, keeping the cursor in view.
-fn window(len: usize, cursor: usize) -> std::ops::Range<usize> {
-    let shown = len.min(VISIBLE);
+fn window(len: usize, cursor: usize, rows: usize) -> std::ops::Range<usize> {
+    let shown = len.min(rows);
     let top = cursor.saturating_sub(shown / 2).min(len - shown);
     top..top + shown
 }
@@ -917,147 +950,619 @@ fn fuzzy(option: &str, query: &str) -> Option<Vec<usize>> {
     want.peek().is_none().then_some(hits)
 }
 
+/// One option in a list question.
+#[derive(Default)]
+struct Choice {
+    label: String,
+    /// A heading drawn above this option, starting a group.
+    heading: Option<String>,
+    /// Why it can't be picked.
+    disabled: Option<String>,
+    note: Option<String>,
+    badges: Vec<String>,
+    dim: bool,
+}
+
+/// What every list question has: the question, its options and how they're shown.
+struct Choices {
+    question: String,
+    list: Vec<Choice>,
+    /// A heading waiting for the next option.
+    heading: Option<String>,
+    hint: Option<String>,
+    back: bool,
+    rows: usize,
+}
+
+impl Choices {
+    fn new(question: String) -> Self {
+        Choices {
+            question,
+            list: Vec::new(),
+            heading: None,
+            hint: None,
+            back: false,
+            rows: VISIBLE,
+        }
+    }
+
+    fn push(&mut self, label: String, disabled: Option<String>) {
+        let heading = self.heading.take();
+        self.list.push(Choice {
+            label,
+            heading,
+            disabled,
+            ..Choice::default()
+        });
+    }
+
+    fn enabled(&self, i: usize) -> bool {
+        self.list.get(i).is_some_and(|c| c.disabled.is_none())
+    }
+
+    /// The muted line of keys under the list.
+    fn keys(&self, base: &str) -> String {
+        keys(&format!("{base}{}", if self.back { " · ← back" } else { "" }))
+    }
+}
+
+/// The builder methods every list question shares, for adding and decorating options.
+macro_rules! list_builders {
+    ($ty:ident) => {
+        impl $ty<'_> {
+            /// Add an option. Options are numbered from 0 in the order they're added,
+            /// disabled ones included, and the answer is given as those numbers.
+            pub fn option(mut self, label: impl Into<String>) -> Self {
+                self.choices.push(label.into(), None);
+                self
+            }
+
+            /// Add several options.
+            #[doc = concat!(
+                                "```no_run\nlet answer = tinsel::prompt::", stringify!($ty),
+                                "::new(\"Deploy to\").options([\"staging\", \"production\"]).ask()?;\n",
+                                "# Ok::<(), tinsel::prompt::Error>(())\n```"
+                            )]
+            pub fn options<S: Into<String>>(mut self, labels: impl IntoIterator<Item = S>) -> Self {
+                for label in labels {
+                    self.choices.push(label.into(), None);
+                }
+                self
+            }
+
+            /// Add an option that can't be picked, drawn dim with the reason after it. The
+            /// cursor skips over it, but it still takes up a number.
+            #[doc = concat!(
+                                "```no_run\nlet answer = tinsel::prompt::", stringify!($ty), "::new(\"Deploy to\")\n",
+                                "    .option(\"staging\")\n    .disabled(\"production\", \"frozen until Monday\")\n",
+                                "    .ask()?;\n# Ok::<(), tinsel::prompt::Error>(())\n```"
+                            )]
+            pub fn disabled(mut self, label: impl Into<String>, reason: impl Into<String>) -> Self {
+                self.choices.push(label.into(), Some(reason.into()));
+                self
+            }
+
+            /// Start a group: a heading over the options added after it. It's not an option,
+            /// so it can't be picked and takes up no number.
+            #[doc = concat!(
+                                "```no_run\nlet answer = tinsel::prompt::", stringify!($ty), "::new(\"Service\")\n",
+                                "    .heading(\"Frontend\")\n    .options([\"web\", \"docs\"])\n",
+                                "    .heading(\"Backend\")\n    .options([\"api\", \"worker\"])\n",
+                                "    .ask()?;\n# Ok::<(), tinsel::prompt::Error>(())\n```"
+                            )]
+            pub fn heading(mut self, title: impl Into<String>) -> Self {
+                self.choices.heading = Some(title.into());
+                self
+            }
+
+            /// Muted text lined up on the right of the option added last, such as when it
+            /// was made.
+            #[doc = concat!(
+                                "```no_run\nlet answer = tinsel::prompt::", stringify!($ty), "::new(\"Version\")\n",
+                                "    .option(\"v1.2.0\").note(\"3 days ago\").badge(\"latest\")\n",
+                                "    .option(\"v1.1.0\").note(\"2 weeks ago\")\n",
+                                "    .ask()?;\n# Ok::<(), tinsel::prompt::Error>(())\n```"
+                            )]
+            pub fn note(mut self, text: impl Into<String>) -> Self {
+                if let Some(c) = self.choices.list.last_mut() {
+                    c.note = Some(text.into());
+                }
+                self
+            }
+
+            /// A small badge after the option added last, such as `latest` or `current`.
+            /// Call it again for another.
+            pub fn badge(mut self, label: impl Into<String>) -> Self {
+                if let Some(c) = self.choices.list.last_mut() {
+                    c.badges.push(label.into());
+                }
+                self
+            }
+
+            /// Draw the option added last quieter than the rest, for ones that are less
+            /// likely to be wanted (a pre-release, say). It can still be picked.
+            pub fn dim(mut self) -> Self {
+                if let Some(c) = self.choices.list.last_mut() {
+                    c.dim = true;
+                }
+                self
+            }
+
+            /// A muted line under the question, to say more about what's being asked.
+            pub fn hint(mut self, text: impl Into<String>) -> Self {
+                self.choices.hint = Some(text.into());
+                self
+            }
+
+            /// Let ← go back to the question before, as [`Error::Back`].
+            pub fn back(mut self) -> Self {
+                self.choices.back = true;
+                self
+            }
+
+            /// How many rows to show at once (8 unless set); longer lists scroll, with a
+            /// count of what's above and below.
+            pub fn rows(mut self, rows: usize) -> Self {
+                self.choices.rows = rows.max(1);
+                self
+            }
+        }
+    };
+}
+
+/// A row of a list as drawn.
+enum Row {
+    /// A group heading, over the option with this number.
+    Heading(usize),
+    /// An option, by position in what's shown.
+    Option(usize),
+    /// Use what's been typed as the answer.
+    Custom,
+}
+
 /// The options shown in a list question, narrowed by what's been typed in long lists.
 struct Picker<'a> {
-    options: &'a [&'a str],
-    /// Long lists can be filtered by typing; short ones keep j/k for moving.
+    choices: &'a Choices,
+    /// Lists that can be filtered by typing; others keep j/k for moving.
     filterable: bool,
+    /// Whether what's typed can be the answer itself.
+    custom: bool,
     filter: String,
-    /// Indices into `options` that match the filter, with the matched characters.
+    /// Indices into the options that match the filter, with the matched characters.
     shown: Vec<(usize, Vec<usize>)>,
-    /// Position in `shown`.
+    /// Position in `shown`, or `shown.len()` for the typed answer.
     cursor: usize,
 }
 
 impl<'a> Picker<'a> {
-    fn new(options: &'a [&'a str]) -> Self {
+    fn new(choices: &'a Choices, filterable: bool, start: Option<usize>) -> Self {
         let mut picker = Picker {
-            options,
-            filterable: options.len() > VISIBLE,
+            choices,
+            filterable,
+            custom: false,
             filter: String::new(),
             shown: Vec::new(),
             cursor: 0,
         };
         picker.refilter();
+        if let Some(pos) = start.filter(|&i| choices.enabled(i)) {
+            picker.cursor = pos;
+        }
         picker
+    }
+
+    /// Whether the typed text is offered as an answer of its own.
+    fn offers_custom(&self) -> bool {
+        self.custom && !self.filter.is_empty() && !self.choices.list.iter().any(|c| c.label == self.filter)
+    }
+
+    /// How many positions the cursor can be in.
+    fn len(&self) -> usize {
+        self.shown.len() + self.offers_custom() as usize
+    }
+
+    fn selectable(&self, pos: usize) -> bool {
+        match self.shown.get(pos) {
+            Some((i, _)) => self.choices.enabled(*i),
+            None => pos < self.len(),
+        }
     }
 
     fn refilter(&mut self) {
         let keep = self.shown.get(self.cursor).map(|(i, _)| *i);
-        self.shown = (0..self.options.len())
-            .filter_map(|i| fuzzy(self.options[i], &self.filter).map(|hits| (i, hits)))
+        self.shown = (0..self.choices.list.len())
+            .filter_map(|i| fuzzy(&self.choices.list[i].label, &self.filter).map(|hits| (i, hits)))
             .collect();
         // stay on the same option if it's still there
         self.cursor = keep
             .and_then(|k| self.shown.iter().position(|(i, _)| *i == k))
+            .filter(|&pos| self.selectable(pos))
+            .or_else(|| (0..self.len()).find(|&pos| self.selectable(pos)))
             .unwrap_or(0);
     }
 
+    fn type_char(&mut self, c: char) {
+        self.filter.push(c);
+        self.refilter();
+    }
+
+    fn clear_filter(&mut self) {
+        self.filter.clear();
+        self.refilter();
+    }
+
+    /// The option under the cursor, if it can be picked.
     fn current(&self) -> Option<usize> {
-        self.shown.get(self.cursor).map(|(i, _)| *i)
+        self.shown
+            .get(self.cursor)
+            .map(|(i, _)| *i)
+            .filter(|&i| self.choices.enabled(i))
+    }
+
+    /// Whether the cursor is on the typed answer.
+    fn on_custom(&self) -> bool {
+        self.offers_custom() && self.cursor == self.shown.len()
+    }
+
+    /// Move to the next option that can be picked, wrapping around.
+    fn step(&mut self, down: bool) {
+        let n = self.len();
+        for k in 1..n {
+            let pos = if down {
+                (self.cursor + k) % n
+            } else {
+                (self.cursor + n - k) % n
+            };
+            if self.selectable(pos) {
+                self.cursor = pos;
+                return;
+            }
+        }
+    }
+
+    /// Move a page at a time, stopping at the ends.
+    fn page(&mut self, down: bool) {
+        let n = self.len();
+        if n == 0 {
+            return;
+        }
+        let target = if down {
+            (self.cursor + self.choices.rows).min(n - 1)
+        } else {
+            self.cursor.saturating_sub(self.choices.rows)
+        };
+        // the nearest option that can be picked, between the cursor and the target
+        let found = if down {
+            (self.cursor..=target).rev().find(|&pos| self.selectable(pos))
+        } else {
+            (target..=self.cursor).find(|&pos| self.selectable(pos))
+        };
+        if let Some(pos) = found {
+            self.cursor = pos;
+        }
     }
 
     /// Handle a key that moves or filters; returns `false` for keys it doesn't use.
     fn key(&mut self, key: Key) -> bool {
-        let n = self.shown.len().max(1);
         match key {
-            Key::Up => self.cursor = (self.cursor + n - 1) % n,
-            Key::Down => self.cursor = (self.cursor + 1) % n,
-            Key::Char('k') if !self.filterable => self.cursor = (self.cursor + n - 1) % n,
-            Key::Char('j') if !self.filterable => self.cursor = (self.cursor + 1) % n,
-            Key::Char(c) if self.filterable => {
-                self.filter.push(c);
-                self.refilter();
-            }
+            Key::Up => self.step(false),
+            Key::Down => self.step(true),
+            Key::PageUp => self.page(false),
+            Key::PageDown => self.page(true),
+            Key::Char('k') if !self.filterable => self.step(false),
+            Key::Char('j') if !self.filterable => self.step(true),
+            Key::Char(c) if self.filterable => self.type_char(c),
             Key::Backspace if self.filterable => {
                 self.filter.pop();
                 self.refilter();
             }
-            Key::Ctrl('u') if self.filterable => {
-                self.filter.clear();
-                self.refilter();
-            }
+            Key::Ctrl('u') if self.filterable => self.clear_filter(),
             _ => return false,
         }
         true
     }
 
-    /// The question line, with the filter typed so far.
-    fn heading(&self, question: &str) -> String {
-        if self.filter.is_empty() {
+    /// The question line, with the filter typed so far and how many options match it, then
+    /// the hint, if there is one.
+    fn top(&self) -> Vec<String> {
+        let question = &self.choices.question;
+        let mut lines = vec![if self.filter.is_empty() {
             ask(question)
         } else {
-            format!("{}  {}{}", ask(question), paint(TEXT, &self.filter), paint(ROSE, "▏"))
-        }
+            format!(
+                "{}  {}{}  {}",
+                ask(question),
+                paint(TEXT, &self.filter),
+                paint(ROSE, "▏"),
+                paint(MUTED, &format!("{} of {}", self.shown.len(), self.choices.list.len()))
+            )
+        }];
+        lines.extend(self.choices.hint.as_deref().map(keys));
+        lines
     }
 
-    /// The visible options, each drawn by `row(option index, is cursor, label)`.
-    fn rows(&self, row: impl Fn(usize, bool, String) -> String) -> Vec<String> {
-        if self.shown.is_empty() {
+    fn layout(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        let mut after = 0;
+        for (pos, (i, _)) in self.shown.iter().enumerate() {
+            // only the nearest heading: groups in between have nothing shown
+            if let Some(h) = (after..=*i).rev().find(|&h| self.choices.list[h].heading.is_some()) {
+                rows.push(Row::Heading(h));
+            }
+            rows.push(Row::Option(pos));
+            after = i + 1;
+        }
+        if self.offers_custom() {
+            rows.push(Row::Custom);
+        }
+        rows
+    }
+
+    /// The visible rows, each option after `prefix(option, is cursor)`; with a count of
+    /// options above and below when the list scrolls.
+    fn rows(&self, prefix: impl Fn(Option<usize>, bool) -> String) -> Vec<String> {
+        let layout = self.layout();
+        if layout.is_empty() {
             return vec![format!("      {}", paint(MUTED, "no matches"))];
         }
-        window(self.shown.len(), self.cursor)
-            .map(|pos| {
-                let (i, hits) = &self.shown[pos];
-                let here = pos == self.cursor;
-                let base = if here { TEXT } else { SOFT };
-                let label: String = self.options[*i]
-                    .chars()
-                    .enumerate()
-                    .map(|(ci, c)| {
-                        let color = if hits.contains(&ci) { ROSE } else { base };
-                        paint(color, c.encode_utf8(&mut [0; 4]))
-                    })
-                    .collect();
-                row(*i, here, label)
+        let at = layout
+            .iter()
+            .position(|r| match r {
+                Row::Option(pos) => *pos == self.cursor,
+                Row::Custom => self.on_custom(),
+                Row::Heading(_) => false,
             })
-            .collect()
+            .unwrap_or(0);
+        let range = window(layout.len(), at, self.choices.rows);
+        let scrolls = layout.len() > self.choices.rows;
+        let count = |rows: &[Row]| rows.iter().filter(|r| !matches!(r, Row::Heading(_))).count();
+        let more = |n: usize, arrow: &str| {
+            if n == 0 {
+                String::new()
+            } else {
+                format!("      {}", paint(MUTED, &format!("{arrow} {n} more")))
+            }
+        };
+        let (left, right) = self.widths();
+        let mut lines = Vec::new();
+        if scrolls {
+            lines.push(more(count(&layout[..range.start]), "↑"));
+        }
+        for row in &layout[range.clone()] {
+            lines.push(match row {
+                Row::Heading(h) => {
+                    let title = self.choices.list[*h].heading.as_deref().unwrap_or_default();
+                    format!("    {}", bold(&paint(BLUSH, title)))
+                }
+                Row::Option(pos) => {
+                    let (i, hits) = &self.shown[*pos];
+                    let here = *pos == self.cursor;
+                    format!("{}{}", prefix(Some(*i), here), self.body(*i, hits, here, left, right))
+                }
+                Row::Custom => {
+                    let here = self.on_custom();
+                    let typed = paint(if here { TEXT } else { SOFT }, &format!("“{}”", self.filter));
+                    format!("{}{} {typed}", prefix(None, here), paint(MUTED, "use"))
+                }
+            });
+        }
+        if scrolls {
+            lines.push(more(count(&layout[range.end..]), "↓"));
+        }
+        lines
+    }
+
+    /// How wide the label column (with badges and reasons) and the note column are, over
+    /// every option so they don't shift as the list scrolls.
+    fn widths(&self) -> (usize, usize) {
+        let list = &self.choices.list;
+        let left = list.iter().map(left_width).max().unwrap_or(0);
+        let right = list
+            .iter()
+            .filter_map(|c| c.note.as_deref().map(text::width))
+            .max()
+            .unwrap_or(0);
+        (left, right)
+    }
+
+    /// An option's label (matched letters picked out), badges, reason and note.
+    fn body(&self, i: usize, hits: &[usize], here: bool, left: usize, right: usize) -> String {
+        let c = &self.choices.list[i];
+        let base = if c.disabled.is_some() || c.dim {
+            MUTED
+        } else if here {
+            TEXT
+        } else {
+            SOFT
+        };
+        let mut s: String = c
+            .label
+            .chars()
+            .enumerate()
+            .map(|(ci, ch)| {
+                let color = if hits.contains(&ci) && c.disabled.is_none() {
+                    ROSE
+                } else {
+                    base
+                };
+                paint(color, ch.encode_utf8(&mut [0; 4]))
+            })
+            .collect();
+        for b in &c.badges {
+            s += " ";
+            s += &small_badge(b);
+        }
+        if let Some(why) = &c.disabled {
+            s += "  ";
+            s += &italic(&paint(MUTED, &format!("({why})")));
+        }
+        if let Some(note) = &c.note {
+            s += &" ".repeat(left - left_width(c) + 2);
+            s += &paint(MUTED, &text::pad_left(note, right));
+        }
+        s
+    }
+}
+
+/// Columns taken by an option's label, badges and reason.
+fn left_width(c: &Choice) -> usize {
+    text::width(&c.label)
+        + c.badges.iter().map(|b| text::width(b) + 3).sum::<usize>()
+        + c.disabled.as_deref().map_or(0, |why| text::width(why) + 4)
+}
+
+/// A badge in the accent, or `[label]` without colour, where a pill wouldn't show.
+fn small_badge(label: &str) -> String {
+    if crate::style::color_mode() == crate::ColorMode::None {
+        format!("[{label}]")
+    } else {
+        crate::badge(label, ROSE)
+    }
+}
+
+/// The pointer column for lists that pick one.
+fn pointer(here: bool) -> String {
+    if here {
+        format!("    {} ", paint(ROSE, "›"))
+    } else {
+        "      ".into()
     }
 }
 
 /// One of a list, moved through with ↑↓ (or j/k). Returns the chosen index. In lists longer
-/// than eight, typing narrows the list to options containing those letters in order.
+/// than eight, typing narrows the list to options containing those letters in order, and
+/// Esc clears what's typed before it cancels. [`Select`] has more options.
 pub fn select(question: &str, options: &[&str]) -> Result<usize> {
-    need_terminal()?;
-    if options.is_empty() {
-        return Err(Error::NoOptions);
-    }
-    run_select(question, options, &mut Ui::terminal()?)
+    Select::new(question).options(options.iter().copied()).ask()
 }
 
-fn run_select(question: &str, options: &[&str], ui: &mut Ui) -> Result<usize> {
-    let mut picker = Picker::new(options);
-    let hint = if picker.filterable {
-        "type to filter · ↑↓ move · enter choose"
-    } else {
-        "↑↓ move · enter choose"
-    };
-    loop {
-        let mut lines = vec![picker.heading(question)];
-        lines.extend(picker.rows(|_, here, label| {
-            if here {
-                format!("    {} {label}", paint(ROSE, "›"))
-            } else {
-                format!("      {label}")
-            }
-        }));
-        lines.push(keys(hint));
-        ui.draw(&lines);
-        match ui.key()? {
-            Key::Enter => {
-                if let Some(i) = picker.current() {
-                    ui.draw(&[answered(question, options[i])]);
-                    return Ok(i);
+/// One of a list, with options: a default, groups under headings, options that can't be
+/// picked (and why), notes and badges, a hint, validation and going back. [`select`] is the
+/// shortcut. Returns the number of the chosen option, counting from 0 in the order they
+/// were added.
+///
+/// ↑↓ (or j/k) move, PgUp/PgDn move a page. Lists longer than [`rows`](Select::rows) filter
+/// as you type, and Esc clears the filter before it cancels.
+///
+/// Without a terminal, the [`default`](Select::default) is the answer, if there is one;
+/// otherwise it's [`Error::NotATerminal`].
+///
+/// ```no_run
+/// use tinsel::prompt::Select;
+///
+/// let target = Select::new("Deploy to")
+///     .hint("production needs a second approval")
+///     .heading("Shared")
+///     .option("staging")
+///     .option("production")
+///     .disabled("legacy", "retired")
+///     .heading("Yours")
+///     .option("preview")
+///     .default(0)
+///     .ask()?;
+/// # Ok::<(), tinsel::prompt::Error>(())
+/// ```
+pub struct Select<'a> {
+    choices: Choices,
+    default: Option<usize>,
+    validate: Option<Box<dyn Fn(usize) -> Checked + 'a>>,
+}
+
+list_builders!(Select);
+
+impl<'a> Select<'a> {
+    /// A question with one answer from a list.
+    pub fn new(question: impl Into<String>) -> Self {
+        Select {
+            choices: Choices::new(question.into()),
+            default: None,
+            validate: None,
+        }
+    }
+
+    /// Start on this option (by number), and answer with it when there's no terminal.
+    pub fn default(mut self, index: usize) -> Self {
+        self.default = Some(index);
+        self
+    }
+
+    /// Check the choice when Enter is pressed. An `Err` is shown under the question, which
+    /// stays open.
+    ///
+    /// ```no_run
+    /// let size = tinsel::prompt::Select::new("Size")
+    ///     .options(["small", "large"])
+    ///     .validate(|i| if i == 1 { Err("large needs a paid plan".into()) } else { Ok(()) })
+    ///     .ask()?;
+    /// # Ok::<(), tinsel::prompt::Error>(())
+    /// ```
+    pub fn validate(mut self, check: impl Fn(usize) -> std::result::Result<(), String> + 'a) -> Self {
+        self.validate = Some(Box::new(check));
+        self
+    }
+
+    fn check(&self, i: usize) -> std::result::Result<(), String> {
+        self.validate.as_ref().map_or(Ok(()), |check| check(i))
+    }
+
+    /// Ask the question.
+    pub fn ask(self) -> Result<usize> {
+        if !io::stdin().is_terminal() {
+            return self.unasked();
+        }
+        if !(0..self.choices.list.len()).any(|i| self.choices.enabled(i)) {
+            return Err(Error::NoOptions);
+        }
+        self.run(&mut Ui::terminal()?)
+    }
+
+    /// The answer without a terminal: the default, if there is one.
+    fn unasked(&self) -> Result<usize> {
+        let i = self
+            .default
+            .filter(|&i| self.choices.enabled(i))
+            .ok_or(Error::NotATerminal)?;
+        self.check(i).map_err(Error::Invalid)?;
+        Ok(i)
+    }
+
+    fn run(&self, ui: &mut Ui) -> Result<usize> {
+        let question = &self.choices.question;
+        let filterable = self.choices.list.len() > self.choices.rows;
+        let mut picker = Picker::new(&self.choices, filterable, self.default);
+        let hint = if filterable {
+            "type to filter · ↑↓ move · enter choose"
+        } else {
+            "↑↓ move · enter choose"
+        };
+        let mut trouble: Option<String> = None;
+        loop {
+            let mut lines = picker.top();
+            lines.extend(trouble.as_deref().map(problem));
+            lines.extend(picker.rows(|_, here| pointer(here)));
+            lines.push(self.choices.keys(hint));
+            ui.draw(&lines);
+            match ui.key()? {
+                Key::Enter => {
+                    if let Some(i) = picker.current() {
+                        match self.check(i) {
+                            Ok(()) => {
+                                ui.draw(&[answered(question, &self.choices.list[i].label)]);
+                                return Ok(i);
+                            }
+                            Err(why) => trouble = Some(why),
+                        }
+                    }
                 }
-            }
-            // Esc clears a filter first, and only cancels once there's nothing to clear
-            Key::Esc if !picker.filter.is_empty() => {
-                picker.filter.clear();
-                picker.refilter();
-            }
-            Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
-            key => {
-                picker.key(key);
+                Key::Left if self.choices.back => return Err(ui.back()),
+                // Esc clears a filter first, and only cancels once there's nothing to clear
+                Key::Esc if !picker.filter.is_empty() => picker.clear_filter(),
+                Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
+                key => {
+                    if picker.key(key) {
+                        trouble = None;
+                    }
+                }
             }
         }
     }
@@ -1065,71 +1570,322 @@ fn run_select(question: &str, options: &[&str], ui: &mut Ui) -> Result<usize> {
 
 /// Several of a list: space toggles, `a` toggles all, enter confirms. Returns the chosen
 /// indices in order. In lists longer than eight, typing filters and Ctrl-A toggles all of
-/// what's shown.
+/// what's shown. [`MultiSelect`] has more options.
 pub fn multiselect(question: &str, options: &[&str], preselected: &[usize]) -> Result<Vec<usize>> {
     need_terminal()?;
-    if options.is_empty() {
-        return Ok(Vec::new());
-    }
-    run_multiselect(question, options, preselected, &mut Ui::terminal()?)
+    MultiSelect::new(question)
+        .options(options.iter().copied())
+        .default(preselected)
+        .ask()
 }
 
-fn run_multiselect(question: &str, options: &[&str], preselected: &[usize], ui: &mut Ui) -> Result<Vec<usize>> {
-    let mut picker = Picker::new(options);
-    let mut picked: Vec<bool> = (0..options.len()).map(|i| preselected.contains(&i)).collect();
-    let hint = if picker.filterable {
-        "type to filter · ↑↓ move · space toggle · ctrl-a all · enter done"
-    } else {
-        "↑↓ move · space toggle · a all · enter done"
-    };
-    loop {
-        let mut lines = vec![picker.heading(question)];
-        lines.extend(picker.rows(|i, here, label| {
-            let mark = if picked[i] {
-                paint(ROSE, "◉")
-            } else {
-                paint(MUTED, "○")
+/// Several of a list, with options: some ticked to start with, groups under headings,
+/// options that can't be picked (and why), notes and badges, a hint, validation and going
+/// back. [`multiselect`] is the shortcut. Returns the numbers of the chosen options in
+/// order, counting from 0 in the order they were added.
+///
+/// Space toggles, `a` toggles all (Ctrl-A, all of what's shown, in lists that filter as you
+/// type), Enter is done.
+///
+/// Without a terminal, the [`default`](MultiSelect::default) is the answer, if one was
+/// given; otherwise it's [`Error::NotATerminal`].
+///
+/// ```no_run
+/// use tinsel::prompt::MultiSelect;
+///
+/// let services = MultiSelect::new("Restart")
+///     .options(["api", "web", "worker"])
+///     .default(&[0])
+///     .validate(|picked| if picked.is_empty() { Err("pick at least one".into()) } else { Ok(()) })
+///     .ask()?;
+/// # Ok::<(), tinsel::prompt::Error>(())
+/// ```
+pub struct MultiSelect<'a> {
+    choices: Choices,
+    default: Option<Vec<usize>>,
+    validate: Option<ManyCheck<'a>>,
+}
+
+list_builders!(MultiSelect);
+
+impl<'a> MultiSelect<'a> {
+    /// A question with any number of answers from a list.
+    pub fn new(question: impl Into<String>) -> Self {
+        MultiSelect {
+            choices: Choices::new(question.into()),
+            default: None,
+            validate: None,
+        }
+    }
+
+    /// Tick these options (by number) to start with, and answer with them when there's no
+    /// terminal. Options that can't be picked stay unticked.
+    pub fn default(mut self, indices: &[usize]) -> Self {
+        self.default = Some(indices.to_vec());
+        self
+    }
+
+    /// Check the choices when Enter is pressed. An `Err` is shown under the question, which
+    /// stays open.
+    pub fn validate(mut self, check: impl Fn(&[usize]) -> std::result::Result<(), String> + 'a) -> Self {
+        self.validate = Some(Box::new(check));
+        self
+    }
+
+    fn check(&self, picked: &[usize]) -> std::result::Result<(), String> {
+        self.validate.as_ref().map_or(Ok(()), |check| check(picked))
+    }
+
+    fn ticked(&self) -> Vec<bool> {
+        let default = self.default.as_deref().unwrap_or_default();
+        (0..self.choices.list.len())
+            .map(|i| default.contains(&i) && self.choices.enabled(i))
+            .collect()
+    }
+
+    /// Ask the question.
+    pub fn ask(self) -> Result<Vec<usize>> {
+        if !io::stdin().is_terminal() {
+            return self.unasked();
+        }
+        if self.choices.list.is_empty() {
+            return self.check(&[]).map(|()| Vec::new()).map_err(|_| Error::NoOptions);
+        }
+        self.run(&mut Ui::terminal()?)
+    }
+
+    /// The answer without a terminal: the default, if one was given.
+    fn unasked(&self) -> Result<Vec<usize>> {
+        if self.default.is_none() {
+            return Err(Error::NotATerminal);
+        }
+        let ticked = self.ticked();
+        let chosen: Vec<usize> = (0..ticked.len()).filter(|&i| ticked[i]).collect();
+        self.check(&chosen).map_err(Error::Invalid)?;
+        Ok(chosen)
+    }
+
+    fn run(&self, ui: &mut Ui) -> Result<Vec<usize>> {
+        let question = &self.choices.question;
+        let filterable = self.choices.list.len() > self.choices.rows;
+        let mut picker = Picker::new(&self.choices, filterable, None);
+        let mut picked = self.ticked();
+        let hint = if filterable {
+            "type to filter · ↑↓ move · space toggle · ctrl-a all · enter done"
+        } else {
+            "↑↓ move · space toggle · a all · enter done"
+        };
+        let mut trouble: Option<String> = None;
+        loop {
+            let mut lines = picker.top();
+            lines.extend(trouble.as_deref().map(problem));
+            lines.extend(picker.rows(|i, here| {
+                let i = i.unwrap_or_default();
+                let mark = if picked[i] {
+                    paint(ROSE, "◉")
+                } else if self.choices.enabled(i) {
+                    paint(MUTED, "○")
+                } else {
+                    paint(MUTED, "–")
+                };
+                let pointer = if here { paint(ROSE, "›") } else { " ".into() };
+                format!("    {pointer} {mark} ")
+            }));
+            lines.push(self.choices.keys(hint));
+            ui.draw(&lines);
+            let toggle_all = |picked: &mut Vec<bool>, among: Vec<usize>| {
+                let among: Vec<usize> = among.into_iter().filter(|&i| self.choices.enabled(i)).collect();
+                let all = among.iter().all(|&i| picked[i]);
+                among.iter().for_each(|&i| picked[i] = !all);
             };
-            let pointer = if here { paint(ROSE, "›") } else { " ".into() };
-            format!("    {pointer} {mark} {label}")
-        }));
-        lines.push(keys(hint));
-        ui.draw(&lines);
-        match ui.key()? {
-            Key::Space => {
-                if let Some(i) = picker.current() {
-                    picked[i] = !picked[i];
+            match ui.key()? {
+                Key::Space => {
+                    if let Some(i) = picker.current() {
+                        picked[i] = !picked[i];
+                    }
+                    trouble = None;
                 }
-            }
-            Key::Char('a') if !picker.filterable => {
-                let all = picked.iter().all(|p| *p);
-                picked.iter_mut().for_each(|p| *p = !all);
-            }
-            Key::Ctrl('a') => {
-                let shown: Vec<usize> = picker.shown.iter().map(|(i, _)| *i).collect();
-                let all = shown.iter().all(|&i| picked[i]);
-                shown.iter().for_each(|&i| picked[i] = !all);
-            }
-            Key::Enter => break,
-            Key::Esc if !picker.filter.is_empty() => {
-                picker.filter.clear();
-                picker.refilter();
-            }
-            Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
-            key => {
-                picker.key(key);
+                Key::Char('a') if !picker.filterable => {
+                    toggle_all(&mut picked, (0..self.choices.list.len()).collect());
+                    trouble = None;
+                }
+                Key::Ctrl('a') => {
+                    toggle_all(&mut picked, picker.shown.iter().map(|(i, _)| *i).collect());
+                    trouble = None;
+                }
+                Key::Enter => {
+                    let chosen: Vec<usize> = (0..picked.len()).filter(|&i| picked[i]).collect();
+                    match self.check(&chosen) {
+                        Ok(()) => {
+                            let names: Vec<&str> =
+                                chosen.iter().map(|&i| self.choices.list[i].label.as_str()).collect();
+                            ui.draw(&[answered(question, &summary(&names))]);
+                            return Ok(chosen);
+                        }
+                        Err(why) => trouble = Some(why),
+                    }
+                }
+                Key::Left if self.choices.back => return Err(ui.back()),
+                Key::Esc if !picker.filter.is_empty() => picker.clear_filter(),
+                Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
+                key => {
+                    picker.key(key);
+                }
             }
         }
     }
-    let chosen: Vec<usize> = (0..options.len()).filter(|&i| picked[i]).collect();
-    let names: Vec<&str> = chosen.iter().map(|&i| options[i]).collect();
-    let summary = if names.is_empty() {
-        "none".to_string()
-    } else {
-        text::truncate(&names.join(", "), 40)
-    };
-    ui.draw(&[answered(question, &summary)]);
-    Ok(chosen)
+}
+
+/// The chosen names for an answered line, cut short with how many more there are.
+fn summary(names: &[&str]) -> String {
+    if names.is_empty() {
+        return "none".into();
+    }
+    text::truncate(&names.join(", "), 40)
+}
+
+/// One of a long list, such as versions or branches, as a dropdown: a window of rows that
+/// scrolls, filtering as you type, with notes lined up on the right, badges, and options
+/// drawn quieter than the rest. With [`allow_custom`](Dropdown::allow_custom), what's typed
+/// can be the answer too. Returns the chosen option's label, or the typed answer.
+///
+/// Without a terminal, the [`default`](Dropdown::default) is the answer, if there is one;
+/// otherwise it's [`Error::NotATerminal`].
+///
+/// ```no_run
+/// use tinsel::prompt::Dropdown;
+///
+/// let version = Dropdown::new("Roll back to")
+///     .option("v1.2.0").note("3 days ago").badge("latest").badge("current")
+///     .option("v1.2.0-rc.1").note("5 days ago").dim()
+///     .option("v1.1.0").note("2 weeks ago")
+///     .option("v1.0.0").note("2 months ago")
+///     .default(2)
+///     .allow_custom()
+///     .ask()?;
+/// # Ok::<(), tinsel::prompt::Error>(())
+/// ```
+pub struct Dropdown<'a> {
+    choices: Choices,
+    default: Option<usize>,
+    custom: bool,
+    validate: Option<Validator<'a>>,
+}
+
+list_builders!(Dropdown);
+
+impl<'a> Dropdown<'a> {
+    /// A question with one answer from a long list.
+    pub fn new(question: impl Into<String>) -> Self {
+        Dropdown {
+            choices: Choices::new(question.into()),
+            default: None,
+            custom: false,
+            validate: None,
+        }
+    }
+
+    /// Start on this option (by number), and answer with it when there's no terminal.
+    pub fn default(mut self, index: usize) -> Self {
+        self.default = Some(index);
+        self
+    }
+
+    /// Let the answer be something that isn't in the list: once something's typed that
+    /// isn't an option, it's offered at the end of the list to choose.
+    pub fn allow_custom(mut self) -> Self {
+        self.custom = true;
+        self
+    }
+
+    /// Check the answer when Enter is pressed, whether an option or typed. An `Err` is
+    /// shown under the question, which stays open.
+    ///
+    /// ```no_run
+    /// let tag = tinsel::prompt::Dropdown::new("Tag")
+    ///     .options(["v1.1.0", "v1.0.0"])
+    ///     .allow_custom()
+    ///     .validate(|s| if s.starts_with('v') { Ok(()) } else { Err("tags start with v".into()) })
+    ///     .ask()?;
+    /// # Ok::<(), tinsel::prompt::Error>(())
+    /// ```
+    pub fn validate(mut self, check: impl Fn(&str) -> std::result::Result<(), String> + 'a) -> Self {
+        self.validate = Some(Box::new(check));
+        self
+    }
+
+    fn check(&self, value: &str) -> std::result::Result<(), String> {
+        self.validate.as_ref().map_or(Ok(()), |check| check(value))
+    }
+
+    /// Ask the question.
+    pub fn ask(self) -> Result<String> {
+        if !io::stdin().is_terminal() {
+            return self.unasked();
+        }
+        if !self.custom && !(0..self.choices.list.len()).any(|i| self.choices.enabled(i)) {
+            return Err(Error::NoOptions);
+        }
+        self.run(&mut Ui::terminal()?)
+    }
+
+    /// The answer without a terminal: the default, if there is one.
+    fn unasked(&self) -> Result<String> {
+        let i = self
+            .default
+            .filter(|&i| self.choices.enabled(i))
+            .ok_or(Error::NotATerminal)?;
+        let value = self.choices.list[i].label.clone();
+        self.check(&value).map_err(Error::Invalid)?;
+        Ok(value)
+    }
+
+    fn run(&self, ui: &mut Ui) -> Result<String> {
+        let question = &self.choices.question;
+        let mut picker = Picker::new(&self.choices, true, self.default);
+        picker.custom = self.custom;
+        let hint = if self.custom {
+            "type to filter or enter your own · ↑↓ move · enter choose"
+        } else {
+            "type to filter · ↑↓ move · enter choose"
+        };
+        let mut trouble: Option<String> = None;
+        loop {
+            let mut lines = picker.top();
+            lines.extend(trouble.as_deref().map(problem));
+            lines.extend(picker.rows(|_, here| pointer(here)));
+            lines.push(self.choices.keys(hint));
+            ui.draw(&lines);
+            match ui.key()? {
+                Key::Enter => {
+                    let value = match picker.current() {
+                        Some(i) => self.choices.list[i].label.clone(),
+                        None if picker.on_custom() => picker.filter.clone(),
+                        None => continue,
+                    };
+                    match self.check(&value) {
+                        Ok(()) => {
+                            ui.draw(&[answered(question, &value)]);
+                            return Ok(value);
+                        }
+                        Err(why) => trouble = Some(why),
+                    }
+                }
+                Key::Left if self.choices.back => return Err(ui.back()),
+                Key::Space => {
+                    picker.type_char(' ');
+                    trouble = None;
+                }
+                Key::Esc if !picker.filter.is_empty() => picker.clear_filter(),
+                Key::Esc | Key::Interrupt => return Err(cancel(&mut ui.frame, question)),
+                key => {
+                    if picker.key(key) {
+                        trouble = None;
+                    }
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Dates
@@ -1493,6 +2249,17 @@ mod tests {
         assert_eq!(ui.shown(), ["  ●  Name  >ab"]);
     }
 
+    fn run_select(question: &str, options: &[&str], ui: &mut Ui) -> Result<usize> {
+        Select::new(question).options(options.iter().copied()).run(ui)
+    }
+
+    fn run_multiselect(question: &str, options: &[&str], ticked: &[usize], ui: &mut Ui) -> Result<Vec<usize>> {
+        MultiSelect::new(question)
+            .options(options.iter().copied())
+            .default(ticked)
+            .run(ui)
+    }
+
     const LONG: [&str; 10] = [
         "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet",
     ];
@@ -1513,7 +2280,7 @@ mod tests {
         assert_eq!(run_select("Pick", &LONG, &mut Ui::script(&keys)).unwrap(), 5);
         let mut ui = Ui::script(&typed("ho"));
         let _ = run_select("Pick", &LONG, &mut ui);
-        assert_eq!(ui.shown()[0], "  ?  Pick  ho▏");
+        assert_eq!(ui.shown()[0], "  ?  Pick  ho▏  2 of 10");
         assert_eq!(ui.shown()[1], "    › echo");
         let mut keys = typed("ho");
         keys.extend([Key::Esc, Key::Esc]);
@@ -1575,5 +2342,252 @@ mod tests {
         let mut keys = typed("ab");
         keys.extend([Key::Left, Key::Char('>'), Key::Enter]);
         assert_eq!(name.run(&mut Ui::script(&keys)).unwrap(), "a>b");
+    }
+
+    fn services<'a>() -> Select<'a> {
+        Select::new("Service")
+            .heading("Frontend")
+            .option("web")
+            .disabled("docs", "no deploys on Fridays")
+            .heading("Backend")
+            .option("api")
+            .disabled("cron", "retired")
+            .option("worker")
+    }
+
+    #[test]
+    fn headings_and_disabled_options_are_skipped() {
+        let mut ui = Ui::script(&[Key::Down]);
+        let _ = services().run(&mut ui);
+        assert_eq!(
+            ui.shown(),
+            [
+                "  ?  Service",
+                "    Frontend",
+                "      web",
+                "      docs  (no deploys on Fridays)",
+                "    Backend",
+                "    › api",
+                "      cron  (retired)",
+                "      worker",
+                "    ↑↓ move · enter choose",
+            ]
+        );
+        let pick = |keys: &[Key]| services().run(&mut Ui::script(keys)).unwrap();
+        assert_eq!(pick(&[Key::Down, Key::Down, Key::Enter]), 4);
+        assert_eq!(pick(&[Key::Up, Key::Enter]), 4);
+        assert_eq!(pick(&[Key::Down, Key::Down, Key::Down, Key::Enter]), 0);
+        // a disabled default isn't where the cursor starts
+        assert_eq!(services().default(1).run(&mut Ui::script(&[Key::Enter])).unwrap(), 0);
+        assert_eq!(services().default(2).run(&mut Ui::script(&[Key::Enter])).unwrap(), 2);
+    }
+
+    #[test]
+    fn multiselect_never_ticks_disabled_options() {
+        let restart = || {
+            MultiSelect::new("Restart")
+                .option("api")
+                .disabled("cron", "retired")
+                .option("worker")
+                .default(&[1])
+        };
+        let mut ui = Ui::script(&[Key::Down, Key::Space, Key::Enter]);
+        assert_eq!(restart().run(&mut ui).unwrap(), [2]);
+        assert_eq!(ui.shown(), ["  ●  Restart  worker"]);
+        assert_eq!(
+            restart().run(&mut Ui::script(&[Key::Char('a'), Key::Enter])).unwrap(),
+            [0, 2]
+        );
+        let mut ui = Ui::script(&[Key::Down]);
+        let _ = restart().run(&mut ui);
+        assert_eq!(ui.shown()[2], "      – cron  (retired)");
+    }
+
+    #[test]
+    fn validation_keeps_the_question_open() {
+        let at_least_one = MultiSelect::new("Restart").options(["api", "worker"]).validate(|p| {
+            if p.is_empty() {
+                Err("pick at least one".into())
+            } else {
+                Ok(())
+            }
+        });
+        let mut ui = Ui::script(&[Key::Enter]);
+        assert!(at_least_one.run(&mut ui).is_err());
+        assert_eq!(ui.shown()[1], "     ✕ pick at least one");
+        let keys = [Key::Enter, Key::Space, Key::Enter];
+        assert_eq!(at_least_one.run(&mut Ui::script(&keys)).unwrap(), [0]);
+
+        let small = Select::new("Size")
+            .options(["small", "large"])
+            .validate(|i| if i == 1 { Err("too big".into()) } else { Ok(()) });
+        let mut ui = Ui::script(&[Key::Down, Key::Enter]);
+        assert!(small.run(&mut ui).is_err());
+        assert_eq!(ui.shown()[1], "     ✕ too big");
+        let keys = [Key::Down, Key::Enter, Key::Up, Key::Enter];
+        assert_eq!(small.run(&mut Ui::script(&keys)).unwrap(), 0);
+    }
+
+    #[test]
+    fn lists_go_back_and_show_how() {
+        let mut ui = Ui::script(&[Key::Down]);
+        let _ = services().back().run(&mut ui);
+        assert_eq!(ui.shown().last().unwrap(), "    ↑↓ move · enter choose · ← back");
+        assert!(matches!(
+            services().back().run(&mut Ui::script(&[Key::Left])),
+            Err(Error::Back)
+        ));
+        let restart = MultiSelect::new("Restart").options(["api"]).back();
+        assert!(matches!(restart.run(&mut Ui::script(&[Key::Left])), Err(Error::Back)));
+        let tag = Dropdown::new("Tag").options(["v1.0.0"]).back();
+        let mut ui = Ui::script(&[Key::Left]);
+        assert!(matches!(tag.run(&mut ui), Err(Error::Back)));
+        assert!(ui.shown().is_empty());
+        // without .back(), ← does nothing
+        assert_eq!(services().run(&mut Ui::script(&[Key::Left, Key::Enter])).unwrap(), 0);
+    }
+
+    #[test]
+    fn hints_sit_under_the_question() {
+        let mut ui = Ui::script(&[]);
+        let _ = Select::new("Region")
+            .hint("where it runs")
+            .options(["eu", "us"])
+            .run(&mut ui);
+        assert_eq!(ui.shown()[..3], ["  ?  Region", "    where it runs", "    › eu"]);
+    }
+
+    fn tags<'a>() -> Dropdown<'a> {
+        let mut tags = Dropdown::new("Version")
+            .option("v1.12.0")
+            .note("today")
+            .badge("latest")
+            .option("v1.12.0-rc.1")
+            .note("2 days ago")
+            .dim();
+        for minor in (0..12).rev() {
+            tags = tags
+                .option(format!("v1.{minor}.0"))
+                .note(format!("{} weeks ago", 13 - minor));
+        }
+        tags.rows(5)
+    }
+
+    #[test]
+    fn dropdowns_scroll_with_counts_above_and_below() {
+        let shown = |keys: &[Key], default: Option<usize>| {
+            let mut tags = tags();
+            if let Some(d) = default {
+                tags = tags.default(d);
+            }
+            let mut ui = Ui::script(keys);
+            let _ = tags.run(&mut ui);
+            ui.shown()
+        };
+        assert_eq!(
+            shown(&[], Some(4)),
+            [
+                "  ?  Version",
+                "      ↑ 2 more",
+                "      v1.11.0            2 weeks ago",
+                "      v1.10.0            3 weeks ago",
+                "    › v1.9.0             4 weeks ago",
+                "      v1.8.0             5 weeks ago",
+                "      v1.7.0             6 weeks ago",
+                "      ↓ 7 more",
+                "    type to filter · ↑↓ move · enter choose",
+            ]
+        );
+        assert_eq!(
+            shown(&[], None)[1..5],
+            [
+                "",
+                "    › v1.12.0 [latest]         today",
+                "      v1.12.0-rc.1        2 days ago",
+                "      v1.11.0            2 weeks ago",
+            ]
+        );
+        assert_eq!(shown(&[Key::Up], Some(4))[4], "    › v1.10.0            3 weeks ago");
+        assert_eq!(
+            shown(&[Key::PageDown], Some(4))[4],
+            "    › v1.4.0             9 weeks ago"
+        );
+        // ↑ from the top wraps to the bottom
+        assert_eq!(
+            shown(&[Key::Up], None)[1..8],
+            [
+                "      ↑ 9 more",
+                "      v1.4.0             9 weeks ago",
+                "      v1.3.0            10 weeks ago",
+                "      v1.2.0            11 weeks ago",
+                "      v1.1.0            12 weeks ago",
+                "    › v1.0.0            13 weeks ago",
+                "",
+            ]
+        );
+    }
+
+    #[test]
+    fn dropdowns_filter_and_take_typed_answers() {
+        let mut keys = typed("1.1");
+        keys.push(Key::Enter);
+        let mut ui = Ui::script(&keys);
+        assert_eq!(tags().run(&mut ui).unwrap(), "v1.12.0");
+        assert_eq!(ui.shown(), ["  ●  Version  v1.12.0"]);
+        let mut ui = Ui::script(&typed("1.1"));
+        let _ = tags().run(&mut ui);
+        assert_eq!(ui.shown()[0], "  ?  Version  1.1▏  5 of 14");
+
+        // a typed answer is only offered when asked for
+        let mut keys = typed("v2.0.0");
+        keys.push(Key::Enter);
+        assert!(tags().run(&mut Ui::script(&keys)).is_err());
+        let custom = tags().allow_custom().validate(|s| {
+            if s.starts_with('v') {
+                Ok(())
+            } else {
+                Err("tags start with v".into())
+            }
+        });
+        let mut ui = Ui::script(&keys);
+        assert_eq!(custom.run(&mut ui).unwrap(), "v2.0.0");
+        assert_eq!(ui.shown(), ["  ●  Version  v2.0.0"]);
+        let mut ui = Ui::script(&typed("v2.0.0"));
+        let _ = custom.run(&mut ui);
+        assert_eq!(ui.shown()[1], "    › use “v2.0.0”");
+        let mut keys = typed("2.0.0");
+        keys.push(Key::Enter);
+        let mut ui = Ui::script(&keys);
+        assert!(custom.run(&mut ui).is_err());
+        assert_eq!(ui.shown()[1], "     ✕ tags start with v");
+        // Esc clears what's typed, then cancels
+        let mut keys = typed("zz");
+        keys.extend([Key::Esc, Key::Enter]);
+        assert_eq!(custom.run(&mut Ui::script(&keys)).unwrap(), "v1.12.0");
+        let mut keys = typed("zz");
+        keys.extend([Key::Esc, Key::Esc]);
+        assert!(matches!(custom.run(&mut Ui::script(&keys)), Err(Error::Cancelled)));
+    }
+
+    #[test]
+    fn without_a_terminal_lists_answer_with_their_default() {
+        assert!(matches!(services().unasked(), Err(Error::NotATerminal)));
+        assert_eq!(services().default(2).unasked().unwrap(), 2);
+        // a default that can't be picked is no answer
+        assert!(matches!(services().default(1).unasked(), Err(Error::NotATerminal)));
+        let picky = services().default(2).validate(|_| Err("no".into()));
+        assert!(matches!(picky.unasked(), Err(Error::Invalid(_))));
+
+        let restart = || MultiSelect::new("Restart").option("api").disabled("cron", "retired");
+        assert!(matches!(restart().unasked(), Err(Error::NotATerminal)));
+        assert_eq!(restart().default(&[0, 1]).unasked().unwrap(), [0]);
+        assert_eq!(restart().default(&[]).unasked().unwrap(), [] as [usize; 0]);
+        let at_least_one = restart()
+            .default(&[])
+            .validate(|p| if p.is_empty() { Err("pick one".into()) } else { Ok(()) });
+        assert!(matches!(at_least_one.unasked(), Err(Error::Invalid(_))));
+
+        assert!(matches!(tags().unasked(), Err(Error::NotATerminal)));
+        assert_eq!(tags().default(1).unasked().unwrap(), "v1.12.0-rc.1");
     }
 }
