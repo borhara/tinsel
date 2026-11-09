@@ -193,7 +193,17 @@ impl Frame {
         if row >= area.height {
             return 0;
         }
-        self.write(area.x, area.y + row, area.x + area.width, text)
+        self.write(area.x, area.y + row, area.x + area.width, text, 0)
+    }
+
+    /// Like [`print`](Frame::print), with the text's first `skip` columns left off: for
+    /// anything scrolled sideways.
+    pub(crate) fn print_from(&mut self, area: Rect, row: usize, text: &str, skip: usize) -> usize {
+        let area = area.intersect(self.area());
+        if row >= area.height {
+            return 0;
+        }
+        self.write(area.x, area.y + row, area.x + area.width, text, skip)
     }
 
     /// Write each line of a block into `area`, one per row, from the top.
@@ -233,8 +243,9 @@ impl Frame {
         }
     }
 
-    /// Write `text` from column `x` of row `y`, stopping before column `end`.
-    fn write(&mut self, x: usize, y: usize, end: usize, text: &str) -> usize {
+    /// Write `text` from column `x` of row `y`, stopping before column `end`, leaving off
+    /// its first `skip` columns.
+    fn write(&mut self, x: usize, y: usize, end: usize, text: &str, mut skip: usize) -> usize {
         let row = y * self.width;
         let mut col = x;
         let mut style = Style::default();
@@ -269,6 +280,15 @@ impl Frame {
             let c = if c == '\t' { ' ' } else { c };
             let w = char_width(c);
             if c.is_control() || w == 0 {
+                continue;
+            }
+            if skip > 0 {
+                // half of a wide character scrolled off: the half still showing is a space
+                if w > skip && col < end {
+                    self.put(row, col, Cell { ch: ' ', style });
+                    col += 1;
+                }
+                skip = skip.saturating_sub(w);
                 continue;
             }
             if col + w > end {
@@ -425,6 +445,17 @@ mod tests {
         // writing over half of one blanks the other half
         f.print(Rect::new(3, 0, 3, 1), 0, "x");
         assert_eq!(crate::text::strip_ansi(&f.row_text(0)), "ab x本");
+    }
+
+    #[test]
+    fn text_scrolled_sideways_loses_its_first_columns() {
+        let mut f = Frame::new(6, 3);
+        f.print_from(f.area(), 0, "\x1b[1mabcdef\x1b[0m", 2);
+        assert_eq!(f.row_text(0), "\x1b[0;1mcdef\x1b[0m");
+        // half a wide character scrolled off leaves a space where its other half was
+        f.print_from(f.area(), 1, "a日本", 2);
+        assert_eq!(f.row_text(1), " 本");
+        assert_eq!(f.print_from(f.area(), 3, "gone", 0), 0);
     }
 
     #[test]
