@@ -477,18 +477,36 @@ impl Widget for List {
             }
         }
         if overflow && area.width > 0 {
-            let thumb = (h * h / n).max(1);
-            let at = start * (h - thumb) / (n - h);
-            let bar = Rect::new(area.x + area.width - 1, area.y, 1, h);
-            for row in 0..h {
-                let mark = if (at..at + thumb).contains(&row) {
-                    paint(ROSE, "┃")
-                } else {
-                    paint(TRACK, "│")
-                };
-                frame.print(bar, row, &mark);
-            }
+            scrollbar(frame, Rect::new(area.x + area.width - 1, area.y, 1, h), start, n);
         }
+    }
+}
+
+/// One line in the middle of `area`, for empty and loading states.
+pub(super) fn centered(frame: &mut Frame, area: Rect, line: &str) {
+    if area.is_empty() {
+        return;
+    }
+    let w = text::width(line).min(area.width);
+    let at = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - 1) / 2, w, 1);
+    frame.print(at, 0, line);
+}
+
+/// A scrollbar down `bar`, for `total` rows of which the ones from `start` are showing.
+pub(super) fn scrollbar(frame: &mut Frame, bar: Rect, start: usize, total: usize) {
+    let h = bar.height;
+    if h == 0 || total <= h {
+        return;
+    }
+    let thumb = (h * h / total).max(1);
+    let at = start.min(total - h) * (h - thumb) / (total - h);
+    for row in 0..h {
+        let mark = if (at..at + thumb).contains(&row) {
+            paint(ROSE, "┃")
+        } else {
+            paint(TRACK, "│")
+        };
+        frame.print(bar, row, &mark);
     }
 }
 
