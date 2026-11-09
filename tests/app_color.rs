@@ -1,7 +1,7 @@
 //! The app pieces in full colour. Colour mode is process-wide, so these live in their own
 //! file (Cargo runs each file under `tests/` as a separate process).
 
-use tinsel::app::{Frame, List, Panel, Plot, Rect, Sparkles, Stat, Tabs};
+use tinsel::app::{Cursor, Frame, Grid, List, Panel, Plot, Rect, Sparkles, Stat, Tabs};
 use tinsel::{ColorMode, Theme, palette, set_color_mode, set_theme};
 
 fn colour() {
@@ -79,4 +79,35 @@ fn colours_survive_the_trip_through_cells() {
     );
     // and the plain text underneath is still right
     assert!(f.snapshot().plain().starts_with("n"));
+}
+
+#[test]
+fn the_grid_cursor_is_a_bar_on_a_band_and_quieter_unfocused() {
+    colour();
+    let mut cursor = Cursor::new();
+    cursor.select(1);
+    let draw = |focused: bool| {
+        let mut f = Frame::new(20, 6);
+        let grid = Grid::new(["name", "n"])
+            .row(["api", "1"])
+            .row(["web", "2"])
+            .row(["db", "3"])
+            .row(["cache", "4"])
+            .striped()
+            .cursor(&cursor)
+            .focused(focused);
+        f.render(f.area(), grid);
+        f.snapshot()
+    };
+    let shown = draw(true);
+    let rose = format!("{};{};{}", palette::ROSE.0, palette::ROSE.1, palette::ROSE.2);
+    assert!(
+        shown.lines()[3].contains('▌') && shown.lines()[3].contains(&rose),
+        "{shown:?}"
+    );
+    // odd rows are striped, even ones left plain
+    assert!(!shown.lines()[2].contains("48;2;") && !shown.lines()[4].contains("48;2;"));
+    assert!(shown.lines()[5].contains("48;2;"));
+    assert_ne!(draw(false).lines()[3], shown.lines()[3]);
+    assert!(!draw(false).lines()[3].contains(&rose));
 }
