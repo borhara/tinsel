@@ -24,6 +24,9 @@ First release.
   `Panel` (shimmering when focused), `List`, `Tabs`, `Plot`, `Stat`, `big`, `hints`,
   `Sparkles`, and every `Block`-drawing type as a `Widget`; `navigate`; `app::snapshot` for
   tests; `examples/dashboard.rs`
+- `app::Grid`: a table with a cursor, kept in view as it moves, scrolling sideways a column
+  at a time with the header always showing; striped rows, a sort mark, and loading, empty
+  and error states. Its place is kept in an `app::Cursor`
 - `Live` steps that learn their usual duration and show an estimate next run
 - Focus awareness: calmer animation while you're away, a notification when a long run finishes
   unnoticed, a twinkle for what finished when you return; `tinsel::notify`
