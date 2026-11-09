@@ -44,7 +44,7 @@
 //! cut it up by [`Size`], and [`Frame::render`] draws a [`Widget`] into a piece. Everything
 //! tinsel prints ([`Table`](crate::Table), [`Tree`](crate::Tree), [`Card`](crate::Card),
 //! any [`Block`]) is a widget already; on top of those there's [`Panel`], [`List`],
-//! [`Grid`] (a table with a cursor), [`Tabs`], [`Plot`], [`Stat`], [`big`] text, [`hints`]
+//! [`Grid`] (a table with a cursor), [`Input`] (a box to type into), [`Tabs`], [`Plot`], [`Stat`], [`big`] text, [`hints`]
 //! for the footer and [`Sparkles`] for the background.
 //!
 //! # Time
@@ -59,6 +59,7 @@
 //! exactly what it shows. When stdout isn't a terminal, [`run`] prints that one frame and
 //! returns.
 
+mod field;
 mod frame;
 mod grid;
 mod input;
@@ -70,6 +71,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+pub use field::Input;
 pub use frame::Frame;
 pub use grid::{Cursor, Grid};
 pub use input::{Key, Mouse, MouseKind};

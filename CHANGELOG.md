@@ -27,6 +27,8 @@ First release.
 - `app::Grid`: a table with a cursor, kept in view as it moves, scrolling sideways a column
   at a time with the header always showing; striped rows, a sort mark, and loading, empty
   and error states. Its place is kept in an `app::Cursor`
+- `app::Input`: a box to type into inside an app, for filters and searches, with a cursor,
+  the usual editing keys, a prompt and a placeholder
 - `Live` steps that learn their usual duration and show an estimate next run
 - Focus awareness: calmer animation while you're away, a notification when a long run finishes
   unnoticed, a twinkle for what finished when you return; `tinsel::notify`
