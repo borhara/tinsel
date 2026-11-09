@@ -44,8 +44,8 @@
 //! cut it up by [`Size`], and [`Frame::render`] draws a [`Widget`] into a piece. Everything
 //! tinsel prints ([`Table`](crate::Table), [`Tree`](crate::Tree), [`Card`](crate::Card),
 //! any [`Block`]) is a widget already; on top of those there's [`Panel`], [`List`],
-//! [`Tabs`], [`Plot`], [`Stat`], [`big`] text, [`hints`] for the footer and [`Sparkles`]
-//! for the background.
+//! [`Grid`] (a table with a cursor), [`Tabs`], [`Plot`], [`Stat`], [`big`] text, [`hints`]
+//! for the footer and [`Sparkles`] for the background.
 //!
 //! # Time
 //!
@@ -60,6 +60,7 @@
 //! returns.
 
 mod frame;
+mod grid;
 mod input;
 mod layout;
 mod widgets;
@@ -70,6 +71,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 pub use frame::Frame;
+pub use grid::{Cursor, Grid};
 pub use input::{Key, Mouse, MouseKind};
 pub use layout::{Rect, Size};
 pub use widgets::{List, Panel, Plot, Sparkles, Stat, Tabs, Widget, big, hints};
