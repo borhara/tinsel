@@ -29,6 +29,9 @@ First release.
   and error states. Its place is kept in an `app::Cursor`
 - `app::Input`: a box to type into inside an app, for filters and searches, with a cursor,
   the usual editing keys, a prompt and a placeholder
+- `app::Modal`: a dialog in the middle of the screen, sized to what's inside it, rising into
+  place over a faded backdrop with a soft shadow; `Frame::dim`, `Widget::size` and
+  `app::time`
 - `Live` steps that learn their usual duration and show an estimate next run
 - Focus awareness: calmer animation while you're away, a notification when a long run finishes
   unnoticed, a twinkle for what finished when you return; `tinsel::notify`

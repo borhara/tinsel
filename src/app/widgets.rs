@@ -35,17 +35,38 @@ use crate::widgets::{Card, noise};
 pub trait Widget {
     /// Draw into `area` of `frame`. `area` is already clipped to the screen.
     fn render(&self, area: Rect, frame: &mut Frame);
+
+    /// How many columns and rows it would like, if it knows: what a [`Modal`](super::Modal)
+    /// is sized to. `None` unless implemented.
+    ///
+    /// ```
+    /// use tinsel::app::{Panel, Widget};
+    ///
+    /// assert_eq!("two\nlines".size(), Some((5, 2)));
+    /// assert_eq!(Panel::new("hi").body("two\nlines").size(), Some((9, 4)));
+    /// ```
+    fn size(&self) -> Option<(usize, usize)> {
+        None
+    }
 }
 
 impl<W: Widget + ?Sized> Widget for &W {
     fn render(&self, area: Rect, frame: &mut Frame) {
         (**self).render(area, frame)
     }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        (**self).size()
+    }
 }
 
 impl<W: Widget + ?Sized> Widget for Box<W> {
     fn render(&self, area: Rect, frame: &mut Frame) {
         (**self).render(area, frame)
+    }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        (**self).size()
     }
 }
 
@@ -55,6 +76,11 @@ impl Widget for str {
         for (row, line) in wrap(self, area.width).into_iter().take(area.height).enumerate() {
             frame.print(area, row, &line);
         }
+    }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        let lines = self.split('\n');
+        Some((lines.clone().map(text::width).max().unwrap_or(0), lines.count()))
     }
 }
 
@@ -194,11 +220,19 @@ impl Widget for String {
     fn render(&self, area: Rect, frame: &mut Frame) {
         self.as_str().render(area, frame)
     }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        self.as_str().size()
+    }
 }
 
 impl Widget for Line {
     fn render(&self, area: Rect, frame: &mut Frame) {
         frame.print(area, 0, &self.to_string());
+    }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        Some((self.width(), 1))
     }
 }
 
@@ -206,18 +240,29 @@ impl Widget for Line {
 /// gives printed output is taken off, since the block is placed exactly where it's wanted.
 impl Widget for Block {
     fn render(&self, area: Rect, frame: &mut Frame) {
-        let margin = self
-            .lines()
-            .iter()
-            .map(|l| text::strip_ansi(l))
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| l.len() - l.trim_start_matches(' ').len())
-            .min()
-            .unwrap_or(0);
+        let margin = margin(self);
         for (row, line) in self.lines().iter().take(area.height).enumerate() {
             frame.print(area, row, &drop_columns(line, margin));
         }
     }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        let margin = margin(self);
+        let widest = self.lines().iter().map(|l| text::width(l)).max().unwrap_or(0);
+        Some((widest.saturating_sub(margin), self.len()))
+    }
+}
+
+/// The spaces every non-blank line of a block starts with.
+fn margin(block: &Block) -> usize {
+    block
+        .lines()
+        .iter()
+        .map(|l| text::strip_ansi(l))
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start_matches(' ').len())
+        .min()
+        .unwrap_or(0)
 }
 
 /// The line without its first `n` columns, which are spaces, keeping any styling around them.
@@ -253,6 +298,10 @@ macro_rules! via_lines {
             fn render(&self, area: Rect, frame: &mut Frame) {
                 self.lines().render(area, frame)
             }
+
+            fn size(&self) -> Option<(usize, usize)> {
+                self.lines().size()
+            }
         }
     )*};
 }
@@ -264,6 +313,11 @@ via_lines!(Table, Tree, Code);
 impl Widget for Card {
     fn render(&self, area: Rect, frame: &mut Frame) {
         frame.lines(area, &self.boxed(self.fixed_width().unwrap_or(area.width)));
+    }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        let w = self.fixed_width()?;
+        Some((w, self.boxed(w).len()))
     }
 }
 
@@ -407,6 +461,16 @@ impl Widget for Panel<'_> {
             body.render(self.inner(area), frame);
         }
     }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        let (w, h) = match &self.body {
+            Some(body) => body.size()?,
+            None => (0, 0),
+        };
+        let title = text::width(&self.title) + if self.focused { 9 } else { 7 };
+        let (px, py) = self.padding;
+        Some(((w + 2 + 2 * px).max(title), h + 2 + 2 * py))
+    }
 }
 
 // MARK: - List
@@ -479,6 +543,11 @@ impl Widget for List {
         if overflow && area.width > 0 {
             scrollbar(frame, Rect::new(area.x + area.width - 1, area.y, 1, h), start, n);
         }
+    }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        let widest = self.items.iter().map(|i| text::width(i)).max().unwrap_or(16);
+        Some((widest + 2, self.items.len().max(1)))
     }
 }
 
