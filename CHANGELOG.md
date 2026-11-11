@@ -34,6 +34,8 @@ First release.
   `app::time`
 - `app::Waker`: wake a running app from another thread with `Event::Wake`, so it can tick
   slowly and still show results the moment they're ready
+- `app::suspend`: leave the full-screen view to run something in the normal terminal (a
+  command that asks for input, an editor), then come back and redraw
 - `Live` steps that learn their usual duration and show an estimate next run
 - Focus awareness: calmer animation while you're away, a notification when a long run finishes
   unnoticed, a twinkle for what finished when you return; `tinsel::notify`
