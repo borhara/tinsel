@@ -54,6 +54,11 @@
 //! dashboard shows. Work done on other threads can wake the app the moment it's ready with
 //! a [`Waker`], so it needn't tick quickly just to notice.
 //!
+//! # Leaving for a moment
+//!
+//! [`suspend`] hands the terminal back while something else uses it (a sign-in command, an
+//! editor, a shell), then takes it again and redraws.
+//!
 //! # Tests
 //!
 //! [`snapshot`] draws one frame of an app at any size, without a terminal, so you can check
@@ -154,8 +159,11 @@ pub fn run<A: App>(mut app: A) -> io::Result<A> {
     let mut session = Session::enter(app.mouse())?;
     let (tx, rx) = mpsc::channel();
     let _waking = Waking::listen(tx.clone());
-    let stop = session.stop.clone();
-    session.reader = Some(std::thread::spawn(move || listen(term::read_byte, &tx, &stop)));
+    let control = session.control.clone();
+    session.reader = Some(std::thread::spawn(move || {
+        listen(term::read_byte, &tx, &control);
+        control.idle.store(true, Ordering::SeqCst);
+    }));
     drive(&mut app, &rx, &mut io::stdout(), || (term::width(), term::height()))?;
     drop(session);
     Ok(app)
@@ -177,6 +185,9 @@ fn drive<A: App + ?Sized>(
     let mut size = screen();
     let mut shown: Option<Frame> = None;
     loop {
+        if REDRAW.with(|r| r.replace(false)) {
+            shown = None;
+        }
         let now_size = screen();
         if now_size != size {
             size = now_size;
@@ -408,10 +419,34 @@ const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
 
 /// The alternate screen, raw keys and a hidden cursor, for as long as it lives.
 struct Session {
-    _raw: term::RawMode,
-    stop: Arc<AtomicBool>,
+    control: Arc<Control>,
     reader: Option<std::thread::JoinHandle<()>>,
     hook: Arc<PanicHook>,
+}
+
+/// How the app's thread tells the key reader what to do.
+#[derive(Default)]
+struct Control {
+    /// Finish for good.
+    stop: AtomicBool,
+    /// Stop reading for now: something else wants the keyboard.
+    pause: AtomicBool,
+    /// Set by the reader while it isn't reading, and won't until `pause` is lifted.
+    idle: AtomicBool,
+}
+
+/// What [`suspend`] needs of the running app's session. Raw mode lives here rather than in
+/// the [`Session`], so the terminal can be handed back and taken again in the middle of a run.
+struct Running {
+    raw: Option<term::RawMode>,
+    control: Arc<Control>,
+    mouse: bool,
+}
+
+thread_local! {
+    static RUNNING: std::cell::RefCell<Option<Running>> = const { std::cell::RefCell::new(None) };
+    /// Set when the screen has to be drawn again from scratch.
+    static REDRAW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
@@ -441,16 +476,26 @@ impl Session {
         ON_SCREEN.store(true, Ordering::SeqCst);
         // made before writing anything, so a failed write still puts everything back
         let session = Session {
-            _raw: raw,
-            stop: Arc::new(AtomicBool::new(false)),
+            control: Arc::default(),
             reader: None,
             hook,
         };
-        let mut out = io::stdout();
-        write!(out, "{ENTER}{}", if mouse { MOUSE_ON } else { "" })?;
-        out.flush()?;
+        RUNNING.with(|r| {
+            *r.borrow_mut() = Some(Running {
+                raw: Some(raw),
+                control: session.control.clone(),
+                mouse,
+            })
+        });
+        enter_screen(mouse)?;
         Ok(session)
     }
+}
+
+fn enter_screen(mouse: bool) -> io::Result<()> {
+    let mut out = io::stdout();
+    write!(out, "{ENTER}{}", if mouse { MOUSE_ON } else { "" })?;
+    out.flush()
 }
 
 impl Drop for Session {
@@ -458,11 +503,13 @@ impl Drop for Session {
         // the reader has to finish while reads still time out, on every way out of `run`:
         // once the terminal is back in line mode, a read waits for Enter and would take the
         // first key of whatever reads stdin next
-        self.stop.store(true, Ordering::Relaxed);
+        self.control.stop.store(true, Ordering::SeqCst);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
         leave_screen();
+        // out of line mode, unless a suspended closure panicked and it's already there
+        RUNNING.with(|r| r.borrow_mut().take());
         term::forget_terminal();
         if !std::thread::panicking() {
             let previous = self.hook.clone();
@@ -480,11 +527,129 @@ fn leave_screen() {
     }
 }
 
+/// Leave the full-screen app for a moment, to run something that needs the terminal as it
+/// normally is: a command that asks for a password, opens an editor, or prints a sign-in
+/// link and waits. The screen and keyboard are handed back, `f` runs, and then the app takes
+/// them again and redraws from scratch. Call it from [`App::event`].
+///
+/// While `f` runs, Ctrl-C goes to the commands it starts, not the app. If `f` panics, the
+/// terminal is left as it should be. If the app can't take the terminal back afterwards,
+/// that's the error, and the app should quit. Outside a running app (in tests, say) `f` simply runs.
+///
+/// ```no_run
+/// use std::process::Command;
+/// use tinsel::app::{self, App, Event, Flow, Frame, Key};
+///
+/// struct Account {
+///     signed_in: bool,
+/// }
+///
+/// impl App for Account {
+///     fn view(&self, frame: &mut Frame) {
+///         let state = if self.signed_in { "signed in" } else { "s to sign in" };
+///         frame.print(frame.area(), 0, state);
+///     }
+///
+///     fn event(&mut self, event: &Event) -> Flow {
+///         match event {
+///             Event::Key(Key::Char('s')) => {
+///                 let login = app::suspend(|| Command::new("my-cli").arg("login").status());
+///                 self.signed_in = matches!(login, Ok(Ok(status)) if status.success());
+///             }
+///             Event::Key(Key::Char('q')) => return Flow::Quit,
+///             _ => {}
+///         }
+///         Flow::Continue
+///     }
+/// }
+/// ```
+pub fn suspend<T>(f: impl FnOnce() -> T) -> io::Result<T> {
+    let Some((control, mouse)) = RUNNING.with(|r| r.borrow().as_ref().map(|r| (r.control.clone(), r.mouse))) else {
+        return Ok(f());
+    };
+    // the reader has to be out of its read before line mode is back, or it takes the first
+    // thing typed; reads give up every 0.1s, so this is quick
+    control.pause.store(true, Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !control.idle.load(Ordering::SeqCst) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    leave_screen();
+    RUNNING.with(|r| r.borrow_mut().as_mut().map(|r| r.raw.take()));
+
+    let out = {
+        let _ctrl_c = interrupt::Pass::new();
+        f()
+    };
+
+    let raw = term::RawMode::enter()?;
+    RUNNING.with(|r| r.borrow_mut().as_mut().map(|r| r.raw = Some(raw)));
+    ON_SCREEN.store(true, Ordering::SeqCst);
+    enter_screen(mouse)?;
+    REDRAW.with(|r| r.set(true));
+    control.pause.store(false, Ordering::SeqCst);
+    Ok(out)
+}
+
+/// Ctrl-C while suspended: the app survives it, and whatever it's running gets it.
+#[cfg(unix)]
+mod interrupt {
+    unsafe extern "C" {
+        fn signal(sig: i32, handler: usize) -> usize;
+    }
+
+    const SIGINT: i32 = 2;
+    const SIG_ERR: usize = usize::MAX;
+
+    // a handler that does nothing, rather than ignoring the signal: ignoring is inherited by
+    // the commands run, so they couldn't be stopped either, while a handler is reset for them
+    extern "C" fn pass(_: i32) {}
+
+    pub(super) struct Pass(usize);
+
+    impl Pass {
+        pub(super) fn new() -> Pass {
+            // SAFETY: `pass` does nothing at all, which is async-signal-safe
+            Pass(unsafe { signal(SIGINT, pass as extern "C" fn(i32) as usize) })
+        }
+    }
+
+    impl Drop for Pass {
+        fn drop(&mut self) {
+            if self.0 != SIG_ERR {
+                // SAFETY: the previous handler, as signal() returned it
+                unsafe { signal(SIGINT, self.0) };
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+mod interrupt {
+    pub(super) struct Pass;
+
+    impl Pass {
+        pub(super) fn new() -> Pass {
+            Pass
+        }
+    }
+}
+
 /// Read keys and mouse reports until told to stop, sending each as an event. `read` gives
 /// one byte, or `None` after a short pause with nothing typed.
-fn listen(mut read: impl FnMut() -> io::Result<Option<u8>>, tx: &mpsc::Sender<Event>, stop: &AtomicBool) {
+fn listen(mut read: impl FnMut() -> io::Result<Option<u8>>, tx: &mpsc::Sender<Event>, control: &Control) {
     let mut pending: Vec<u8> = Vec::new();
-    while !stop.load(Ordering::Relaxed) {
+    while !control.stop.load(Ordering::SeqCst) {
+        if control.pause.load(Ordering::SeqCst) {
+            control.idle.store(true, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        control.idle.store(false, Ordering::SeqCst);
+        // a pause asked for between the two looks waits for the next time round
+        if control.pause.load(Ordering::SeqCst) {
+            continue;
+        }
         // reads give up after 0.1s, so `stop` is checked often and a pause can end a sequence
         let paused = match read() {
             Ok(Some(b)) => {
@@ -659,7 +824,7 @@ mod tests {
         ]
         .into_iter();
         let (tx, rx) = mpsc::channel();
-        listen(move || script.next().unwrap(), &tx, &AtomicBool::new(false));
+        listen(move || script.next().unwrap(), &tx, &Control::default());
         let got: Vec<Event> = rx.try_iter().collect();
         assert_eq!(
             got,
@@ -670,11 +835,60 @@ mod tests {
     #[test]
     fn the_reader_stops_when_told_or_when_nobody_listens() {
         let (tx, _rx) = mpsc::channel();
-        listen(|| panic!("read after stop"), &tx, &AtomicBool::new(true));
+        let stopped = Control::default();
+        stopped.stop.store(true, Ordering::SeqCst);
+        listen(|| panic!("read after stop"), &tx, &stopped);
 
         let (tx, rx) = mpsc::channel();
         drop(rx);
-        listen(|| Ok(Some(b'q')), &tx, &AtomicBool::new(false));
+        listen(|| Ok(Some(b'q')), &tx, &Control::default());
+    }
+
+    #[test]
+    fn a_paused_reader_leaves_the_keyboard_alone() {
+        let control = Arc::new(Control::default());
+        control.pause.store(true, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel();
+        let reader = {
+            let control = control.clone();
+            std::thread::spawn(move || listen(|| Ok(Some(b'x')), &tx, &control))
+        };
+        while !control.idle.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(rx.try_recv().is_err(), "nothing read while paused");
+        control.pause.store(false, Ordering::SeqCst);
+        assert_eq!(rx.recv().unwrap(), Event::Key(Key::Char('x')));
+        control.stop.store(true, Ordering::SeqCst);
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn suspending_outside_an_app_just_runs_the_closure_and_the_screen_is_redrawn_after() {
+        assert_eq!(suspend(|| 7).unwrap(), 7);
+
+        // after a suspend, every row is sent again, changed or not
+        struct Suspends(usize);
+        impl App for Suspends {
+            fn view(&self, frame: &mut Frame) {
+                frame.print(frame.area(), 0, "same");
+            }
+            fn event(&mut self, event: &Event) -> Flow {
+                if *event == Event::Key(Key::Char('s')) {
+                    REDRAW.with(|r| r.set(true));
+                }
+                self.0 += 1;
+                if self.0 == 2 { Flow::Quit } else { Flow::Continue }
+            }
+            fn fps(&self) -> u32 {
+                240
+            }
+        }
+        let rx = keys(&[Event::Key(Key::Char('s'))]);
+        let mut out = Vec::new();
+        drive(&mut Suspends(0), &rx, &mut out, || (10, 1)).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap().matches("same").count(), 2);
     }
 
     #[test]
