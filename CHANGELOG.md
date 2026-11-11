@@ -32,6 +32,8 @@ First release.
 - `app::Modal`: a dialog in the middle of the screen, sized to what's inside it, rising into
   place over a faded backdrop with a soft shadow; `Frame::dim`, `Widget::size` and
   `app::time`
+- `app::Waker`: wake a running app from another thread with `Event::Wake`, so it can tick
+  slowly and still show results the moment they're ready
 - `Live` steps that learn their usual duration and show an estimate next run
 - Focus awareness: calmer animation while you're away, a notification when a long run finishes
   unnoticed, a twinkle for what finished when you return; `tinsel::notify`

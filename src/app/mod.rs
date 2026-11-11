@@ -51,7 +51,8 @@
 //!
 //! [`Frame::time`] is the seconds since the app started, for anything animated, and
 //! [`Event::Tick`] arrives [`fps`](App::fps) times a second, for polling whatever your
-//! dashboard shows.
+//! dashboard shows. Work done on other threads can wake the app the moment it's ready with
+//! a [`Waker`], so it needn't tick quickly just to notice.
 //!
 //! # Tests
 //!
@@ -69,7 +70,7 @@ mod widgets;
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 pub use field::Input;
@@ -94,6 +95,8 @@ pub enum Event {
     Tick,
     /// The terminal changed size, to this many columns and rows.
     Resize(usize, usize),
+    /// A [`Waker`] was woken: something another thread was doing is ready to look at.
+    Wake,
 }
 
 /// Whether to keep going after an event.
@@ -150,6 +153,7 @@ pub fn run<A: App>(mut app: A) -> io::Result<A> {
 
     let mut session = Session::enter(app.mouse())?;
     let (tx, rx) = mpsc::channel();
+    let _waking = Waking::listen(tx.clone());
     let stop = session.stop.clone();
     session.reader = Some(std::thread::spawn(move || listen(term::read_byte, &tx, &stop)));
     drive(&mut app, &rx, &mut io::stdout(), || (term::width(), term::height()))?;
@@ -198,6 +202,9 @@ fn drive<A: App + ?Sized>(
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         };
         for event in first.into_iter().chain(rx.try_iter()) {
+            if event == Event::Wake {
+                WOKEN.store(false, Ordering::SeqCst);
+            }
             if event == Event::Key(Key::Ctrl('c')) || app.event(&event) == Flow::Quit {
                 return Ok(());
             }
@@ -210,6 +217,97 @@ fn drive<A: App + ?Sized>(
                 return Ok(());
             }
         }
+    }
+}
+
+/// Where wakes go while an app is running.
+static WAKE: Mutex<Option<mpsc::Sender<Event>>> = Mutex::new(None);
+/// Whether an [`Event::Wake`] is on its way and not yet handled, so a burst of wakes sends one.
+static WOKEN: AtomicBool = AtomicBool::new(false);
+
+/// Wakes the running app from another thread, so it can show what changed straight away
+/// instead of at its next [`Event::Tick`]. Make one whenever you like (before [`run`] is
+/// fine), clone it into every thread that needs it, and call [`wake`](Waker::wake) when
+/// there's something new: the app gets an [`Event::Wake`] at once. So a dashboard can tick
+/// once a second and still show a result the moment it arrives.
+///
+/// The wake says only that something happened. To hand the result over, send it down your
+/// own channel and read it on `Event::Wake`:
+///
+/// ```no_run
+/// use std::sync::mpsc;
+/// use tinsel::app::{self, App, Event, Flow, Frame, Waker};
+///
+/// struct Status {
+///     results: mpsc::Receiver<String>,
+///     latest: String,
+/// }
+///
+/// impl App for Status {
+///     fn view(&self, frame: &mut Frame) {
+///         frame.print(frame.area(), 0, &self.latest);
+///     }
+///
+///     fn event(&mut self, event: &Event) -> Flow {
+///         if *event == Event::Wake {
+///             self.latest = self.results.try_iter().last().unwrap_or_default();
+///         }
+///         Flow::Continue
+///     }
+///
+///     fn fps(&self) -> u32 {
+///         1
+///     }
+/// }
+///
+/// let (tx, rx) = mpsc::channel();
+/// let waker = Waker::new();
+/// std::thread::spawn(move || {
+///     tx.send("all healthy".to_string()).unwrap();
+///     waker.wake();
+/// });
+/// app::run(Status { results: rx, latest: "checking…".into() })?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct Waker {
+    _private: (),
+}
+
+impl Waker {
+    /// A waker for whichever app is running, or the next one to start.
+    pub fn new() -> Self {
+        Waker::default()
+    }
+
+    /// Send the app an [`Event::Wake`]. Wakes that come quicker than the app handles them
+    /// arrive as one; a wake before the app starts arrives as it starts.
+    pub fn wake(&self) {
+        if WOKEN.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if let Some(tx) = WAKE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            let _ = tx.send(Event::Wake);
+        }
+    }
+}
+
+/// Wakes delivered to a running app, for as long as it lives.
+struct Waking;
+
+impl Waking {
+    fn listen(tx: mpsc::Sender<Event>) -> Waking {
+        if WOKEN.load(Ordering::SeqCst) {
+            let _ = tx.send(Event::Wake);
+        }
+        *WAKE.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+        Waking
+    }
+}
+
+impl Drop for Waking {
+    fn drop(&mut self) {
+        *WAKE.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -513,6 +611,39 @@ mod tests {
         }
         let rx = keys(&[]);
         assert!(drive(&mut Recorder::default(), &rx, &mut Broken, || (10, 1)).is_err());
+    }
+
+    #[test]
+    fn wakes_reach_the_app_once_per_burst() {
+        let (tx, rx) = mpsc::channel();
+        let waker = Waker::new();
+        WOKEN.store(false, Ordering::SeqCst);
+        // woken before the app starts: delivered as it starts
+        waker.wake();
+        let waking = Waking::listen(tx);
+        let other = waker.clone();
+        std::thread::spawn(move || {
+            other.wake();
+            other.wake();
+        })
+        .join()
+        .unwrap();
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), [Event::Wake]);
+
+        // once handled, the next wake is sent again
+        let mut app = Recorder {
+            quit_on: Some(Event::Wake),
+            ..Recorder::default()
+        };
+        let (tx2, rx2) = mpsc::channel();
+        tx2.send(Event::Wake).unwrap();
+        drive(&mut app, &rx2, &mut Vec::new(), || (10, 1)).unwrap();
+        waker.wake();
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), [Event::Wake]);
+        drop(waking);
+        WOKEN.store(false, Ordering::SeqCst);
+        waker.wake();
+        assert!(WAKE.lock().unwrap().is_none());
     }
 
     #[test]
