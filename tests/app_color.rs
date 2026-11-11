@@ -1,7 +1,7 @@
 //! The app pieces in full colour. Colour mode is process-wide, so these live in their own
 //! file (Cargo runs each file under `tests/` as a separate process).
 
-use tinsel::app::{Cursor, Frame, Grid, List, Panel, Plot, Rect, Sparkles, Stat, Tabs};
+use tinsel::app::{Cursor, Frame, Grid, List, Modal, Panel, Plot, Rect, Sparkles, Stat, Tabs};
 use tinsel::{ColorMode, Theme, palette, set_color_mode, set_theme};
 
 fn colour() {
@@ -110,4 +110,30 @@ fn the_grid_cursor_is_a_bar_on_a_band_and_quieter_unfocused() {
     assert!(shown.lines()[5].contains("48;2;"));
     assert_ne!(draw(false).lines()[3], shown.lines()[3]);
     assert!(!draw(false).lines()[3].contains(&rose));
+}
+
+#[test]
+fn a_modal_fades_what_is_behind_it_and_casts_a_shadow() {
+    colour();
+    let mut f = Frame::new(30, 9);
+    for row in 0..9 {
+        f.print(f.area(), row, &tinsel::paint(palette::ROSE, &"x".repeat(30)));
+    }
+    let before = f.snapshot();
+    f.render(f.area(), Modal::new(Panel::new("sure?").body("y / n")));
+    let after = f.snapshot();
+    let rose = format!("38;2;{};{};{}", palette::ROSE.0, palette::ROSE.1, palette::ROSE.2);
+    // the top row is all behind: the same text, faded
+    assert_eq!(
+        tinsel::text::strip_ansi(&after.lines()[0]),
+        tinsel::text::strip_ansi(&before.lines()[0])
+    );
+    assert!(before.lines()[0].contains(&rose) && !after.lines()[0].contains(&rose));
+    // and under the modal's bottom edge, a shadow
+    let bottom = after.lines().iter().rposition(|l| l.contains('╰')).unwrap();
+    assert!(
+        after.lines()[bottom + 1].contains("48;2;"),
+        "{:?}",
+        after.lines()[bottom + 1]
+    );
 }
