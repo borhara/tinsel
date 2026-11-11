@@ -87,7 +87,7 @@ impl Widget for str {
 /// Word-wrap styled text to `cols` columns. Words wider than a line are broken by columns
 /// (never inside an escape code), and each line starts by restating whatever styling was
 /// still on at the end of the one before, since every row is drawn from a clean slate.
-fn wrap(s: &str, cols: usize) -> Vec<String> {
+pub(super) fn wrap(s: &str, cols: usize) -> Vec<String> {
     let mut w = Wrap {
         cols: cols.max(1),
         ..Wrap::default()

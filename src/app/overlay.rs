@@ -1,7 +1,10 @@
-//! Things drawn over the rest of an app: modals.
+//! Things drawn over the rest of an app: modals and toasts.
 
+use super::widgets::wrap;
 use super::{Frame, Rect, Widget};
-use crate::style::Rgb;
+use crate::Tone;
+use crate::style::palette::{AMBER, BLUSH, LINE, MUTED, RED, ROSE, TEXT, TRACK};
+use crate::style::{Rgb, mix, paint};
 
 /// How long a modal takes to settle into place, in seconds.
 const ENTRANCE: f32 = 0.18;
@@ -94,6 +97,154 @@ impl Widget for Modal<'_> {
     }
 }
 
+// MARK: - Toasts
+
+/// How long a toast takes to slide in, and out again.
+const SLIDE: f32 = 0.25;
+
+/// Short messages that slide into a corner, stay a few seconds and go: "saved", "couldn't
+/// connect". Keep one in your app, [`push`](Toasts::push) to it from
+/// [`event`](super::App::event), and draw it last, over the area the toasts should sit in
+/// the bottom right of. A line along each one's foot runs down until it goes.
+///
+/// ```
+/// use tinsel::Tone;
+/// use tinsel::app::{Frame, Toasts};
+///
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// let mut toasts = Toasts::new();
+/// toasts.push(Tone::Success, "deployed my-app");
+/// let mut frame = Frame::new(30, 3).at(1.0);
+/// frame.render(frame.area(), &toasts);
+/// assert_eq!(
+///     frame.snapshot().plain(),
+///     "       ╭─────────────────────╮\n       │ ●  deployed my-app  │\n       ╰━━━━━━━━━━━━━━━━─────╯"
+/// );
+/// ```
+#[derive(Clone, Debug)]
+pub struct Toasts {
+    shown: Vec<Toast>,
+    life: f32,
+}
+
+#[derive(Clone, Debug)]
+struct Toast {
+    tone: Tone,
+    text: String,
+    at: f32,
+}
+
+impl Default for Toasts {
+    fn default() -> Self {
+        Toasts::new()
+    }
+}
+
+impl Toasts {
+    /// No toasts yet. Each stays for four seconds unless [`life`](Toasts::life) says.
+    pub fn new() -> Self {
+        Toasts {
+            shown: Vec::new(),
+            life: 4.0,
+        }
+    }
+
+    /// How many seconds each toast stays.
+    pub fn life(mut self, seconds: f32) -> Self {
+        self.life = seconds.max(SLIDE * 2.0);
+        self
+    }
+
+    /// Show a message, marked and coloured by its tone, from now (by [`app::time`](super::time)).
+    pub fn push(&mut self, tone: Tone, text: impl Into<String>) {
+        let now = super::time();
+        self.shown.retain(|t| now - t.at < self.life);
+        self.shown.push(Toast {
+            tone,
+            text: text.into(),
+            at: now,
+        });
+    }
+
+    /// Whether any toast is still showing at `seconds`.
+    pub fn showing(&self, seconds: f32) -> bool {
+        self.shown.iter().any(|t| (t.at..t.at + self.life).contains(&seconds))
+    }
+}
+
+fn tone_look(tone: Tone) -> (&'static str, Rgb) {
+    match tone {
+        Tone::Success => ("●", ROSE),
+        Tone::Info => ("›", BLUSH),
+        Tone::Warn => ("▲", AMBER),
+        Tone::Error => ("✕", RED),
+        Tone::Hint => ("→", MUTED),
+    }
+}
+
+impl Widget for Toasts {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        let now = frame.time();
+        let widest = (area.width * 2 / 5).max(32).min(area.width);
+        let mut bottom = area.y + area.height;
+        // newest at the bottom, older ones stacked above until there's no more room
+        for toast in self.shown.iter().rev() {
+            let age = now - toast.at;
+            if !(0.0..self.life).contains(&age) {
+                continue;
+            }
+            let (mark, color) = tone_look(toast.tone);
+            let inner = widest.saturating_sub(8).max(1);
+            let lines = wrap(&toast.text, inner);
+            let text_w = lines.iter().map(|l| crate::text::width(l)).max().unwrap_or(0);
+            let w = (text_w + 8).min(area.width);
+            let h = lines.len() + 2;
+            if w < 8 || bottom < area.y + h {
+                break;
+            }
+            let y = bottom - h;
+            bottom = y;
+
+            // slides in from the right, and back out at the end
+            let ease = |p: f32| 1.0 - (1.0 - p.clamp(0.0, 1.0)).powi(3);
+            let shown = ease(age / SLIDE).min(ease((self.life - age) / SLIDE));
+            let hidden = ((1.0 - shown) * (w + 1) as f32).round() as usize;
+            let x = area.x + area.width - w + hidden.min(w);
+            let visible = Rect::new(x, y, area.x + area.width - x, h);
+            if visible.width == 0 {
+                continue;
+            }
+
+            let edge = mix(LINE, color, 0.55);
+            let left = 1.0 - age / self.life;
+            let run = ((w - 2) as f32 * left).round() as usize;
+            let rows = std::iter::once(paint(edge, &format!("╭{}╮", "─".repeat(w - 2))))
+                .chain(lines.iter().enumerate().map(|(i, line)| {
+                    let lead = if i == 0 { paint(color, mark) } else { " ".into() };
+                    let pad = " ".repeat(w.saturating_sub(8 + crate::text::width(line)));
+                    format!(
+                        "{} {lead}  {}{pad}  {}",
+                        paint(edge, "│"),
+                        paint(TEXT, line),
+                        paint(edge, "│")
+                    )
+                }))
+                .chain(std::iter::once(format!(
+                    "{}{}{}{}",
+                    paint(edge, "╰"),
+                    paint(color, &"━".repeat(run)),
+                    paint(TRACK, &"─".repeat(w - 2 - run)),
+                    paint(edge, "╯")
+                )));
+            frame.clear(visible);
+            frame.tint(visible, mix(Rgb(20, 16, 18), color, 0.08));
+            for (row, line) in rows.enumerate() {
+                frame.print(visible, row, &line);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +266,40 @@ mod tests {
 
     impl Widget for Unsized {
         fn render(&self, _: Rect, _: &mut Frame) {}
+    }
+
+    #[test]
+    fn toasts_slide_in_stack_and_go() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let mut toasts = Toasts::default().life(3.0);
+        toasts.push(Tone::Error, "couldn't connect to the database server");
+        toasts.push(Tone::Info, "retrying");
+        let drawn = |t: f32| {
+            let mut f = Frame::new(40, 8).at(t);
+            f.render(f.area(), &toasts);
+            f.snapshot().plain()
+        };
+        // not in yet, then all the way in, newest at the bottom and long ones wrapped
+        assert_eq!(drawn(0.0).trim(), "");
+        let settled = drawn(1.0);
+        assert!(
+            settled
+                .lines()
+                .nth(2)
+                .unwrap()
+                .ends_with("│ ✕  couldn't connect to the  │"),
+            "{settled}"
+        );
+        assert!(settled.lines().nth(6).unwrap().contains("›  retrying"), "{settled}");
+        // partway in, cut off at the right edge
+        assert!(drawn(0.1).lines().last().unwrap().trim_start().starts_with('╰'));
+        assert!(!drawn(0.1).contains('╯'));
+        assert!(toasts.showing(2.9) && !toasts.showing(3.0));
+        assert_eq!(drawn(3.5).trim(), "");
+        // too short a screen for both: the newest wins
+        let mut f = Frame::new(40, 4).at(1.0);
+        f.render(f.area(), &toasts);
+        assert!(f.snapshot().plain().contains("retrying") && !f.snapshot().plain().contains("connect"));
     }
 
     #[test]
