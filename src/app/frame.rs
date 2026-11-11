@@ -233,6 +233,47 @@ impl Frame {
         }
     }
 
+    /// Fade part of the screen into the background, so whatever's drawn on top of it (a
+    /// [`Modal`](super::Modal), say) stands out. Without colour it's left as it is.
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(10, 1);
+    /// frame.print(frame.area(), 0, "behind");
+    /// frame.dim(frame.area());
+    /// assert_eq!(frame.snapshot().plain(), "behind");
+    /// ```
+    pub fn dim(&mut self, area: Rect) {
+        if crate::style::color_mode() == crate::style::ColorMode::None {
+            return;
+        }
+        let back = if crate::style::theme() == crate::style::Theme::Light {
+            255.0
+        } else {
+            0.0
+        };
+        let fade = |ink: Ink, keep: f32| match ink {
+            Ink::Rgb(r, g, b) => {
+                let f = |c: u8| (c as f32 * keep + back * (1.0 - keep)).round() as u8;
+                Ink::Rgb(f(r), f(g), f(b))
+            }
+            other => other,
+        };
+        let area = area.intersect(self.area());
+        for y in area.y..area.y + area.height {
+            for cell in &mut self.cells[y * self.width + area.x..y * self.width + area.x + area.width] {
+                let s = &mut cell.style;
+                // colours the frame knows are faded by hand; the terminal's own, with DIM
+                if !matches!(s.fg, Ink::Rgb(..)) {
+                    s.attrs |= DIM;
+                }
+                s.fg = fade(s.fg, 0.4);
+                s.bg = fade(s.bg, 0.5);
+            }
+        }
+    }
+
     fn fill(&mut self, area: Rect, cell: Cell) {
         let area = area.intersect(self.area());
         if area.is_empty() {

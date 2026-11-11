@@ -366,6 +366,13 @@ impl Widget for Grid<'_> {
             }
         }
     }
+
+    /// Every column in full, and every row.
+    fn size(&self) -> Option<(usize, usize)> {
+        let widths = self.widths(&self.headers());
+        let inner = widths.iter().sum::<usize>() + 3 * widths.len().saturating_sub(1);
+        Some((inner + 2, self.rows.len().max(1) + 2))
+    }
 }
 
 /// Placeholder rows while the real ones load: a bar per column, catching a light that
@@ -421,6 +428,7 @@ mod tests {
     fn widths_follow_limits_and_sort_marks() {
         let grid = Grid::new(["a", "bb"]).row(["long cell", "x"]).max_width(0, 4).sorted(1);
         assert_eq!(grid.widths(&grid.headers()), [4, 4]);
+        assert_eq!(grid.size(), Some((13, 3)));
         assert_eq!(drawn(14, 3, grid), "  a      bb ▲\n  ┈┈┈┈┈┈┈┈┈┈┈\n  lon…   x");
     }
 

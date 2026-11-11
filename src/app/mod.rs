@@ -64,6 +64,7 @@ mod frame;
 mod grid;
 mod input;
 mod layout;
+mod overlay;
 mod widgets;
 
 use std::io::{self, Write};
@@ -76,6 +77,7 @@ pub use frame::Frame;
 pub use grid::{Cursor, Grid};
 pub use input::{Key, Mouse, MouseKind};
 pub use layout::{Rect, Size};
+pub use overlay::Modal;
 pub use widgets::{List, Panel, Plot, Sparkles, Stat, Tabs, Widget, big, hints};
 
 use crate::block::Block;
@@ -165,6 +167,7 @@ fn drive<A: App + ?Sized>(
     mut screen: impl FnMut() -> (usize, usize),
 ) -> io::Result<()> {
     let start = Instant::now();
+    let _clock = Clock::start(start);
     let tick = Duration::from_secs_f64(1.0 / app.fps().clamp(1, 240) as f64);
     let mut next_tick = start + tick;
     let mut size = screen();
@@ -208,6 +211,37 @@ fn drive<A: App + ?Sized>(
             }
         }
     }
+}
+
+thread_local! {
+    static STARTED: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The running app's clock, for [`time`]; stopped however the loop ends.
+struct Clock;
+
+impl Clock {
+    fn start(at: Instant) -> Clock {
+        STARTED.with(|s| s.set(Some(at)));
+        Clock
+    }
+}
+
+impl Drop for Clock {
+    fn drop(&mut self) {
+        STARTED.with(|s| s.set(None));
+    }
+}
+
+/// Seconds since the app started, on the same clock as [`Frame::time`], so something that
+/// happens in [`App::event`] can be animated from that moment in [`App::view`] (a
+/// [`Modal`] rising into place). 0 when no app is running, as in tests.
+///
+/// ```
+/// assert_eq!(tinsel::app::time(), 0.0);
+/// ```
+pub fn time() -> f32 {
+    STARTED.with(|s| s.get()).map_or(0.0, |at| at.elapsed().as_secs_f32())
 }
 
 /// One frame of an app at `width` by `height`, as text: for tests, and for printing what a
