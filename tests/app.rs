@@ -125,15 +125,21 @@ fn a_grid_scrolls_sideways_a_column_at_a_time() {
     };
     assert!(!cursor.scroll_left());
     assert_eq!(draw(&cursor).lines().next(), Some("  service     versio"));
+    assert_eq!(
+        draw(&cursor).lines().nth(1),
+        Some("  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈›"),
+        "more to the right"
+    );
     assert!(cursor.scroll_right());
     assert_eq!(draw(&cursor).lines().next(), Some("  version   env"));
+    assert_eq!(draw(&cursor).lines().nth(1), Some(" ‹┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈›"));
     assert_eq!(draw(&cursor).lines().nth(2), Some("› v1.0      producti"));
-    // the last step lines the last column up with the right edge, and goes no further
+    // everything from the last column on fits, so there's nowhere further to go
     assert!(cursor.scroll_right());
-    assert_eq!(draw(&cursor).lines().nth(2), Some("› .0      production"));
+    assert_eq!(draw(&cursor).lines().next(), Some("  env"));
+    assert_eq!(draw(&cursor).lines().nth(2), Some("› production"));
     assert!(!cursor.scroll_right());
     assert_eq!(cursor.column(), 2);
-    assert!(cursor.scroll_left());
-    assert!(cursor.scroll_left());
+    assert!(cursor.scroll_left() && cursor.scroll_left() && !cursor.scroll_left());
     assert_eq!(draw(&cursor).lines().next(), Some("  service     versio"));
 }

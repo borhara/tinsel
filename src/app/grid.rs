@@ -299,10 +299,9 @@ impl Widget for Grid<'_> {
             area.height,
         );
 
-        // sideways: scroll by whole columns, but never past the right edge of the last one
+        // sideways: a whole column at a time, until everything from there on fits
         let widths = self.widths(&headers);
         let inner = widths.iter().sum::<usize>() + 3 * widths.len().saturating_sub(1);
-        let furthest = inner.saturating_sub(content.width);
         let starts: Vec<usize> = widths
             .iter()
             .scan(0, |at, w| {
@@ -311,9 +310,12 @@ impl Widget for Grid<'_> {
                 Some(start)
             })
             .collect();
-        let last_column = starts.iter().position(|&s| s >= furthest).unwrap_or(0);
+        let last_column = starts
+            .iter()
+            .position(|&s| inner - s <= content.width)
+            .unwrap_or(starts.len().saturating_sub(1));
         let column = self.cursor.map_or(0, |c| c.column.min(last_column));
-        let skip = starts.get(column).map_or(0, |&s| s.min(furthest));
+        let skip = starts.get(column).copied().unwrap_or(0);
 
         let mut top = self.cursor.map_or(0, |c| c.top.get());
         if let Some(chosen) = chosen {
@@ -332,6 +334,16 @@ impl Widget for Grid<'_> {
         for (row, i) in [(0, 0), (1, 1)] {
             if let Some(l) = line(i) {
                 frame.print_from(content, row, &l, skip);
+            }
+        }
+        // where there's more to either side, an arrow at that end of the rule says so
+        if area.height > 1 && content.width > 0 {
+            if skip > 0 {
+                frame.print(Rect::new(area.x + 1, area.y + 1, 1, 1), 0, &paint(ROSE, "‹"));
+            }
+            if inner - skip > content.width {
+                let right = content.x + content.width - 1;
+                frame.print(Rect::new(right, area.y + 1, 1, 1), 0, &paint(ROSE, "›"));
             }
         }
 
