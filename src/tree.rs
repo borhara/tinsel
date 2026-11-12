@@ -8,8 +8,8 @@ use crate::style::palette::{LINE, ROSE, SOFT, TEXT};
 ///
 /// ```no_run
 /// use tinsel::Tree;
-/// Tree::new("dot")
-///     .child(Tree::new("tube").leaf("ios").leaf("macos"))
+/// Tree::new("my-app")
+///     .child(Tree::new("core").leaf("src").leaf("tests"))
 ///     .leaf("README.md")
 ///     .print();
 /// ```

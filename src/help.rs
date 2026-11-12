@@ -54,7 +54,7 @@ struct Group {
 ///     .command("logs [--since 5m]", "recent logs")
 ///     .flag("--region <NAME>", "where to deploy (default: eu-west-2)")
 ///     .flag("-q, --quiet", "only print problems")
-///     .example("deploy my-app --region us-east-1", "ship to Virginia")
+///     .example("deploy my-app --region us-east-1", "ship to the US east region")
 ///     .footer("docs: https://example.com/deploy")
 ///     .print();
 /// ```
