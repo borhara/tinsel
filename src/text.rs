@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(width("\x1b[38;2;1;2;3mhi\x1b[39m"), 2);
         assert_eq!(width("\x1b]8;;https://x.y\x1b\\link\x1b]8;;\x1b\\"), 4);
         assert_eq!(width("日本"), 4);
-        assert_eq!(width("tube · iPhone"), 13);
+        assert_eq!(width("core · server"), 13);
     }
 
     #[test]

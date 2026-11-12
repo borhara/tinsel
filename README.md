@@ -166,7 +166,7 @@ let port = prompt::Input::new("Port")
     .validate(|s| s.parse::<u16>().map(|_| ()).map_err(|_| "a port is 1-65535".into()))
     .ask()?;
 let replicas: u32 = prompt::number("Replicas", Some(3))?;
-let launch = prompt::date("Launch on", None)?;                    // a calendar
+let live_on = prompt::date("Go live on", None)?;                  // a calendar
 let notes = prompt::editor("Release notes", "## What's new\n")?;   // opens $EDITOR
 let region = prompt::Input::new("Region").suggestions(&regions).ask()?;  // Tab completes
 let path = prompt::Input::new("Config").paths().ask()?;                  // like a shell
@@ -197,7 +197,7 @@ tinsel::Help::new("deploy", "ship an app to the cloud")
     .usage("deploy [OPTIONS] <APP>")
     .command("status", "what's running where")
     .flag("--region <NAME>", "where to deploy")
-    .example("deploy my-app --region us-east-1", "ship to Virginia")
+    .example("deploy my-app --region us-east-1", "ship to the US east region")
     .animate();
 ```
 
@@ -349,8 +349,8 @@ Force plain output, then assert on exact text:
 #[test]
 fn status_table() {
     tinsel::set_color_mode(tinsel::ColorMode::None);
-    let table = tinsel::Table::new(["app", "size"]).row(["tube", "34 MB"]);
-    assert_eq!(table.lines().plain().lines().last(), Some("  tube   34 MB"));
+    let table = tinsel::Table::new(["app", "size"]).row(["core", "34 MB"]);
+    assert_eq!(table.lines().plain().lines().last(), Some("  core   34 MB"));
 }
 ```
 

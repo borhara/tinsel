@@ -71,12 +71,9 @@ fn sub_steps_that_had_trouble_stay_visible() {
     let mac = build.step("macos");
     build.start();
     mac.start();
-    mac.warn("notarisation slow");
+    mac.warn("signing slow");
     build.done();
-    assert_eq!(
-        squashed(&live)[3..],
-        ["● Build 0.0s", "▲ macos 0.0s", "notarisation slow"]
-    );
+    assert_eq!(squashed(&live)[3..], ["● Build 0.0s", "▲ macos 0.0s", "signing slow"]);
 }
 
 #[test]

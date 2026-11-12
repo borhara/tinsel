@@ -12,15 +12,15 @@ fn plain() {
 fn table_sizes_columns_and_right_aligns_numbers() {
     plain();
     let table = Table::new(["app", "size", "builds"])
-        .row(["tube", "34.2 MB", "128"])
-        .row(["music", "12.8 MB", "9"]);
+        .row(["core", "34.2 MB", "128"])
+        .row(["queue", "12.8 MB", "9"]);
     assert_eq!(
         table.lines().plain(),
         [
             "  app        size   builds",
             "  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈",
-            "  tube    34.2 MB      128",
-            "  music   12.8 MB        9",
+            "  core    34.2 MB      128",
+            "  queue   12.8 MB        9",
         ]
         .join("\n")
     );
@@ -29,12 +29,19 @@ fn table_sizes_columns_and_right_aligns_numbers() {
 #[test]
 fn tree_draws_guides() {
     plain();
-    let tree = Tree::new("dot")
-        .child(Tree::new("tube").leaf("ios").leaf("macos"))
+    let tree = Tree::new("my-app")
+        .child(Tree::new("core").leaf("src").leaf("tests"))
         .leaf("README.md");
     assert_eq!(
         tree.lines().plain(),
-        ["  dot", "  ├─ tube", "  │  ├─ ios", "  │  └─ macos", "  └─ README.md"].join("\n")
+        [
+            "  my-app",
+            "  ├─ core",
+            "  │  ├─ src",
+            "  │  └─ tests",
+            "  └─ README.md"
+        ]
+        .join("\n")
     );
 }
 
@@ -218,7 +225,7 @@ fn table_sorts_by_value_with_units_and_keeps_highlights() {
 fn table_draws_a_border_and_footer() {
     plain();
     let table = Table::new(["app", "n"])
-        .row(["tube", "3"])
+        .row(["core", "3"])
         .footer(["total", "3"])
         .border(tinsel::Border::Rounded);
     assert_eq!(
@@ -227,7 +234,7 @@ fn table_draws_a_border_and_footer() {
             "  ╭──────────────╮",
             "  │   app     n  │",
             "  │   ┈┈┈┈┈┈┈┈┈  │",
-            "  │   tube    3  │",
+            "  │   core    3  │",
             "  │   ┈┈┈┈┈┈┈┈┈  │",
             "  │   total   3  │",
             "  ╰──────────────╯",
@@ -340,7 +347,7 @@ fn table_titles_gaps_and_empty_cells() {
 fn square_tables_are_a_grid() {
     plain();
     let table = Table::new(["app", "n"])
-        .row(["tube", "3"])
+        .row(["core", "3"])
         .row(["x", "12"])
         .footer(["total", "15"])
         .border(tinsel::Border::Square);
@@ -350,7 +357,7 @@ fn square_tables_are_a_grid() {
             "  ┌───────┬────┐",
             "  │ app   │  n │",
             "  ├───────┼────┤",
-            "  │ tube  │  3 │",
+            "  │ core  │  3 │",
             "  │ x     │ 12 │",
             "  ├───────┼────┤",
             "  │ total │ 15 │",

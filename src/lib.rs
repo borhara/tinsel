@@ -67,8 +67,8 @@
 //!
 //! ```
 //! tinsel::set_color_mode(tinsel::ColorMode::None);
-//! let table = tinsel::Table::new(["app", "size"]).row(["tube", "34 MB"]);
-//! assert_eq!(table.lines().plain().lines().last(), Some("  tube   34 MB"));
+//! let table = tinsel::Table::new(["app", "size"]).row(["core", "34 MB"]);
+//! assert_eq!(table.lines().plain().lines().last(), Some("  core   34 MB"));
 //! ```
 //!
 //! [`Live::headless`] gives you a display on a clock you move yourself, so you can check
