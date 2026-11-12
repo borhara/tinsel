@@ -43,6 +43,24 @@
 //! options that can't be picked (and why), a hint and validation, and [`Dropdown`] is for
 //! long lists like versions, with notes and badges and room to type an answer of your own.
 //!
+//! # Testing a flow of questions
+//!
+//! [`script`] answers questions from a list of keys instead of the keyboard, on the current
+//! thread, for as long as the [`Script`] it returns lives. Questions then draw nothing, and
+//! [`Script::answered`] says what each one ended on, so a test can run the real code that
+//! asks them.
+//!
+//! ```
+//! use tinsel::app::Key;
+//! use tinsel::prompt::{self, Select};
+//!
+//! let keys = prompt::script([Key::Down, Key::Enter]);
+//! let picked = Select::new("Deploy to").options(["staging", "production"]).ask()?;
+//! assert_eq!(picked, 1);
+//! assert_eq!(keys.answered(), ["●  Deploy to  production"]);
+//! # Ok::<(), prompt::Error>(())
+//! ```
+//!
 //! # Going back
 //!
 //! For questions asked one after another, `.back()` lets ← go back: the question returns
@@ -254,6 +272,19 @@ struct Frame {
     offscreen: bool,
 }
 
+impl Drop for Ui {
+    fn drop(&mut self) {
+        if self.record && !self.frame.lines.is_empty() {
+            let lines = self.frame.lines.iter().map(|l| text::strip_ansi(l).trim().to_string());
+            SCRIPT.with(|s| {
+                if let Some(s) = s.borrow_mut().as_mut() {
+                    s.answered.extend(lines);
+                }
+            });
+        }
+    }
+}
+
 impl Frame {
     fn draw(&mut self, lines: &[String]) {
         self.lines = lines.to_vec();
@@ -281,15 +312,38 @@ struct Ui {
     keys: Box<dyn FnMut() -> io::Result<Key>>,
     frame: Frame,
     _raw: Option<Raw>,
+    /// Hand the last lines to the running [`Script`] when done.
+    record: bool,
 }
 
 impl Ui {
+    /// The script's keys when one is running on this thread, otherwise the terminal.
+    fn open() -> io::Result<Ui> {
+        if !scripted() {
+            return Ui::terminal();
+        }
+        Ok(Ui {
+            keys: Box::new(|| {
+                SCRIPT
+                    .with(|s| s.borrow_mut().as_mut().and_then(|s| s.keys.pop_front()))
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "the script ran out of keys"))
+            }),
+            frame: Frame {
+                offscreen: true,
+                ..Frame::default()
+            },
+            _raw: None,
+            record: true,
+        })
+    }
+
     fn terminal() -> io::Result<Ui> {
         let raw = Raw::enter()?;
         Ok(Ui {
             keys: Box::new(|| read_key(&mut read_byte)),
             frame: Frame::default(),
             _raw: Some(raw),
+            record: false,
         })
     }
 
@@ -304,6 +358,7 @@ impl Ui {
                 ..Frame::default()
             },
             _raw: None,
+            record: false,
         }
     }
 
@@ -368,8 +423,13 @@ fn problem(why: &str) -> String {
     format!("     {} {}", paint(RED, "✕"), paint(mix(RED, SOFT, 0.3), why))
 }
 
+/// Whether there's someone to ask: a terminal on stdin, or a [`script`] of keys.
+fn interactive() -> bool {
+    scripted() || io::stdin().is_terminal()
+}
+
 fn need_terminal() -> Result<()> {
-    if io::stdin().is_terminal() {
+    if interactive() {
         Ok(())
     } else {
         Err(Error::NotATerminal)
@@ -440,10 +500,10 @@ impl Confirm {
 
     /// Ask the question. Without a terminal, reads the answer from stdin as [`confirm`] does.
     pub fn ask(self) -> Result<bool> {
-        if !io::stdin().is_terminal() {
+        if !interactive() {
             return yes_or_no(&read_piped_line()?, self.default);
         }
-        self.run(&mut Ui::terminal()?)
+        self.run(&mut Ui::open()?)
     }
 
     fn run(&self, ui: &mut Ui) -> Result<bool> {
@@ -611,12 +671,12 @@ impl<'a> Input<'a> {
 
     /// Ask the question.
     pub fn ask(self) -> Result<String> {
-        if !io::stdin().is_terminal() {
+        if !interactive() {
             let value = self.resolve(read_piped_line()?);
             self.check(&value).map_err(Error::Invalid)?;
             return Ok(value);
         }
-        self.run(&mut Ui::terminal()?)
+        self.run(&mut Ui::open()?)
     }
 
     fn run(&self, ui: &mut Ui) -> Result<String> {
@@ -1511,13 +1571,13 @@ impl<'a> Select<'a> {
 
     /// Ask the question.
     pub fn ask(self) -> Result<usize> {
-        if !io::stdin().is_terminal() {
+        if !interactive() {
             return self.unasked();
         }
         if !(0..self.choices.list.len()).any(|i| self.choices.enabled(i)) {
             return Err(Error::NoOptions);
         }
-        self.run(&mut Ui::terminal()?)
+        self.run(&mut Ui::open()?)
     }
 
     /// The answer without a terminal: the default, if there is one.
@@ -1649,13 +1709,13 @@ impl<'a> MultiSelect<'a> {
 
     /// Ask the question.
     pub fn ask(self) -> Result<Vec<usize>> {
-        if !io::stdin().is_terminal() {
+        if !interactive() {
             return self.unasked();
         }
         if self.choices.list.is_empty() {
             return self.check(&[]).map(|()| Vec::new()).map_err(|_| Error::NoOptions);
         }
-        self.run(&mut Ui::terminal()?)
+        self.run(&mut Ui::open()?)
     }
 
     /// The answer without a terminal: the default, if one was given.
@@ -1833,13 +1893,13 @@ impl<'a> Dropdown<'a> {
 
     /// Ask the question.
     pub fn ask(self) -> Result<String> {
-        if !io::stdin().is_terminal() {
+        if !interactive() {
             return self.unasked();
         }
         if !self.custom && !(0..self.choices.list.len()).any(|i| self.choices.enabled(i)) {
             return Err(Error::NoOptions);
         }
-        self.run(&mut Ui::terminal()?)
+        self.run(&mut Ui::open()?)
     }
 
     /// The answer without a terminal: the default, if there is one.
@@ -2036,14 +2096,14 @@ impl FromStr for Date {
 pub fn date(question: &str, default: Option<Date>) -> Result<Date> {
     let today = Date::today();
     let start = default.unwrap_or(today);
-    if !io::stdin().is_terminal() {
+    if !interactive() {
         let line = read_piped_line()?;
         if line.trim().is_empty() {
             return Ok(start);
         }
         return line.parse().map_err(Error::Invalid);
     }
-    let mut ui = Ui::terminal()?;
+    let mut ui = Ui::open()?;
     let mut at = start;
     loop {
         let mut lines = vec![format!("{}  {}", ask(question), paint(BLUSH, &at.to_string()))];
@@ -2148,9 +2208,156 @@ pub fn editor(question: &str, initial: &str) -> Result<String> {
     Ok(text)
 }
 
+// MARK: - Scripts, for tests
+
+struct Scripted {
+    keys: std::collections::VecDeque<Key>,
+    answered: Vec<String>,
+}
+
+thread_local! {
+    static SCRIPT: std::cell::RefCell<Option<Scripted>> = const { std::cell::RefCell::new(None) };
+}
+
+fn scripted() -> bool {
+    SCRIPT.with(|s| s.borrow().is_some())
+}
+
+impl From<crate::app::Key> for Key {
+    fn from(key: crate::app::Key) -> Key {
+        use crate::app::Key as K;
+        match key {
+            K::Char(' ') => Key::Space,
+            K::Char(c) => Key::Char(c),
+            K::Ctrl('c') => Key::Interrupt,
+            K::Ctrl(c) => Key::Ctrl(c),
+            K::Enter => Key::Enter,
+            K::Tab => Key::Tab,
+            K::Backspace => Key::Backspace,
+            K::Delete => Key::Delete,
+            K::Esc => Key::Esc,
+            K::Up => Key::Up,
+            K::Down => Key::Down,
+            K::Left => Key::Left,
+            K::Right => Key::Right,
+            K::Home => Key::Home,
+            K::End => Key::End,
+            K::PageUp => Key::PageUp,
+            K::PageDown => Key::PageDown,
+            K::BackTab | K::F(_) => Key::Other,
+        }
+    }
+}
+
+/// Answer the questions asked on this thread from `keys` instead of the keyboard, until the
+/// returned [`Script`] is dropped. For tests of code that asks questions.
+///
+/// Questions behave as they do in a terminal (a piped stdin is ignored) but draw nothing.
+/// A question that needs a key after the last one fails with an [`Error::Io`] of kind
+/// `UnexpectedEof`. [`editor`] still needs a terminal. [`typed`] turns text into keys.
+///
+/// ```
+/// use tinsel::app::Key;
+/// use tinsel::prompt;
+///
+/// let mut keys = prompt::typed("v2");
+/// keys.push(Key::Enter);
+/// let _script = prompt::script(keys);
+/// assert_eq!(prompt::input("Version", None)?, "v2");
+/// # Ok::<(), prompt::Error>(())
+/// ```
+pub fn script(keys: impl IntoIterator<Item = crate::app::Key>) -> Script {
+    let keys = keys.into_iter().map(Key::from).collect();
+    SCRIPT.with(|s| {
+        *s.borrow_mut() = Some(Scripted {
+            keys,
+            answered: Vec::new(),
+        })
+    });
+    Script {
+        _thread: std::marker::PhantomData,
+    }
+}
+
+/// The keys to type `text`, one per character.
+pub fn typed(text: &str) -> Vec<crate::app::Key> {
+    text.chars().map(crate::app::Key::Char).collect()
+}
+
+/// Questions on this thread answered from a list of keys; made by [`script`]. Dropping it
+/// gives the keyboard back.
+#[must_use = "the script stops when this is dropped"]
+pub struct Script {
+    // tied to the thread whose questions it answers
+    _thread: std::marker::PhantomData<*const ()>,
+}
+
+impl Script {
+    /// What each question showed when it was done, without colour or indent, in the order
+    /// they were asked: `●  Question  answer` for an answer, `✕  Question  cancelled`
+    /// for Esc or Ctrl-C. A question left with ← shows nothing, so it isn't listed.
+    pub fn answered(&self) -> Vec<String> {
+        SCRIPT.with(|s| s.borrow().as_ref().map(|s| s.answered.clone()).unwrap_or_default())
+    }
+
+    /// How many keys haven't been read yet.
+    pub fn remaining(&self) -> usize {
+        SCRIPT.with(|s| s.borrow().as_ref().map_or(0, |s| s.keys.len()))
+    }
+}
+
+impl Drop for Script {
+    fn drop(&mut self) {
+        SCRIPT.with(|s| *s.borrow_mut() = None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_script_answers_a_flow_of_questions_and_goes_back() {
+        use crate::app::Key as K;
+        let mut keys = vec![K::Down, K::Enter, K::Left, K::Enter, K::Char(' '), K::Enter];
+        keys.extend(crate::prompt::typed("v2"));
+        keys.extend([K::Enter, K::Char('y')]);
+        let script = script(keys);
+        let env = Select::new("Env").options(["dev", "sit"]).ask().unwrap();
+        assert_eq!(env, 1);
+        assert!(matches!(
+            MultiSelect::new("Parts").options(["a", "b"]).back().ask(),
+            Err(Error::Back)
+        ));
+        assert_eq!(
+            Select::new("Env").options(["dev", "sit"]).default(env).ask().unwrap(),
+            1
+        );
+        assert_eq!(MultiSelect::new("Parts").options(["a", "b"]).ask().unwrap(), [0]);
+        assert_eq!(input("Version", None).unwrap(), "v2");
+        assert!(confirm("Go?", false).unwrap());
+        assert_eq!(script.remaining(), 0);
+        assert_eq!(
+            script.answered(),
+            [
+                "●  Env  sit",
+                "●  Env  sit",
+                "●  Parts  a",
+                "●  Version  v2",
+                "●  Go?  yes"
+            ]
+        );
+        assert!(matches!(confirm("More?", false), Err(Error::Io(e)) if e.kind() == io::ErrorKind::UnexpectedEof));
+        drop(script);
+        assert!(!scripted());
+    }
+
+    #[test]
+    fn ctrl_c_in_a_script_cancels() {
+        let script = script([crate::app::Key::Ctrl('c')]);
+        assert!(matches!(confirm("Go?", true), Err(Error::Cancelled)));
+        assert_eq!(script.answered(), ["✕  Go?  cancelled"]);
+    }
 
     #[test]
     fn fuzzy_matches_letters_in_order() {

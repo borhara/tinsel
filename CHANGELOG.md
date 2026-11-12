@@ -6,6 +6,9 @@ First release.
 
 - `prompt::confirm` reads a piped answer (`y`, `yes`, `n`, `no`, or an empty line for the
   default) when stdin isn't a terminal, so scripts can answer it
+- `prompt::script` answers questions from a list of keys on the current thread, drawing
+  nothing, so tests can run code that asks them; `Script::answered` lists what each question
+  ended on, and `prompt::typed` turns text into keys
 - Going back in multi-question flows: questions asked with `.back()` return
   `prompt::Error::Back` when ← is pressed (in typed answers, from the start of the line);
   `prompt::Confirm` builder and `Input::back`
