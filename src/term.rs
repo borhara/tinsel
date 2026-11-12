@@ -403,10 +403,46 @@ pub(crate) fn push_back_input(_: &[u8]) {}
 
 // MARK: - Ctrl-C
 
+/// What Ctrl-C does while tinsel draws something live: a spinner, progress bar, steps, a
+/// [`Region`](crate::Region) or the help pager. Set with [`set_ctrl_c`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CtrlC {
+    /// Put the terminal back and exit with code 130. The default.
+    Exit,
+    /// The same, printing this line on the way out, so the program can say what was stopped.
+    ExitWith(String),
+    /// Leave Ctrl-C to the program's own handler, so it can stop its work its own way. The
+    /// terminal is put back when the drawing ends, as usual.
+    Leave,
+}
+
+static LEAVE_CTRL_C: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The line to print on the way out, leaked so the signal handler only ever reads it.
+static CTRL_C_LINE: std::sync::atomic::AtomicPtr<Vec<u8>> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Choose what Ctrl-C does while tinsel draws something live. Call it early in `main`.
+///
+/// ```
+/// tinsel::set_ctrl_c(tinsel::CtrlC::ExitWith("stopped: nothing was changed".into()));
+/// ```
+pub fn set_ctrl_c(how: CtrlC) {
+    use std::sync::atomic::Ordering::SeqCst;
+    LEAVE_CTRL_C.store(how == CtrlC::Leave, SeqCst);
+    let line = match how {
+        CtrlC::ExitWith(line) => Box::into_raw(Box::new(format!("{line}\n").into_bytes())),
+        CtrlC::Exit | CtrlC::Leave => std::ptr::null_mut(),
+    };
+    // the old line is left alone: the handler may be reading it right now
+    CTRL_C_LINE.store(line, SeqCst);
+}
+
 /// While tinsel has the cursor hidden or the terminal in a special mode, Ctrl-C would leave
 /// the user's shell that way. Returns the previous handler so it can be put back afterwards.
 #[cfg(unix)]
 pub(crate) fn guard_interrupt() -> Option<usize> {
+    if LEAVE_CTRL_C.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
     // SAFETY: on_interrupt only calls async-signal-safe functions.
     let prev = unsafe { signal(SIGINT, on_interrupt as extern "C" fn(i32) as usize) };
     (prev != SIG_ERR).then_some(prev)
@@ -476,7 +512,12 @@ extern "C" fn on_interrupt(_: i32) {
         if HAVE_SAVED.load(std::sync::atomic::Ordering::SeqCst) {
             tcsetattr(0, TCSANOW, (&raw const SAVED_TERMIOS).cast());
         }
-        write(crate::output::fd_now(), msg.as_ptr().cast(), msg.len());
+        let fd = crate::output::fd_now();
+        write(fd, msg.as_ptr().cast(), msg.len());
+        let line = CTRL_C_LINE.load(std::sync::atomic::Ordering::SeqCst);
+        if !line.is_null() {
+            write(fd, (*line).as_ptr().cast(), (*line).len());
+        }
         _exit(130)
     }
 }

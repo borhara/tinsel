@@ -64,7 +64,8 @@
 //! # Going back
 //!
 //! For questions asked one after another, `.back()` lets ← go back: the question returns
-//! [`Error::Back`] and you ask the one before it again.
+//! [`Error::Back`] and you ask the one before it again. → always answers, as Enter does (in
+//! typed answers, from the end of the line), so a flow can be stepped through with the arrows.
 //!
 //! ```no_run
 //! use tinsel::prompt::{Error, Input, Select};
@@ -324,8 +325,8 @@ impl Ui {
         }
         Ok(Ui {
             keys: Box::new(|| {
-                SCRIPT
-                    .with(|s| s.borrow_mut().as_mut().and_then(|s| s.keys.pop_front()))
+                next_scripted()
+                    .map(Key::from)
                     .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "the script ran out of keys"))
             }),
             frame: Frame {
@@ -436,11 +437,19 @@ fn need_terminal() -> Result<()> {
     }
 }
 
-/// A line read from a pipe or file, for when there's no one to ask.
+/// A line read from a pipe or file, for when there's no one to ask. The end of the input
+/// reads as an empty line.
 fn read_piped_line() -> Result<String> {
+    Ok(read_piped()?.unwrap_or_default())
+}
+
+/// A line read from a pipe or file, or `None` at the end of the input.
+fn read_piped() -> Result<Option<String>> {
     let mut s = String::new();
-    io::stdin().read_line(&mut s)?;
-    Ok(s.trim_end_matches(['\r', '\n']).to_string())
+    if io::stdin().read_line(&mut s)? == 0 {
+        return Ok(None);
+    }
+    Ok(Some(s.trim_end_matches(['\r', '\n']).to_string()))
 }
 
 // MARK: - Yes or no
@@ -474,6 +483,7 @@ pub struct Confirm {
     question: String,
     default: bool,
     back: bool,
+    at_end: Option<bool>,
 }
 
 impl Confirm {
@@ -483,10 +493,11 @@ impl Confirm {
             question: question.into(),
             default: false,
             back: false,
+            at_end: None,
         }
     }
 
-    /// The answer when Enter is pressed (or an empty line is piped in).
+    /// The answer when Enter or → is pressed (or an empty line is piped in).
     pub fn default(mut self, yes: bool) -> Self {
         self.default = yes;
         self
@@ -498,10 +509,20 @@ impl Confirm {
         self
     }
 
+    /// The answer when there's no terminal and the piped input has already ended, so a
+    /// script that runs out of answers can say no. The [`default`](Confirm::default) unless set.
+    pub fn end_of_input(mut self, yes: bool) -> Self {
+        self.at_end = Some(yes);
+        self
+    }
+
     /// Ask the question. Without a terminal, reads the answer from stdin as [`confirm`] does.
     pub fn ask(self) -> Result<bool> {
         if !interactive() {
-            return yes_or_no(&read_piped_line()?, self.default);
+            return match read_piped()? {
+                Some(line) => yes_or_no(&line, self.default),
+                None => Ok(self.at_end.unwrap_or(self.default)),
+            };
         }
         self.run(&mut Ui::open()?)
     }
@@ -518,6 +539,7 @@ impl Confirm {
         loop {
             let answer = match ui.key()? {
                 Key::Char('y' | 'Y') => true,
+                Key::Right => self.default,
                 Key::Char('n' | 'N') => false,
                 Key::Enter => self.default,
                 Key::Left if self.back => return Err(ui.back()),
@@ -559,6 +581,7 @@ type Completer<'a> = Box<dyn Fn(&str) -> Vec<String> + 'a>;
 pub struct Input<'a> {
     question: String,
     default: Option<String>,
+    initial: Option<String>,
     placeholder: Option<String>,
     secret: bool,
     validate: Option<Validator<'a>>,
@@ -572,6 +595,7 @@ impl<'a> Input<'a> {
         Input {
             question: question.into(),
             default: None,
+            initial: None,
             placeholder: None,
             secret: false,
             validate: None,
@@ -616,6 +640,18 @@ impl<'a> Input<'a> {
     /// The answer if Enter is pressed without typing anything, shown dim until you type.
     pub fn default(mut self, value: impl Into<String>) -> Self {
         self.default = Some(value.into());
+        self
+    }
+
+    /// Text already typed in when the question opens, with the cursor at its end, to edit or
+    /// take as it is: the current value, say. Without a terminal, an empty line takes it.
+    ///
+    /// ```no_run
+    /// let name = tinsel::prompt::Input::new("Name").initial("api-gateway").ask()?;
+    /// # Ok::<(), tinsel::prompt::Error>(())
+    /// ```
+    pub fn initial(mut self, text: impl Into<String>) -> Self {
+        self.initial = Some(text.into());
         self
     }
 
@@ -672,7 +708,11 @@ impl<'a> Input<'a> {
     /// Ask the question.
     pub fn ask(self) -> Result<String> {
         if !interactive() {
-            let value = self.resolve(read_piped_line()?);
+            let line = read_piped_line()?;
+            let value = match &self.initial {
+                Some(initial) if line.is_empty() => initial.clone(),
+                _ => self.resolve(line),
+            };
             self.check(&value).map_err(Error::Invalid)?;
             return Ok(value);
         }
@@ -681,6 +721,9 @@ impl<'a> Input<'a> {
 
     fn run(&self, ui: &mut Ui) -> Result<String> {
         let mut edit = LineEdit::default();
+        if let Some(initial) = &self.initial {
+            edit.set(initial);
+        }
         let mut trouble: Option<String> = None;
         let dots = |n: usize| "•".repeat(n);
         // Tab cycles through what was offered for the text as it was before the first Tab
@@ -751,7 +794,12 @@ impl<'a> Input<'a> {
                 lines.push(format!("     {}{}", list.join("  "), paint(MUTED, &more)));
             }
             ui.draw(&lines);
-            match ui.key()? {
+            let key = match ui.key()? {
+                // → answers from the end of the line, once there's no suggestion left to take
+                Key::Right if edit.at == edit.text.len() && ghost.is_empty() => Key::Enter,
+                key => key,
+            };
+            match key {
                 Key::Enter => {
                     let value = self.resolve(edit.text.clone());
                     match self.check(&value) {
@@ -1607,7 +1655,7 @@ impl<'a> Select<'a> {
             lines.push(self.choices.keys(hint));
             ui.draw(&lines);
             match ui.key()? {
-                Key::Enter => {
+                Key::Enter | Key::Right => {
                     if let Some(i) = picker.current() {
                         match self.check(i) {
                             Ok(()) => {
@@ -1777,7 +1825,7 @@ impl<'a> MultiSelect<'a> {
                     toggle_all(&mut picked, picker.shown.iter().map(|(i, _)| *i).collect());
                     trouble = None;
                 }
-                Key::Enter => {
+                Key::Enter | Key::Right => {
                     let chosen: Vec<usize> = (0..picked.len()).filter(|&i| picked[i]).collect();
                     match self.check(&chosen) {
                         Ok(()) => {
@@ -1930,7 +1978,7 @@ impl<'a> Dropdown<'a> {
             lines.push(self.choices.keys(hint));
             ui.draw(&lines);
             match ui.key()? {
-                Key::Enter => {
+                Key::Enter | Key::Right => {
                     let value = match picker.current() {
                         Some(i) => self.choices.list[i].label.clone(),
                         None if picker.on_custom() => picker.filter.clone(),
@@ -2211,7 +2259,7 @@ pub fn editor(question: &str, initial: &str) -> Result<String> {
 // MARK: - Scripts, for tests
 
 struct Scripted {
-    keys: std::collections::VecDeque<Key>,
+    keys: std::collections::VecDeque<crate::app::Key>,
     answered: Vec<String>,
 }
 
@@ -2219,8 +2267,13 @@ thread_local! {
     static SCRIPT: std::cell::RefCell<Option<Scripted>> = const { std::cell::RefCell::new(None) };
 }
 
-fn scripted() -> bool {
+pub(crate) fn scripted() -> bool {
     SCRIPT.with(|s| s.borrow().is_some())
+}
+
+/// The running script's next key, if there's a script and it has one left.
+pub(crate) fn next_scripted() -> Option<crate::app::Key> {
+    SCRIPT.with(|s| s.borrow_mut().as_mut().and_then(|s| s.keys.pop_front()))
 }
 
 impl From<crate::app::Key> for Key {
@@ -2267,7 +2320,7 @@ impl From<crate::app::Key> for Key {
 /// # Ok::<(), prompt::Error>(())
 /// ```
 pub fn script(keys: impl IntoIterator<Item = crate::app::Key>) -> Script {
-    let keys = keys.into_iter().map(Key::from).collect();
+    let keys = keys.into_iter().collect();
     SCRIPT.with(|s| {
         *s.borrow_mut() = Some(Scripted {
             keys,
@@ -2443,6 +2496,41 @@ mod tests {
         s.chars()
             .map(|c| if c == ' ' { Key::Space } else { Key::Char(c) })
             .collect()
+    }
+
+    #[test]
+    fn right_answers_like_enter() {
+        assert!(
+            Confirm::new("Go?")
+                .default(true)
+                .run(&mut Ui::script(&[Key::Right]))
+                .unwrap()
+        );
+        let env = Select::new("Env").options(["dev", "sit"]);
+        assert_eq!(env.run(&mut Ui::script(&[Key::Down, Key::Right])).unwrap(), 1);
+        let parts = MultiSelect::new("Parts").options(["a", "b"]);
+        assert_eq!(parts.run(&mut Ui::script(&[Key::Space, Key::Right])).unwrap(), [0]);
+        // in typed text → moves first, and answers only from the end of the line
+        let mut keys = typed("v2");
+        keys.extend([Key::Home, Key::Right, Key::Char('.'), Key::Right, Key::Right]);
+        assert_eq!(Input::new("Version").run(&mut Ui::script(&keys)).unwrap(), "v.2");
+        // with a suggestion showing, → takes it, and the next → answers
+        let region = Input::new("Region").suggestions(&["eu-west-1"]);
+        let mut keys = typed("eu");
+        keys.extend([Key::Right, Key::Right]);
+        assert_eq!(region.run(&mut Ui::script(&keys)).unwrap(), "eu-west-1");
+    }
+
+    #[test]
+    fn initial_text_can_be_taken_or_edited() {
+        let name = Input::new("Name").initial("api").default("web");
+        let mut ui = Ui::script(&[Key::Enter]);
+        assert_eq!(name.run(&mut ui).unwrap(), "api");
+        assert_eq!(ui.shown(), ["  ●  Name  api"]);
+        let keys = [Key::Backspace, Key::Char('p'), Key::Enter];
+        assert_eq!(name.run(&mut Ui::script(&keys)).unwrap(), "app");
+        // cleared, the default is the answer as usual
+        assert_eq!(name.run(&mut Ui::script(&[Key::Ctrl('u'), Key::Enter])).unwrap(), "web");
     }
 
     #[test]
