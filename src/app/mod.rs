@@ -84,7 +84,7 @@ pub use grid::{Cursor, Grid};
 pub use input::{Key, Mouse, MouseKind};
 pub use layout::{Rect, Size};
 pub use overlay::{Modal, Toasts};
-pub use widgets::{List, Panel, Plot, Sparkles, Stat, Tabs, Widget, big, hints};
+pub use widgets::{Footer, List, Panel, Plot, Sparkles, Stat, Tabs, Widget, big, hints};
 
 use crate::block::Block;
 use crate::term;
