@@ -40,6 +40,8 @@ First release.
   running down until they go
 - `Panel::count` puts a count in a pill beside a panel's title; `app::Footer` lays out key
   hints in groups with a status at the right
+- `examples/services.rs`: a services dashboard with groups, a table per environment, details,
+  a filter, dialogs, toasts, background refreshes and signing in from inside the app
 - `Live` steps that learn their usual duration and show an estimate next run
 - Focus awareness: calmer animation while you're away, a notification when a long run finishes
   unnoticed, a twinkle for what finished when you return; `tinsel::notify`
