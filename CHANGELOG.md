@@ -38,6 +38,8 @@ First release.
   command that asks for input, an editor), then come back and redraw
 - `app::Toasts`: short messages in a `Tone` that slide into a corner of an app, with a line
   running down until they go
+- `Panel::count` puts a count in a pill beside a panel's title; `app::Footer` lays out key
+  hints in groups with a status at the right
 - `Live` steps that learn their usual duration and show an estimate next run
 - Focus awareness: calmer animation while you're away, a notification when a long run finishes
   unnoticed, a twinkle for what finished when you return; `tinsel::notify`

@@ -339,6 +339,7 @@ impl Widget for Card {
 /// ```
 pub struct Panel<'a> {
     title: String,
+    count: String,
     footer: String,
     body: Option<Box<dyn Widget + 'a>>,
     focused: bool,
@@ -350,6 +351,7 @@ impl<'a> Panel<'a> {
     pub fn new(title: impl Into<String>) -> Self {
         Panel {
             title: title.into(),
+            count: String::new(),
             footer: String::new(),
             body: None,
             focused: false,
@@ -360,6 +362,22 @@ impl<'a> Panel<'a> {
     /// What goes inside.
     pub fn body(mut self, widget: impl Widget + 'a) -> Self {
         self.body = Some(Box::new(widget));
+        self
+    }
+
+    /// A count beside the title, in a little pill: how many things are inside, or `3/12`
+    /// when some are filtered out.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Panel};
+    ///
+    /// tinsel::set_color_mode(tinsel::ColorMode::None);
+    /// let mut frame = Frame::new(20, 2);
+    /// frame.render(frame.area(), Panel::new("services").count(12));
+    /// assert_eq!(frame.snapshot().plain(), "╭─ services 12 ────╮\n╰──────────────────╯");
+    /// ```
+    pub fn count(mut self, count: impl std::fmt::Display) -> Self {
+        self.count = count.to_string();
         self
     }
 
@@ -412,13 +430,32 @@ impl Widget for Panel<'_> {
             let b = ((t * 2.6).sin() + 1.0) / 2.0;
             title = title.push("✦ ", sample(&[BERRY, ROSE, SHINE], b * b));
         }
-        let name = text::truncate(&self.title, w.saturating_sub(6 + title.width()));
+        let pill = if self.count.is_empty() {
+            String::new()
+        } else if crate::style::color_mode() == crate::style::ColorMode::None {
+            format!(" {}", self.count)
+        } else {
+            let (fg, bg) = if self.focused {
+                (PETAL, mix(TRACK, ROSE, 0.35))
+            } else {
+                (SOFT, mix(TRACK, LINE, 0.4))
+            };
+            format!(" {}", paint_bg(fg, bg, &format!(" {} ", self.count)))
+        };
+        let pill_w = text::width(&pill);
+        let room = w.saturating_sub(6 + title.width());
+        // short of room, the count goes before any of the title does
+        let (name, pill) = if text::width(&self.title) + pill_w <= room {
+            (self.title.clone(), pill)
+        } else {
+            (text::truncate(&self.title, room), String::new())
+        };
         let title = if self.title.is_empty() {
             Line::new()
         } else if self.focused {
-            title.raw(&bold(&paint(PETAL, &name))).push(" ", LINE)
+            title.raw(&bold(&paint(PETAL, &name))).raw(&pill).push(" ", LINE)
         } else {
-            title.push(&name, SOFT).push(" ", LINE)
+            title.push(&name, SOFT).raw(&pill).push(" ", LINE)
         };
         let mut top = Line::new()
             .push("╭", color(0))
@@ -467,7 +504,12 @@ impl Widget for Panel<'_> {
             Some(body) => body.size()?,
             None => (0, 0),
         };
-        let title = text::width(&self.title) + if self.focused { 9 } else { 7 };
+        let count = if self.count.is_empty() {
+            0
+        } else {
+            text::width(&self.count) + 3
+        };
+        let title = text::width(&self.title) + count + if self.focused { 9 } else { 7 };
         let (px, py) = self.padding;
         Some(((w + 2 + 2 * px).max(title), h + 2 + 2 * py))
     }
@@ -841,6 +883,77 @@ pub fn hints(keys: &[(&str, &str)]) -> Line {
     })
 }
 
+/// The line along the bottom of an app: key hints on the left, in groups, and a status on
+/// the right (when it last refreshed, a spinner while something loads). When there isn't
+/// room for everything, the status stays and the last groups of keys go first.
+///
+/// ```
+/// use tinsel::app::{Footer, Frame};
+///
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// let footer = Footer::new()
+///     .keys(&[("↑↓", "move"), ("/", "filter")])
+///     .keys(&[("?", "help"), ("q", "quit")])
+///     .status("refreshed 12s ago");
+/// let mut frame = Frame::new(60, 1);
+/// frame.render(frame.area(), &footer);
+/// assert_eq!(frame.snapshot().plain(), "↑↓ move · / filter   ? help · q quit       refreshed 12s ago");
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct Footer {
+    groups: Vec<Line>,
+    status: String,
+}
+
+impl Footer {
+    /// An empty footer.
+    pub fn new() -> Self {
+        Footer::default()
+    }
+
+    /// A group of keys and what they do, set a little apart from the others.
+    pub fn keys(mut self, keys: &[(&str, &str)]) -> Self {
+        self.groups.push(hints(keys));
+        self
+    }
+
+    /// What's going on, at the right. Styled text is fine: a spinner, a coloured dot.
+    pub fn status(mut self, status: impl Into<String>) -> Self {
+        self.status = status.into();
+        self
+    }
+}
+
+impl Widget for Footer {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        if area.is_empty() {
+            return;
+        }
+        let status_w = text::width(&self.status).min(area.width);
+        let status = paint(MUTED, &self.status);
+        frame.print(
+            Rect::new(area.x + area.width - status_w, area.y, status_w, 1),
+            0,
+            &status,
+        );
+        let room = area.width.saturating_sub(status_w + 2 * (status_w > 0) as usize);
+        let mut line = Line::new();
+        for group in &self.groups {
+            let gap = if line.width() > 0 { 3 } else { 0 };
+            if line.width() + gap + group.width() > room {
+                break;
+            }
+            line = line.space(gap).append(group.clone());
+        }
+        frame.print(area, 0, &line.to_string());
+    }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        let keys: usize = self.groups.iter().map(|g| g.width() + 3).sum();
+        Some((keys + text::width(&self.status), 1))
+    }
+}
+
 /// A scattering of stars twinkling quietly in the background: behind a header, an empty
 /// state, a splash screen. Draw it first, then put things on top.
 #[derive(Clone, Copy, Debug)]
@@ -987,6 +1100,28 @@ mod tests {
         );
         assert_eq!(drawn(6, 2, Panel::new("").footer("too long")), "╭────╮\n╰────╯");
         assert_eq!(drawn(1, 1, Panel::new("tiny")), "");
+    }
+
+    #[test]
+    fn counts_give_way_to_titles_and_footers_drop_keys_before_status() {
+        assert_eq!(
+            drawn(16, 2, Panel::new("services").count(12)).lines().next(),
+            Some("╭─ services ───╮")
+        );
+        assert_eq!(
+            drawn(18, 2, Panel::new("services").count(12)).lines().next(),
+            Some("╭─ services 12 ──╮")
+        );
+        assert_eq!(
+            drawn(14, 2, Panel::new("services").count(12)).lines().next(),
+            Some("╭─ servic… ──╮")
+        );
+        assert_eq!(Panel::new("ab").count(3).focused(true).size(), Some((15, 2)));
+        let footer = Footer::new().keys(&[("q", "quit")]).keys(&[("?", "help")]).status("ok");
+        assert_eq!(drawn(16, 1, &footer), "q quit        ok");
+        assert_eq!(drawn(20, 1, &footer), "q quit   ? help   ok");
+        assert_eq!(footer.size(), Some((20, 1)));
+        assert_eq!(drawn(0, 0, &footer), "");
     }
 
     #[test]
