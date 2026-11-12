@@ -122,7 +122,7 @@ pub use style::{
     palette, sample, set_accent, set_color_mode, set_theme, theme, underline,
 };
 pub use table::{Align, Border, Table};
-pub use term::{content_width, width};
+pub use term::{CtrlC, content_width, set_ctrl_c, width};
 pub use tree::Tree;
 pub use watch::set_focus;
 pub use widgets::{BarStyle, Card, Spinner, bar, live_bar, live_waveform, pop, shimmer, waveform};
