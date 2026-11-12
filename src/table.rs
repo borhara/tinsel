@@ -47,11 +47,11 @@ struct Row {
 /// use tinsel::{Border, Table};
 ///
 /// Table::new(["app", "status", "size"])
-///     .row(["tube", "live", "34.2 MB"])
-///     .row(["music", "building", "12.8 MB"])
+///     .row(["core", "live", "34.2 MB"])
+///     .row(["queue", "building", "12.8 MB"])
 ///     .sort_by(2)               // numerically, units and all
 ///     .highlight(0)             // the first row, after sorting
-///     .footer(["2 apps", "", "47.0 MB"])
+///     .footer(["2 services", "", "47.0 MB"])
 ///     .border(Border::Rounded)
 ///     .print();
 /// ```

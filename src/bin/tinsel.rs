@@ -399,7 +399,7 @@ fn messages_section() {
 }
 
 fn rules_section() {
-    title("Installing the suite", Some("3 apps · iPhone and Mac"));
+    title("Deploying the stack", Some("3 services · staging and production"));
     println!("{}", rule("build"));
     println!("{}", rule(""));
 }
@@ -408,23 +408,23 @@ fn callouts_section() {
     for (kind, head, body) in [
         (
             Callout::Note,
-            "Signing lasts 7 days",
-            "A free Apple ID's signing expires after a week, so run the installer weekly.",
+            "Tokens last 7 days",
+            "Access tokens expire after a week, so sign in again weekly.",
         ),
         (
             Callout::Tip,
             "Faster rebuilds",
-            "Pass --incremental to reuse the last build's derived data.",
+            "Pass --incremental to reuse the last build's cache.",
         ),
         (
             Callout::Warning,
-            "No Apple TV paired",
-            "The tvOS install was skipped. tube/tvos/install.sh says how to pair one.",
+            "No staging database",
+            "The migration step was skipped. db/README.md says how to set one up.",
         ),
         (
             Callout::Danger,
             "This deletes data",
-            "Resetting the profile removes every saved session on this Mac.",
+            "Resetting the profile removes every saved session on this machine.",
         ),
     ] {
         callout(kind, head, body).print();
@@ -467,25 +467,25 @@ fn badges_section() {
 }
 
 fn table_section() {
-    Table::new(["app", "status", "platforms", "size", "builds"])
+    Table::new(["service", "status", "environments", "size", "deploys"])
         .row([
-            "tube".to_string(),
+            "core".to_string(),
             badge("live", palette::ROSE),
-            "iPhone, TV, Mac".into(),
+            "dev, staging, prod".into(),
             "34.2 MB".into(),
             "128".into(),
         ])
         .row([
-            "music".to_string(),
+            "queue".to_string(),
             badge("building", palette::AMBER),
-            "iPhone, Mac".into(),
+            "dev, staging".into(),
             "12.8 MB".into(),
             "64".into(),
         ])
         .row([
-            "browse".to_string(),
+            "worker".to_string(),
             badge("failed", palette::RED),
-            "Mac".into(),
+            "dev".into(),
             "8.1 MB".into(),
             "9".into(),
         ])
@@ -511,11 +511,11 @@ fn table_section() {
 }
 
 fn tree_section() {
-    Tree::new("dot")
-        .child(Tree::new("tube").leaf("ios").leaf("tvos").leaf("macos"))
-        .child(Tree::new("music").leaf("ios").leaf("macos"))
-        .child(Tree::new("dotkit").child(Tree::new("scripts").leaf("ui.sh").leaf("setup-code.sh")))
-        .leaf("install_all.sh")
+    Tree::new("my-app")
+        .child(Tree::new("api").leaf("src").leaf("tests").leaf("Dockerfile"))
+        .child(Tree::new("web").leaf("src").leaf("public"))
+        .child(Tree::new("tools").child(Tree::new("scripts").leaf("setup.sh").leaf("release.sh")))
+        .leaf("README.md")
         .print();
 }
 
@@ -559,7 +559,7 @@ fn charts_section() {
         paint(palette::MUTED, "last 12 days")
     );
     println!();
-    bars(&[("tube", 34.2), ("music", 12.8), ("browse", 8.1), ("server", 3.4)], 28).print();
+    bars(&[("core", 34.2), ("queue", 12.8), ("worker", 8.1), ("server", 3.4)], 28).print();
     println!();
     println!("{}", meter("disk  ", 41.0, 100.0, 28));
     println!("{}", meter("memory", 72.0, 100.0, 28));
@@ -881,11 +881,11 @@ fn prompts() {
         "ca-central-1",
     ];
     let region = prompt::select("Region (type to filter)", &regions).unwrap_or_else(|e| quit(e));
-    let platforms = ["iPhone", "Apple TV", "Mac", "iPad", "Vision Pro"];
-    let chosen = prompt::multiselect("Platforms", &platforms, &[0, 2]).unwrap_or_else(|e| quit(e));
-    let launch = prompt::date("Launch on", None).unwrap_or_else(|e| quit(e));
+    let environments = ["dev", "staging", "production", "preview", "sandbox"];
+    let chosen = prompt::multiselect("Environments", &environments, &[0, 1]).unwrap_or_else(|e| quit(e));
+    let live_on = prompt::date("Go live on", None).unwrap_or_else(|e| quit(e));
     let runtime = prompt::Input::new("Runtime (tab completes)")
-        .suggestions(&["node22", "python3.13", "python3.14", "ruby3.4", "rust", "go1.24"])
+        .suggestions(&["node", "python", "go", "rust", "java"])
         .ask()
         .unwrap_or_else(|e| quit(e));
     let config = prompt::Input::new("Config file (tab completes paths)")
@@ -955,9 +955,9 @@ fn prompts() {
     }
     println!();
     if go {
-        let names: Vec<&str> = chosen.iter().map(|&i| platforms[i]).collect();
+        let names: Vec<&str> = chosen.iter().map(|&i| environments[i]).collect();
         success(&format!(
-            "Created {name} ({} in {}, {runtime}, from {config}) with the {} spinner for {}, launching {launch}",
+            "Created {name} ({} in {}, {runtime}, from {config}) with the {} spinner for {}, going live {live_on}",
             format::plural(replicas as u64, "replica"),
             regions[region],
             spinners[pick],
