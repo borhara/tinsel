@@ -9,6 +9,15 @@ First release.
 - `prompt::script` answers questions from a list of keys on the current thread, drawing
   nothing, so tests can run code that asks them; `Script::answered` lists what each question
   ended on, and `prompt::typed` turns text into keys
+- → answers a question as Enter does (in typed answers, from the end of the line)
+- `Input::initial`: text already typed in when the question opens, to edit or take as it is
+- `Confirm::end_of_input`: the answer once piped input has run out, when that shouldn't be
+  the default
+- `app::Keys` reads keys one at a time with a timeout in the normal terminal, outside a
+  full-screen app, and from a `prompt::script` in tests
+- `App::event` sees Ctrl-C before the app quits
+- `set_ctrl_c` and `CtrlC`: exit with a line of the program's own, or leave Ctrl-C to the
+  program, while a spinner or other live drawing is on screen
 - Going back in multi-question flows: questions asked with `.back()` return
   `prompt::Error::Back` when ← is pressed (in typed answers, from the start of the line);
   `prompt::Confirm` builder and `Input::back`

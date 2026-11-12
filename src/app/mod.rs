@@ -69,6 +69,7 @@ mod field;
 mod frame;
 mod grid;
 mod input;
+mod keys;
 mod layout;
 mod overlay;
 mod widgets;
@@ -82,6 +83,7 @@ pub use field::Input;
 pub use frame::Frame;
 pub use grid::{Cursor, Grid};
 pub use input::{Key, Mouse, MouseKind};
+pub use keys::Keys;
 pub use layout::{Rect, Size};
 pub use overlay::{Modal, Toasts};
 pub use widgets::{Footer, List, Panel, Plot, Sparkles, Stat, Tabs, Widget, big, hints};
@@ -120,8 +122,8 @@ pub trait App {
     /// (fetching, reading files) in [`event`](App::event) or another thread.
     fn view(&self, frame: &mut Frame);
 
-    /// Change the app in response to something happening. Ctrl-C always quits, whatever
-    /// this returns.
+    /// Change the app in response to something happening. Ctrl-C comes here too, so the app
+    /// can note that it was stopped, and then always quits, whatever this returns.
     fn event(&mut self, event: &Event) -> Flow {
         match event {
             Event::Key(Key::Char('q') | Key::Esc) => Flow::Quit,
@@ -216,7 +218,8 @@ fn drive<A: App + ?Sized>(
             if event == Event::Wake {
                 WOKEN.store(false, Ordering::SeqCst);
             }
-            if event == Event::Key(Key::Ctrl('c')) || app.event(&event) == Flow::Quit {
+            let quit = app.event(&event) == Flow::Quit;
+            if quit || event == Event::Key(Key::Ctrl('c')) {
                 return Ok(());
             }
         }
@@ -721,8 +724,8 @@ mod tests {
         ]);
         let mut out = Vec::new();
         drive(&mut app, &rx, &mut out, || (20, 2)).unwrap();
-        // Ctrl-C quits without the app seeing it, and nothing after it is handled
-        assert_eq!(app.seen, [Event::Key(Key::Char('x'))]);
+        // the app sees Ctrl-C, which quits even so, and nothing after it is handled
+        assert_eq!(app.seen, [Event::Key(Key::Char('x')), Event::Key(Key::Ctrl('c'))]);
         let out = String::from_utf8(out).unwrap();
         assert!(out.contains("seen 0") && out.starts_with("\x1b[?2026h"), "{out:?}");
     }
