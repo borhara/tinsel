@@ -1,7 +1,7 @@
 //! A live region: any [`Block`], redrawn in place while something runs.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -103,7 +103,7 @@ pub struct Region {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Regions drawing right now, so a panic can stop them.
@@ -275,10 +275,10 @@ impl Region {
             return;
         }
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.thread.take() {
+        let _ = self.thread.take().map(|handle| {
             handle.thread().unpark();
-            let _ = handle.join();
-        }
+            handle.join()
+        });
         let lines = if self.keep {
             (lock(&self.view))().into_lines()
         } else {
