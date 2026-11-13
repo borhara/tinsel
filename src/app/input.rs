@@ -367,4 +367,9 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn reads_four_byte_characters() {
+        assert_eq!(keys("🎉".as_bytes()), [Event::Key(Key::Char('🎉'))]);
+    }
 }
