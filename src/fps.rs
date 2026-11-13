@@ -32,15 +32,17 @@ pub fn set_fps(fps: u32) {
 pub fn fps() -> u32 {
     match FPS.load(Ordering::Relaxed) {
         0 => {
-            let fps = std::env::var("TINSEL_FPS")
-                .ok()
-                .and_then(|v| v.trim().parse::<u32>().ok())
-                .map_or(DEFAULT_FPS, |f| f.clamp(1, 240));
+            let fps = parse_fps(std::env::var("TINSEL_FPS").ok().as_deref());
             FPS.store(fps, Ordering::Relaxed);
             fps
         }
         fps => fps,
     }
+}
+
+fn parse_fps(env: Option<&str>) -> u32 {
+    env.and_then(|v| v.trim().parse::<u32>().ok())
+        .map_or(DEFAULT_FPS, |f| f.clamp(1, 240))
 }
 
 /// How long one frame lasts at `fps` frames a second (0 meaning the global rate).
