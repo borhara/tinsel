@@ -81,3 +81,51 @@ fn send(kind: Kind, title: &str, body: &str, tmux: bool) {
     };
     crate::output::write(&seq);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::output::{capture, with_terminal};
+
+    fn kind_with(vars: &[(&str, &str)]) -> &'static str {
+        let found = kind(|name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string()));
+        match found {
+            Kind::Osc9 => "osc9",
+            Kind::Kitty => "kitty",
+            Kind::Osc777 => "osc777",
+            Kind::AppleScript => "applescript",
+            Kind::Bell => "bell",
+        }
+    }
+
+    #[test]
+    fn picks_what_the_terminal_understands() {
+        assert_eq!(kind_with(&[("TERM_PROGRAM", "WezTerm")]), "osc9");
+        assert_eq!(kind_with(&[("TERM_PROGRAM", "Apple_Terminal")]), "applescript");
+        assert_eq!(kind_with(&[("TERM", "xterm-kitty")]), "kitty");
+        assert_eq!(kind_with(&[("KITTY_WINDOW_ID", "1")]), "kitty");
+        assert_eq!(kind_with(&[("WT_SESSION", "x")]), "osc9");
+        assert_eq!(kind_with(&[("TERM", "foot")]), "osc777");
+        assert_eq!(kind_with(&[("TERM", "rxvt-unicode")]), "osc777");
+        assert_eq!(kind_with(&[("TERM", "xterm")]), "bell");
+    }
+
+    #[test]
+    fn sends_the_escape_the_terminal_understands() {
+        let sent = |kind, tmux| capture(|| send(kind, "build;", "done\x1b[31m\"", tmux));
+        assert!(sent(Kind::Osc9, false).contains("\x1b]9;build: done\x07"));
+        assert!(sent(Kind::Kitty, false).contains("\x1b]99;;build: done\x1b\\"));
+        assert!(sent(Kind::Osc777, false).contains("\x1b]777;notify;build;done\x07"));
+        assert!(sent(Kind::Bell, false).contains('\x07'));
+        assert!(sent(Kind::Osc9, true).contains("\x1bPtmux;\x1b\x1b]9;build: done\x07\x1b\\"));
+        assert!(!sent(Kind::AppleScript, false).contains("build"));
+    }
+
+    #[test]
+    fn only_notifies_on_a_terminal() {
+        assert!(!capture(|| with_terminal(false, || notify("n-title", "body"))).contains("n-title"));
+        // whatever this terminal understands, it isn't sent anywhere real
+        capture(|| with_terminal(true, || notify("n-title", "body")));
+    }
+}
