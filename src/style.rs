@@ -80,6 +80,7 @@ pub fn color_mode() -> ColorMode {
 #[cfg(test)]
 thread_local! {
     static TEST_MODE: std::cell::Cell<Option<ColorMode>> = const { std::cell::Cell::new(None) };
+    static TEST_THEME: std::cell::Cell<Option<Theme>> = const { std::cell::Cell::new(None) };
 }
 
 /// Run `f` in a colour mode on this thread alone, so a unit test that wants colour doesn't
@@ -89,6 +90,15 @@ pub(crate) fn with_color_mode<T>(mode: ColorMode, f: impl FnOnce() -> T) -> T {
     let before = TEST_MODE.replace(Some(mode));
     let out = f();
     TEST_MODE.set(before);
+    out
+}
+
+/// Run `f` in a theme on this thread alone.
+#[cfg(test)]
+pub(crate) fn with_theme<T>(theme: Theme, f: impl FnOnce() -> T) -> T {
+    let before = TEST_THEME.replace(Some(theme));
+    let out = f();
+    TEST_THEME.set(before);
     out
 }
 
@@ -116,13 +126,18 @@ pub fn set_color_mode(mode: ColorMode) {
 }
 
 fn detect() -> ColorMode {
-    let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-    if no_color || !crate::output::is_terminal() {
+    let no_color = !std::env::var_os("NO_COLOR").unwrap_or_default().is_empty();
+    let colorterm = std::env::var("COLORTERM").ok();
+    pick_color_mode(no_color, crate::output::is_terminal(), colorterm.as_deref())
+}
+
+fn pick_color_mode(no_color: bool, terminal: bool, colorterm: Option<&str>) -> ColorMode {
+    if no_color || !terminal {
         return ColorMode::None;
     }
     crate::term::enable_escapes();
-    match std::env::var("COLORTERM") {
-        Ok(v) if v.eq_ignore_ascii_case("truecolor") || v.eq_ignore_ascii_case("24bit") => ColorMode::TrueColor,
+    match colorterm {
+        Some(v) if v.eq_ignore_ascii_case("truecolor") || v.eq_ignore_ascii_case("24bit") => ColorMode::TrueColor,
         _ => ColorMode::Ansi256,
     }
 }
@@ -145,6 +160,10 @@ static THEME: AtomicU8 = AtomicU8::new(0);
 /// `COLORFGBG` variable some terminals export, then by asking the terminal for its background
 /// colour. Falls back to [`Theme::Dark`].
 pub fn theme() -> Theme {
+    #[cfg(test)]
+    if let Some(theme) = TEST_THEME.get() {
+        return theme;
+    }
     match THEME.load(Ordering::Relaxed) {
         1 => Theme::Dark,
         2 => Theme::Light,
@@ -162,22 +181,25 @@ pub fn set_theme(theme: Theme) {
 }
 
 fn detect_theme() -> Theme {
-    match std::env::var("TINSEL_THEME").as_deref() {
-        Ok("light") => return Theme::Light,
-        Ok("dark") => return Theme::Dark,
+    let (name, colorfgbg) = (std::env::var("TINSEL_THEME").ok(), std::env::var("COLORFGBG").ok());
+    pick_theme(name.as_deref(), colorfgbg.as_deref(), crate::term::query_background)
+}
+
+/// The theme from `TINSEL_THEME`, then `COLORFGBG`, then the terminal's background colour.
+fn pick_theme(name: Option<&str>, colorfgbg: Option<&str>, background: fn() -> Option<(u8, u8, u8)>) -> Theme {
+    match name {
+        Some("light") => return Theme::Light,
+        Some("dark") => return Theme::Dark,
         _ => {}
     }
     // "fg;bg" in the 16-colour palette: 7 and 9-15 are light backgrounds
-    if let Some(bg) = std::env::var("COLORFGBG")
-        .ok()
-        .and_then(|v| v.rsplit(';').next()?.parse::<u8>().ok())
-    {
+    if let Some(bg) = colorfgbg.and_then(|v| v.rsplit(';').next()?.parse::<u8>().ok()) {
         return if bg == 7 || bg > 8 { Theme::Light } else { Theme::Dark };
     }
     if color_mode() == ColorMode::None {
         return Theme::Dark;
     }
-    match crate::term::query_background() {
+    match background() {
         Some((r, g, b)) if luminance(Rgb(r, g, b)) > 0.5 => Theme::Light,
         _ => Theme::Dark,
     }
@@ -322,10 +344,8 @@ static ACCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(
 fn accent_hue() -> f32 {
     match ACCENT.load(Ordering::Relaxed) {
         0 => {
-            let accent = std::env::var("TINSEL_ACCENT")
-                .ok()
-                .and_then(|n| Accent::from_name(&n))
-                .unwrap_or_default();
+            let name = std::env::var("TINSEL_ACCENT").ok();
+            let accent = name.as_deref().and_then(Accent::from_name).unwrap_or_default();
             set_accent(accent);
             accent.hue()
         }
