@@ -2,17 +2,26 @@
 //! are process-wide. Each scenario runs the test binary again as a child process (on a
 //! pseudo-terminal that the test types into and reads from, with its stdin piped in, or just
 //! on its own) and the child does what a program using tinsel would. They live in the unit
-//! tests, rather than under `tests/`, so their coverage counts with everything else.
+//! tests, rather than under `tests/`, so their coverage counts with everything else. The
+//! ones on a pseudo-terminal are Unix only; the rest run everywhere.
 
-#![cfg(unix)]
-
+#[cfg(unix)]
 use std::ffi::{CStr, c_char, c_ulong};
+#[cfg(unix)]
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+#[cfg(unix)]
+use std::io::Read;
+use std::io::Write;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::process::{Child, Command, ExitStatus, Stdio};
+#[cfg(unix)]
+use std::process::Child;
+use std::process::{Command, ExitStatus, Stdio};
+#[cfg(unix)]
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
 use std::thread::{self, JoinHandle};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 const SCENARIO: &str = "TINSEL_TEST_SCENARIO";
@@ -25,15 +34,21 @@ const SCENARIO_TEST: &str = "processes::scenario";
 #[ignore = "run by the other tests in this file, in a child process"]
 fn scenario() {
     let Ok(name) = std::env::var(SCENARIO) else { return };
-    let scenarios: [(&str, fn()); 8] = [
+    let scenarios: &[(&str, fn())] = &[
+        #[cfg(unix)]
         ("terminal", child::terminal),
+        #[cfg(unix)]
         ("silent", child::silent),
+        #[cfg(unix)]
         ("interrupted", child::interrupted),
+        #[cfg(unix)]
         ("interrupted plainly", child::interrupted_plainly),
-        ("piped", child::piped),
+        #[cfg(unix)]
         ("children-ignored", child::children_ignored),
+        ("piped", child::piped),
         ("settings", child::settings),
         ("panics", child::panics),
+        ("ctrl-c", child::ctrl_c),
     ];
     let (_, run) = scenarios
         .iter()
@@ -46,6 +61,7 @@ fn scenario() {
 /// including writing coverage counters. In the unit tests alone, `_exit` leaves through
 /// `exit` instead, so a run measured for coverage counts the handler too. The status is the
 /// same either way.
+#[cfg(unix)]
 #[unsafe(no_mangle)]
 pub extern "C" fn _exit(code: i32) -> ! {
     std::process::exit(code)
@@ -53,6 +69,7 @@ pub extern "C" fn _exit(code: i32) -> ! {
 
 // MARK: - The parent's half
 
+#[cfg(unix)]
 unsafe extern "C" {
     fn posix_openpt(flags: i32) -> i32;
     fn grantpt(fd: i32) -> i32;
@@ -69,13 +86,14 @@ mod consts {
     pub const TIOCSCTTY: std::ffi::c_ulong = 0x2000_7461;
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(unix, not(target_os = "macos")))]
 mod consts {
     pub const O_NOCTTY: i32 = 0o400;
     pub const TIOCSWINSZ: std::ffi::c_ulong = 0x5414;
     pub const TIOCSCTTY: std::ffi::c_ulong = 0x540E;
 }
 
+#[cfg(unix)]
 #[repr(C)]
 struct WinSize {
     rows: u16,
@@ -87,6 +105,7 @@ struct WinSize {
 /// A child running a scenario on a pseudo-terminal of `cols`×`rows`, with everything it
 /// draws collected as it arrives. Asked for its background colour, it says white, if it
 /// `answers`.
+#[cfg(unix)]
 struct Terminal {
     master: File,
     seen: Arc<Mutex<Vec<u8>>>,
@@ -94,6 +113,7 @@ struct Terminal {
     reader: JoinHandle<()>,
 }
 
+#[cfg(unix)]
 impl Terminal {
     fn start(scenario: &str, cols: u16, rows: u16, answers: bool, env: &[(&str, &str)]) -> Terminal {
         // SAFETY: plain calls on a file descriptor this function owns
@@ -211,6 +231,7 @@ fn assert_passed(status: ExitStatus, seen: &str) {
     assert!(seen.contains("test result: ok. 1 passed"), "{seen}");
 }
 
+#[cfg(unix)]
 #[test]
 fn on_a_terminal() {
     use std::os::unix::fs::PermissionsExt;
@@ -268,6 +289,7 @@ fn on_a_terminal() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn on_a_terminal_that_never_says_its_colour() {
     let t = Terminal::start("silent", 80, 24, false, &[("COLORTERM", "")]);
@@ -275,6 +297,7 @@ fn on_a_terminal_that_never_says_its_colour() {
     assert_passed(status, &seen);
 }
 
+#[cfg(unix)]
 #[test]
 fn ctrl_c_puts_the_terminal_back_and_says_why() {
     let mut t = Terminal::start("interrupted", 80, 24, true, &[]);
@@ -288,6 +311,7 @@ fn ctrl_c_puts_the_terminal_back_and_says_why() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn ctrl_c_with_nothing_to_say_and_no_terminal_settings_saved() {
     let mut t = Terminal::start("interrupted plainly", 80, 24, true, &[("TINSEL_NO_FOCUS", "1")]);
@@ -297,6 +321,7 @@ fn ctrl_c_with_nothing_to_say_and_no_terminal_settings_saved() {
     assert_eq!(status.code(), Some(130), "{seen}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_command_can_vanish_before_its_status_is_read() {
     let out = child_command("children-ignored", &[]).output().unwrap();
@@ -306,6 +331,21 @@ fn a_command_can_vanish_before_its_status_is_read() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_passed(out.status, &seen);
+}
+
+#[test]
+fn ctrl_c_puts_things_back_and_says_why_without_a_terminal_too() {
+    let out = child_command("ctrl-c", &[]).output().unwrap();
+    let seen = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(130), "{seen}");
+    assert!(
+        seen.contains("\x1b[?25h") && seen.contains("stopped by the test"),
+        "{seen}"
+    );
 }
 
 #[test]
@@ -381,12 +421,15 @@ fn with_answers_piped_in() {
 mod child {
     use std::time::Duration;
 
+    #[cfg(unix)]
     use crate::Block;
+    #[cfg(unix)]
     use crate::app::{self, App, Event, Flow, Frame, Key, Keys};
     use crate::prompt::{self, Confirm, Error, Input};
 
     /// Make the terminal on stdin this process's own, as a shell would, so Ctrl-C typed there
     /// interrupts it and keys can be handed back to it.
+    #[cfg(unix)]
     fn own_terminal() {
         // SAFETY: plain calls; the child isn't a process group leader, so setsid succeeds
         unsafe {
@@ -396,10 +439,12 @@ mod child {
     }
 
     /// Something the parent waits to see before it types.
+    #[cfg(unix)]
     fn marker(text: &str) {
         eprintln!("{text}");
     }
 
+    #[cfg(unix)]
     pub fn terminal() {
         own_terminal();
         // what the terminal is: its size, colour and background, found by asking it
@@ -463,11 +508,13 @@ mod child {
         assert!(std::panic::catch_unwind(|| app::run(Suspender::default())).is_err());
     }
 
+    #[cfg(unix)]
     pub fn silent() {
         assert_eq!(crate::color_mode(), crate::ColorMode::Ansi256);
         assert_eq!(crate::theme(), crate::Theme::Dark);
     }
 
+    #[cfg(unix)]
     pub fn interrupted() {
         own_terminal();
         crate::set_ctrl_c(crate::CtrlC::ExitWith("stopped by the test".into()));
@@ -479,6 +526,7 @@ mod child {
         std::thread::sleep(Duration::from_secs(20));
     }
 
+    #[cfg(unix)]
     pub fn interrupted_plainly() {
         own_terminal();
         let live = crate::Live::new("forever", "x").no_history();
@@ -488,6 +536,7 @@ mod child {
         std::thread::sleep(Duration::from_secs(20));
     }
 
+    #[cfg(unix)]
     pub fn children_ignored() {
         unsafe extern "C" {
             fn signal(sig: i32, handler: usize) -> usize;
@@ -504,11 +553,13 @@ mod child {
     }
 
     /// Hands the terminal back on `s`, interrupting what it runs, and quits on `q`.
+    #[cfg(unix)]
     #[derive(Default)]
     struct Suspender {
         back: bool,
     }
 
+    #[cfg(unix)]
     impl App for Suspender {
         fn view(&self, frame: &mut Frame) {
             frame.print(frame.area(), 0, if self.back { "app-back" } else { "app-ready" });
@@ -596,6 +647,17 @@ mod child {
         assert_eq!(crate::fps(), 30);
         crate::set_fps(0);
         assert_eq!(crate::fps(), 1);
+    }
+
+    /// Ctrl-C while something's drawn, without a terminal: the handler still puts back what
+    /// it can, says the program's line and exits with 130. This is how Windows is checked.
+    pub fn ctrl_c() {
+        crate::set_ctrl_c(crate::CtrlC::ExitWith("stopped by the test".into()));
+        crate::term::remember_terminal();
+        assert!(crate::term::guard_interrupt().is_some(), "a handler was set");
+        crate::term::press_ctrl_c();
+        // the handler exits; carrying on fails the test
+        std::thread::sleep(Duration::from_secs(20));
     }
 
     /// The panic hook, which is process-wide too.
