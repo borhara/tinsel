@@ -96,4 +96,16 @@ mod tests {
         assert_eq!(duration(Duration::from_secs(3720)), "1h02m");
         assert_eq!(ago(Duration::from_secs(300)), "5m ago");
     }
+
+    #[test]
+    fn every_size_of_number_and_age_reads_well() {
+        assert_eq!(duration(Duration::from_millis(4200)), "4.2s");
+        assert_eq!(count(34_000), "34k");
+        assert_eq!(count(5_600_000), "5.6M");
+        assert_eq!(count(7_000_000_000), "7.0B");
+        assert_eq!(ago(Duration::from_secs(3)), "just now");
+        assert_eq!(ago(Duration::from_secs(42)), "42s ago");
+        assert_eq!(ago(Duration::from_secs(7200)), "2h ago");
+        assert_eq!(ago(Duration::from_secs(3 * 86400)), "3d ago");
+    }
 }
