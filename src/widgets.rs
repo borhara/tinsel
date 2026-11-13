@@ -517,3 +517,39 @@ impl fmt::Display for Card {
         self.lines().fmt(f)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_waveform_bar_bounces_behind_the_playhead() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let early = BarStyle::Waveform.draw(0.5, 20, 0.0).to_string();
+        let later = BarStyle::Waveform.draw(0.5, 20, 0.3).to_string();
+        assert_eq!(crate::text::width(&early), 20);
+        assert_ne!(early, later);
+    }
+
+    #[test]
+    fn cards_take_titles_of_any_kind_and_print_like_their_lines() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let card = Card::new()
+            .title(String::from("owned"))
+            .footer(Line::new().push("styled", ROSE))
+            .border(crate::palette::SAGE)
+            .kv("a", "1")
+            .blank()
+            .kv("b", "2");
+        let out = card.to_string();
+        assert!(out.contains("owned") && out.contains("styled"), "{out}");
+        assert_eq!(out, card.lines().to_string());
+        assert!(crate::output::capture(|| card.print()).contains("owned"));
+    }
+
+    #[test]
+    fn a_fitted_card_is_as_wide_as_it_needs() {
+        let card = Card::new().kv("key", "value").fit();
+        assert!(card.fixed_width().is_some_and(|w| w < 30));
+    }
+}
