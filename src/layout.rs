@@ -299,3 +299,48 @@ impl IntoLang for &str {
         Lang::from_name(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn links_are_only_links_in_colour() {
+        let url = "https://example.com";
+        assert_eq!(
+            crate::style::with_color_mode(ColorMode::None, || link("site", url)),
+            "site"
+        );
+        let linked = crate::style::with_color_mode(ColorMode::TrueColor, || link("site", url));
+        assert!(linked.starts_with("\x1b]8;;https://example.com\x1b\\"), "{linked:?}");
+    }
+
+    #[test]
+    fn no_items_make_no_columns() {
+        assert!(columns(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_caret_without_a_label_just_points() {
+        crate::set_color_mode(ColorMode::None);
+        let code = Code::around("let x = 1;", 1, 0).lang(Lang::Rust).caret(5, 1, "");
+        let out = code.lines().plain();
+        assert!(out.lines().last().unwrap().trim_end().ends_with('^'), "{out}");
+        assert_eq!(code.to_string(), code.lines().to_string());
+        assert!(crate::output::capture(|| code.print()).contains("let x = 1;"));
+    }
+
+    #[test]
+    fn items_fill_columns_down_then_across() {
+        crate::set_color_mode(ColorMode::None);
+        assert_eq!(columns(&["a", "b"]).plain(), "  a   b");
+    }
+
+    #[test]
+    fn excerpts_name_their_file_and_mark_a_line() {
+        crate::set_color_mode(ColorMode::None);
+        let code = Code::around("one\ntwo\nthree", 2, 1).path("notes.txt").lines().plain();
+        assert!(code.starts_with("  ") && code.contains("╭─ notes.txt:2"), "{code}");
+        assert!(code.contains("› two"), "{code}");
+    }
+}
