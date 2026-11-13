@@ -167,3 +167,55 @@ fn number(v: f64) -> String {
         format!("{v:.1}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plain() {
+        crate::set_color_mode(crate::ColorMode::None);
+    }
+
+    #[test]
+    fn bars_show_fractions_to_one_place() {
+        plain();
+        let out = bars(&[("a", 1.5), ("bb", 3.0)], 6).plain();
+        assert!(out.contains("1.5") && out.contains(" 3"), "{out}");
+    }
+
+    #[test]
+    fn meters_warm_as_they_fill() {
+        let colour = |v| crate::style::with_color_mode(crate::ColorMode::TrueColor, || meter("disk", v, 100.0, 10));
+        let (cool, warm, hot) = (colour(10.0), colour(70.0), colour(95.0));
+        assert!(cool != warm && warm != hot && cool != hot);
+    }
+
+    #[test]
+    fn histograms_draw_partial_rows_and_nothing_for_no_values() {
+        plain();
+        assert!(histogram(&[], 4, 4).is_empty());
+        let out = histogram(&[1.0, 1.0, 1.0, 2.0, 3.0], 3, 2).plain();
+        assert!(out.lines().any(|l| LEVELS.iter().any(|lv| l.contains(lv))), "{out}");
+    }
+
+    #[test]
+    fn heatmaps_paint_cells_in_colour() {
+        let row: &[f64] = &[0.0, 0.5, 1.0];
+        let out = crate::style::with_color_mode(crate::ColorMode::TrueColor, || heatmap(&[("cpu", row)]));
+        assert!(out.lines()[0].contains("██"));
+    }
+
+    #[test]
+    fn axis_numbers_are_short() {
+        assert_eq!(number(3.0), "3");
+        assert_eq!(number(250.7), "251");
+        assert_eq!(number(2.25), "2.2");
+    }
+
+    #[test]
+    fn heatmaps_shade_without_colour() {
+        plain();
+        let row: &[f64] = &[0.0, 1.0];
+        assert!(heatmap(&[("cpu", row)]).plain().contains("██"));
+    }
+}
