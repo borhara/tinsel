@@ -67,6 +67,29 @@ fn card_puts_a_blank_line_under_the_headline() {
 }
 
 #[test]
+fn a_card_can_carry_a_title_and_footer_in_its_border_and_fit_its_rows() {
+    plain();
+    let card = Card::new()
+        .title("ready to ship")
+        .footer("12s")
+        .kv("target", "staging")
+        .fit();
+    assert_eq!(
+        card.lines().plain(),
+        [
+            "",
+            "  ╭─ ready to ship ─────╮",
+            "  │  target    staging  │",
+            "  ╰─────────────── 12s ─╯",
+        ]
+        .join("\n")
+    );
+    // a label too long for the border is left out rather than breaking it
+    let narrow = Card::new().title("a title far too long").kv("k", "v").width(16);
+    assert_eq!(narrow.lines().plain().lines().nth(1), Some("  ╭──────────────╮"));
+}
+
+#[test]
 fn headline_only_card_has_no_trailing_blank() {
     plain();
     assert_eq!(Card::failure("broke").width(20).lines().len(), 4);

@@ -294,6 +294,10 @@ pub struct Card {
     headline: Option<Line>,
     rows: Vec<Line>,
     width: Option<usize>,
+    title: Option<Line>,
+    footer: Option<Line>,
+    border: Option<Rgb>,
+    fit: bool,
 }
 
 impl Card {
@@ -352,9 +356,61 @@ impl Card {
         self
     }
 
+    /// Text set into the top border, at the left: `╭─ title ───╮`. Bold unless styled otherwise.
+    ///
+    /// ```
+    /// use tinsel::Card;
+    ///
+    /// Card::new()
+    ///     .title("ready to ship")
+    ///     .footer("12s")
+    ///     .kv("target", "staging")
+    ///     .fit()
+    ///     .print();
+    /// ```
+    ///
+    /// ```text
+    ///   ╭─ ready to ship ─────╮
+    ///   │  target    staging  │
+    ///   ╰─────────────── 12s ─╯
+    /// ```
+    pub fn title(mut self, title: impl Into<Label>) -> Self {
+        self.title = Some(title.into().styled(|t| crate::style::bold(&paint(TEXT, t))));
+        self
+    }
+
+    /// Text set into the bottom border, at the right: `╰─── 12s ─╯`. A time, a count down, a
+    /// note. Muted unless styled otherwise.
+    pub fn footer(mut self, footer: impl Into<Label>) -> Self {
+        self.footer = Some(footer.into().styled(|t| paint(MUTED, t)));
+        self
+    }
+
+    /// Draw the border in this colour, to say how things went at a glance.
+    pub fn border(mut self, color: Rgb) -> Self {
+        self.border = Some(color);
+        self
+    }
+
+    /// Only as wide as what's inside, rather than the whole content width.
+    pub fn fit(mut self) -> Self {
+        self.fit = true;
+        self
+    }
+
+    /// The width that just holds the rows, title and footer, border included.
+    fn natural_width(&self) -> usize {
+        let rows = self.headline.iter().chain(&self.rows).map(|l| l.width() + 4);
+        let labels = self.title.iter().chain(&self.footer).map(|l| l.width() + 6);
+        rows.chain(labels).max().unwrap_or(0) + 2
+    }
+
     /// The card as lines, with a blank line above so it sits apart from what came before.
     pub fn lines(&self) -> Block {
-        let width = self.width.unwrap_or_else(|| content_width().saturating_sub(2));
+        let full = content_width().saturating_sub(2);
+        let width = self
+            .width
+            .unwrap_or(if self.fit { self.natural_width().min(full) } else { full });
         let mut out = Block::new();
         out.push("");
         out.extend(self.boxed(width).into_iter().map(|l| format!("  {l}")).collect());
@@ -364,8 +420,8 @@ impl Card {
     /// Just the box, `width` columns wide, with no margin or blank line around it.
     pub(crate) fn boxed(&self, width: usize) -> Block {
         let inner = width.saturating_sub(2);
-        let rule = "─".repeat(inner);
-        let side = paint(LINE, "│");
+        let border = self.border.unwrap_or(LINE);
+        let side = paint(border, "│");
         let mut rows: Vec<&Line> = Vec::new();
         let blank = Line::new();
         if let Some(h) = &self.headline {
@@ -377,23 +433,82 @@ impl Card {
         rows.extend(&self.rows);
 
         let mut out = Block::new();
-        out.push(paint(LINE, &format!("╭{rule}╮")));
+        out.push(edge(border, inner, ('╭', '╮'), self.title.as_ref(), true));
         for row in rows {
             let pad = inner.saturating_sub(2 + row.width());
             out.push(format!("{side}  {row}{}{side}", " ".repeat(pad)));
         }
-        out.push(paint(LINE, &format!("╰{rule}╯")));
+        out.push(edge(border, inner, ('╰', '╯'), self.footer.as_ref(), false));
         out
     }
 
     /// The width set with [`width`](Card::width), if any.
     pub(crate) fn fixed_width(&self) -> Option<usize> {
-        self.width
+        self.width.or(self.fit.then(|| self.natural_width()))
     }
 
     /// Print the card.
     pub fn print(&self) {
         self.lines().print();
+    }
+}
+
+/// One border of a card, with `label` set into it at the start or the end when it fits.
+fn edge(color: Rgb, inner: usize, (left, right): (char, char), label: Option<&Line>, start: bool) -> String {
+    let rule = |n: usize| paint(color, &"─".repeat(n));
+    let corner = |c: char| paint(color, &c.to_string());
+    match label.filter(|l| l.width() + 4 <= inner) {
+        None => format!("{}{}{}", corner(left), rule(inner), corner(right)),
+        Some(label) if start => format!(
+            "{}{} {label} {}{}",
+            corner(left),
+            rule(1),
+            rule(inner - 3 - label.width()),
+            corner(right)
+        ),
+        Some(label) => format!(
+            "{}{} {label} {}{}",
+            corner(left),
+            rule(inner - 3 - label.width()),
+            rule(1),
+            corner(right)
+        ),
+    }
+}
+
+/// Text for a card's border, from a `&str`, a `String` or a [`Line`]. Plain text takes the
+/// border's usual style; a `Line` keeps its own.
+pub struct Label(LabelText);
+
+enum LabelText {
+    Plain(String),
+    Styled(Line),
+}
+
+impl Label {
+    fn styled(self, style: impl Fn(&str) -> String) -> Line {
+        match self.0 {
+            LabelText::Plain(text) => Line::new().raw(&style(&text)),
+            LabelText::Styled(line) => line,
+        }
+    }
+}
+
+impl From<&str> for Label {
+    fn from(text: &str) -> Label {
+        Label(LabelText::Plain(text.to_string()))
+    }
+}
+
+impl From<String> for Label {
+    fn from(text: String) -> Label {
+        Label(LabelText::Plain(text))
+    }
+}
+
+impl From<Line> for Label {
+    fn from(line: Line) -> Label {
+        Label(LabelText::Styled(line))
     }
 }
 
