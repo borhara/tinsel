@@ -338,4 +338,21 @@ mod tests {
         assert_eq!(rows[5], "api ok web ok db ok!", "{shown}");
         assert!(rows[3].ends_with("│ ok!"), "{shown}");
     }
+
+    #[test]
+    fn a_narrow_screen_isnt_given_a_margin() {
+        let screen = Rect::new(0, 0, 6, 4);
+        assert_eq!(Modal::new("a long message").area(screen).width, 6);
+    }
+
+    #[test]
+    fn every_tone_has_its_own_mark() {
+        let marks: Vec<&str> = [Tone::Success, Tone::Info, Tone::Warn, Tone::Error, Tone::Hint]
+            .into_iter()
+            .map(|t| tone_look(t).0)
+            .collect();
+        assert_eq!(marks, ["●", "›", "▲", "✕", "→"]);
+        let mut f = Frame::new(4, 1);
+        Unsized.render(f.area(), &mut f);
+    }
 }
