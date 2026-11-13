@@ -72,3 +72,17 @@ impl fmt::Display for Tree {
         self.lines().fmt(f)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prints_and_formats_like_its_lines() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let tree = Tree::new("app").leaf("src");
+        assert_eq!(tree.to_string(), tree.lines().to_string());
+        let out = crate::output::capture(|| tree.print());
+        assert!(out.contains("app\n") && out.contains("src\n"), "{out}");
+    }
+}
