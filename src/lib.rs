@@ -1,4 +1,4 @@
-//! Clean, pink-hued terminal output for Rust CLIs, with a little sparkle. Zero dependencies.
+//! Clean terminal output for Rust CLIs, with a little sparkle.
 //!
 //! ```no_run
 //! use tinsel::prelude::*;
