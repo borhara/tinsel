@@ -5,7 +5,7 @@
 
 use std::io::{self, IsTerminal, Read};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -32,6 +32,17 @@ pub(crate) struct Focus {
     typed: Mutex<Vec<u8>>,
 }
 
+impl Default for Focus {
+    fn default() -> Self {
+        Focus {
+            focused: AtomicBool::new(true),
+            heard: AtomicBool::new(false),
+            times: Mutex::new(Times::default()),
+            typed: Mutex::new(Vec::new()),
+        }
+    }
+}
+
 impl Focus {
     /// Whether the terminal has said its window isn't focused.
     pub(crate) fn away(&self) -> bool {
@@ -40,17 +51,24 @@ impl Focus {
 
     /// If someone just came back after a while, when they left and when they returned.
     pub(crate) fn just_returned(&self, now: Instant) -> Option<(Instant, Instant)> {
-        let times = self.times.lock().unwrap_or_else(|e| e.into_inner());
+        let times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
         times
             .last_absence
             .filter(|(_, back)| now.saturating_duration_since(*back) < WELCOME_BACK)
     }
 
-    fn focus_changed(&self, focused: bool) {
+    /// Keep keys typed while listening, to hand back afterwards.
+    fn keep_typed(&self, bytes: &[u8]) {
+        self.typed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(bytes);
+    }
+
+    pub(crate) fn focus_changed(&self, focused: bool, now: Instant) {
         self.heard.store(true, Ordering::Relaxed);
         self.focused.store(focused, Ordering::Relaxed);
-        let mut times = self.times.lock().unwrap_or_else(|e| e.into_inner());
-        let now = Instant::now();
+        let mut times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
         if !focused {
             times.away_since.get_or_insert(now);
         } else if let Some(left) = times.away_since.take() {
@@ -104,15 +122,10 @@ impl Watch {
         let saved = term::enter_cbreak().ok()?;
         output::write("\x1b[?1004h");
 
-        let focus = Arc::new(Focus {
-            focused: AtomicBool::new(true),
-            heard: AtomicBool::new(false),
-            times: Mutex::new(Times::default()),
-            typed: Mutex::new(Vec::new()),
-        });
+        let focus = Arc::new(Focus::default());
         let stop = Arc::new(AtomicBool::new(false));
         let (f, s) = (focus.clone(), stop.clone());
-        let thread = thread::spawn(move || listen(&f, &s));
+        let thread = thread::spawn(move || listen(&mut io::stdin().lock(), &f, &s));
         Some(Watch {
             focus,
             stop,
@@ -129,7 +142,7 @@ impl Watch {
         output::write("\x1b[?1004l");
         let _ = term::stty(&[&self.saved]);
         term::forget_terminal();
-        let typed = std::mem::take(&mut *self.focus.typed.lock().unwrap_or_else(|e| e.into_inner()));
+        let typed = std::mem::take(&mut *self.focus.typed.lock().unwrap_or_else(PoisonError::into_inner));
         term::push_back_input(&typed);
     }
 }
@@ -141,8 +154,7 @@ impl Drop for Watch {
 }
 
 /// Read stdin until stopped, sorting focus reports from everything else.
-fn listen(focus: &Focus, stop: &AtomicBool) {
-    let mut stdin = io::stdin().lock();
+fn listen(stdin: &mut impl Read, focus: &Focus, stop: &AtomicBool) {
     let mut pending: Vec<u8> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
         let mut buf = [0u8; 64];
@@ -152,33 +164,23 @@ fn listen(focus: &Focus, stop: &AtomicBool) {
             pending.push(b);
             match pending.as_slice() {
                 b"\x1b[I" => {
-                    focus.focus_changed(true);
+                    focus.focus_changed(true, Instant::now());
                     pending.clear();
                 }
                 b"\x1b[O" => {
-                    focus.focus_changed(false);
+                    focus.focus_changed(false, Instant::now());
                     pending.clear();
                 }
                 // still possibly the start of a focus report: wait for more
                 b"\x1b" | b"\x1b[" => {}
                 other => {
-                    focus
-                        .typed
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .extend_from_slice(other);
+                    focus.keep_typed(other);
                     pending.clear();
                 }
             }
         }
     }
-    if !pending.is_empty() {
-        focus
-            .typed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .extend_from_slice(&pending);
-    }
+    focus.keep_typed(&pending);
 }
 
 #[cfg(test)]
