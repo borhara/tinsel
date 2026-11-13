@@ -736,7 +736,8 @@ pub(super) fn scrollbar(frame: &mut Frame, bar: Rect, start: usize, total: usize
 
 // MARK: - Tabs
 
-/// A row of tabs, the chosen one a soft pink pill.
+/// A row of tabs, the chosen one a soft pink pill. A tab can have a colour of its own, and
+/// a little badge after its title: a count, a mark.
 ///
 /// ```
 /// use tinsel::app::{Frame, Tabs};
@@ -749,15 +750,36 @@ pub(super) fn scrollbar(frame: &mut Frame, bar: Rect, start: usize, total: usize
 /// assert_eq!(tabs.at(frame.area(), 13, 0), Some(1));
 /// ```
 pub struct Tabs {
-    titles: Vec<String>,
+    tabs: Vec<Tab>,
     selected: usize,
+}
+
+struct Tab {
+    title: String,
+    color: Option<Rgb>,
+    badge: Option<(String, Rgb)>,
+}
+
+impl Tab {
+    /// Columns it takes, padding included.
+    fn width(&self) -> usize {
+        let badge = self.badge.as_ref().map_or(0, |(b, _)| text::width(b) + 1);
+        text::width(&self.title) + badge + 2
+    }
 }
 
 impl Tabs {
     /// Tabs with these titles.
     pub fn new<S: Into<String>>(titles: impl IntoIterator<Item = S>) -> Self {
         Tabs {
-            titles: titles.into_iter().map(Into::into).collect(),
+            tabs: titles
+                .into_iter()
+                .map(|t| Tab {
+                    title: t.into(),
+                    color: None,
+                    badge: None,
+                })
+                .collect(),
             selected: 0,
         }
     }
@@ -768,14 +790,51 @@ impl Tabs {
         self
     }
 
+    /// Draw tab `index`'s title in `color`, chosen or not: red for one with errors in it, say.
+    /// An index past the last tab is ignored.
+    ///
+    /// ```
+    /// use tinsel::app::Tabs;
+    /// use tinsel::palette;
+    ///
+    /// let tabs = Tabs::new(["overview", "errors"]).color(1, palette::RED);
+    /// ```
+    pub fn color(mut self, index: usize, color: Rgb) -> Self {
+        if let Some(tab) = self.tabs.get_mut(index) {
+            tab.color = Some(color);
+        }
+        self
+    }
+
+    /// Put a little badge after tab `index`'s title, in `color`: a count, or a mark like
+    /// `✔`. Plain text without colour. An index past the last tab is ignored.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Tabs};
+    /// use tinsel::palette;
+    ///
+    /// tinsel::set_color_mode(tinsel::ColorMode::None);
+    /// let tabs = Tabs::new(["build", "deploy"]).badge(0, "✔", palette::SAGE).badge(1, "3", palette::RED);
+    /// let mut frame = Frame::new(30, 1);
+    /// frame.render(frame.area(), &tabs);
+    /// assert_eq!(frame.snapshot().plain(), " build ✔   deploy 3");
+    /// assert_eq!(tabs.at(frame.area(), 7, 0), Some(0));
+    /// ```
+    pub fn badge(mut self, index: usize, text: impl Into<String>, color: Rgb) -> Self {
+        if let Some(tab) = self.tabs.get_mut(index) {
+            tab.badge = Some((text.into(), color));
+        }
+        self
+    }
+
     /// Which tab is at `x`, `y`, if the tabs are drawn at `area`: for clicks.
     pub fn at(&self, area: Rect, x: usize, y: usize) -> Option<usize> {
         if y != area.y || x < area.x {
             return None;
         }
         let mut left = area.x;
-        for (i, title) in self.titles.iter().enumerate() {
-            let right = left + text::width(title) + 2;
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let right = left + tab.width();
             if (left..right).contains(&x) {
                 return Some(i);
             }
@@ -787,12 +846,19 @@ impl Tabs {
 
 impl Widget for Tabs {
     fn render(&self, area: Rect, frame: &mut Frame) {
-        let line = self.titles.iter().enumerate().fold(Line::new(), |line, (i, title)| {
+        let line = self.tabs.iter().enumerate().fold(Line::new(), |line, (i, tab)| {
             let line = if i > 0 { line.space(1) } else { line };
-            if i == self.selected {
-                line.raw(&paint_bg(PETAL, mix(TRACK, ROSE, 0.32), &format!(" {title} ")))
+            let chosen = i == self.selected;
+            let fg = tab.color.unwrap_or(if chosen { PETAL } else { MUTED });
+            let mut label = paint(fg, &format!(" {}", tab.title));
+            if let Some((badge, color)) = &tab.badge {
+                label += &format!(" {}", paint(*color, badge));
+            }
+            label.push(' ');
+            if chosen {
+                line.raw(&crate::style::on_bg(mix(TRACK, ROSE, 0.32), &label))
             } else {
-                line.push(&format!(" {title} "), MUTED)
+                line.raw(&label)
             }
         });
         line.render(area, frame);
@@ -1269,6 +1335,21 @@ mod tests {
         assert_eq!(clip("\x1b[31mred\x1b[39m", 5), "\x1b[31mred\x1b[39m");
         assert_eq!(clip("\x1b[31mredder\x1b[39m", 4), "\x1b[31mred…\x1b[0m");
         assert_eq!(text::strip_ansi(&clip("\x1b[1m日本語", 4)), "日…");
+    }
+
+    #[test]
+    fn tabs_with_badges_are_wider_and_clicks_follow() {
+        let tabs = Tabs::new(["a", "bb", "c"])
+            .badge(0, "12", crate::palette::RED)
+            .color(2, crate::palette::RED)
+            .badge(9, "ignored", crate::palette::RED)
+            .color(9, crate::palette::RED)
+            .selected(2);
+        assert_eq!(drawn(20, 1, &tabs), " a 12   bb   c");
+        let area = Rect::new(0, 0, 20, 1);
+        let hits: Vec<_> = (0..15).map(|x| tabs.at(area, x, 0)).collect();
+        let (a, b, c) = (Some(0), Some(1), Some(2));
+        assert_eq!(hits, [a, a, a, a, a, a, None, b, b, b, b, None, c, c, c]);
     }
 
     #[test]

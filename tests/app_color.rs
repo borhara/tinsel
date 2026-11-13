@@ -204,3 +204,25 @@ fn panel_titles_and_statuses_keep_their_own_colours() {
     assert_eq!(shown.plain().lines().next(), Some("╭─ s… ──╮"));
     assert!(shown.lines()[0].contains(&rgb(palette::RED)));
 }
+
+#[test]
+fn tabs_take_their_own_colours_and_badges() {
+    colour();
+    let fg = |c: tinsel::Rgb| format!("38;2;{};{};{}", c.0, c.1, c.2);
+    let mut f = Frame::new(40, 1);
+    let tabs = Tabs::new(["overview", "errors", "deploy"])
+        .color(1, palette::RED)
+        .badge(2, "✔", palette::SAGE)
+        .selected(2);
+    f.render(f.area(), &tabs);
+    let row = f.snapshot().lines()[0].clone();
+    assert!(
+        row.contains(&fg(palette::RED)) && row.contains(&fg(palette::SAGE)),
+        "{row:?}"
+    );
+    // the chosen tab's pill runs under its badge, to its last space
+    let pill = row.find("48;2;").unwrap();
+    assert!(row[..pill].contains("errors") && !row[..pill].contains("deploy"));
+    assert!(row[pill..].contains('✔'), "{row:?}");
+    assert!(tinsel::text::strip_ansi(&row).ends_with("deploy ✔ "), "{row:?}");
+}
