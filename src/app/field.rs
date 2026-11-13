@@ -267,4 +267,22 @@ mod tests {
         f.render(f.area(), &input);
         assert!(f.snapshot().to_string().contains("\x1b[0;7mn"), "{:?}", f.snapshot());
     }
+
+    #[test]
+    fn deletes_forwards_and_lights_the_caret_in_colour() {
+        let mut input = Input::new();
+        input.focus(true);
+        input.set_value("abc");
+        typed(&mut input, &[Key::Home, Key::Delete]);
+        assert_eq!(input.value(), "bc");
+        let lit = crate::style::with_color_mode(ColorMode::TrueColor, || caret('x'));
+        // on a background, in whatever accent and theme the tests run in
+        assert!(lit.contains("48;2;") && lit.contains('x'), "{lit:?}");
+    }
+
+    #[test]
+    fn an_empty_field_without_focus_shows_its_placeholder() {
+        let input = Input::new().placeholder("name");
+        assert!(drawn(&input, 20).contains("name"));
+    }
 }
