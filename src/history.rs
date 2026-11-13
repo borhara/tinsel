@@ -64,11 +64,12 @@ impl History {
         }
     }
 
-    /// A history kept nowhere, for tests.
+    /// A history kept nowhere, for tests: an empty path has no folder, so it's never saved.
+    /// (`/nonexistent/…` would be, on Windows, where it's a folder on the current drive.)
     #[cfg(test)]
     pub(crate) fn scratch() -> History {
         History {
-            path: PathBuf::from("/nonexistent/x.tsv"),
+            path: PathBuf::new(),
             runs: BTreeMap::new(),
             dirty: false,
         }
