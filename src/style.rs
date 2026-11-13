@@ -60,6 +60,10 @@ static DETECTED: AtomicBool = AtomicBool::new(false);
 /// [`Target`](crate::Target)) is a terminal, and
 /// `COLORTERM`, unless [`set_color_mode`] has chosen one.
 pub fn color_mode() -> ColorMode {
+    #[cfg(test)]
+    if let Some(mode) = TEST_MODE.get() {
+        return mode;
+    }
     match MODE.load(Ordering::Relaxed) {
         1 => ColorMode::None,
         2 => ColorMode::Ansi256,
@@ -71,6 +75,21 @@ pub fn color_mode() -> ColorMode {
             mode
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_MODE: std::cell::Cell<Option<ColorMode>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` in a colour mode on this thread alone, so a unit test that wants colour doesn't
+/// turn it on for the tests running beside it.
+#[cfg(test)]
+pub(crate) fn with_color_mode<T>(mode: ColorMode, f: impl FnOnce() -> T) -> T {
+    let before = TEST_MODE.replace(Some(mode));
+    let out = f();
+    TEST_MODE.set(before);
+    out
 }
 
 /// Decide the colour mode again next time, unless it was chosen with [`set_color_mode`].
