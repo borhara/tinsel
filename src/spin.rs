@@ -2,7 +2,7 @@
 
 use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -94,43 +94,65 @@ pub fn spin<T>(label: &str, f: impl FnOnce() -> T) -> T {
 
 /// Like [`spin`], but an `Err` ends on `✕` with the error under it.
 pub fn try_spin<T, E: Display>(label: &str, f: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
-    let start = Instant::now();
-    if output::json() {
-        let result = f();
-        let mut fields = vec![
-            ("label", Val::Str(label)),
-            ("outcome", Val::Str(if result.is_ok() { "ok" } else { "fail" })),
-            ("secs", Val::Num(start.elapsed().as_secs_f64())),
-        ];
-        let error = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
-        if result.is_err() {
-            fields.push(("error", Val::Str(&error)));
-        }
-        output::emit("task", &fields);
-        return result;
-    }
-    if output::quiet() || !output::is_terminal() {
-        let result = f();
-        let took = format::duration(start.elapsed());
-        match &result {
-            Err(e) => eprintln!("  [FAIL] {label} ({took}) - {e}"),
-            Ok(_) if !output::quiet() => output::line(&format!("  [ok] {label} ({took})")),
-            Ok(_) => {}
-        }
-        return result;
-    }
-    let owned = label.to_string();
-    let mut ticker = Ticker::start(move |t| format!("  {}  {}", Spinner::default().frame(t), shimmer(&owned, t)));
+    let spinning = Spinning::start(label);
     let result = f();
-    match &result {
-        Ok(_) => ticker.finish(&done_line(label, start.elapsed())),
-        Err(e) => {
-            ticker.finish(&finished_line("✕", RED, label, RED, RED, start.elapsed()));
-            let indent = " ".repeat(2 + Spinner::default().width() + 2);
-            output::line(&format!("{indent}{}", paint(mix(RED, SOFT, 0.3), &e.to_string())));
+    spinning.end(result.as_ref().err().map(ToString::to_string));
+    result
+}
+
+/// One task under way for [`try_spin`]: a spinner on a terminal, nothing until it ends elsewhere.
+struct Spinning<'a> {
+    label: &'a str,
+    start: Instant,
+    ticker: Option<Ticker>,
+}
+
+impl<'a> Spinning<'a> {
+    fn start(label: &'a str) -> Spinning<'a> {
+        let drawn = !output::json() && !output::quiet() && output::is_terminal();
+        let ticker = drawn.then(|| {
+            let owned = label.to_string();
+            Ticker::start(move |t| format!("  {}  {}", Spinner::default().frame(t), shimmer(&owned, t)))
+        });
+        Spinning {
+            label,
+            start: Instant::now(),
+            ticker,
         }
     }
-    result
+
+    /// Say how it went: done, or the error it failed with.
+    fn end(self, error: Option<String>) {
+        let (label, took) = (self.label, self.start.elapsed());
+        if output::json() {
+            let mut fields = vec![
+                ("label", Val::Str(label)),
+                ("outcome", Val::Str(if error.is_none() { "ok" } else { "fail" })),
+                ("secs", Val::Num(took.as_secs_f64())),
+            ];
+            if let Some(e) = &error {
+                fields.push(("error", Val::Str(e)));
+            }
+            return output::emit("task", &fields);
+        }
+        let Some(mut ticker) = self.ticker else {
+            let took = format::duration(took);
+            match error {
+                Some(e) => eprintln!("  [FAIL] {label} ({took}) - {e}"),
+                None if !output::quiet() => output::line(&format!("  [ok] {label} ({took})")),
+                None => {}
+            }
+            return;
+        };
+        match error {
+            None => ticker.finish(&done_line(label, took)),
+            Some(e) => {
+                ticker.finish(&finished_line("✕", RED, label, RED, RED, took));
+                let indent = " ".repeat(2 + Spinner::default().width() + 2);
+                output::line(&format!("{indent}{}", paint(mix(RED, SOFT, 0.3), &e)));
+            }
+        }
+    }
 }
 
 struct Counts {
@@ -359,7 +381,7 @@ impl<I: Iterator> Iterator for WithProgress<I> {
 }
 
 fn lock(counts: &Mutex<Counts>) -> std::sync::MutexGuard<'_, Counts> {
-    counts.lock().unwrap_or_else(|e| e.into_inner())
+    counts.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn progress_line(label: &str, c: &Counts, elapsed: Duration, t: f32) -> String {
