@@ -479,10 +479,9 @@ impl Grid<'_> {
             c.last_column.set(last_column);
         }
 
-        for (row, i) in [(0, 0), (1, 1)] {
-            if let Some(l) = line(i) {
-                frame.print_from(content, row, &l, skip);
-            }
+        // the header and the rule under it
+        for row in 0..2 {
+            frame.print_from(content, row, &line(row).unwrap_or_default(), skip);
         }
         // where there's more to either side, an arrow at that end of the rule says so
         if area.height > 1 && content.width > 0 {
@@ -528,9 +527,8 @@ impl Grid<'_> {
                     } else if self.striped && i % 2 == 1 {
                         frame.tint(strip, STRIPE);
                     }
-                    if let Some(l) = line(i + 2) {
-                        frame.print_from(Rect { y, ..content }, 0, &l, skip);
-                    }
+                    let l = line(i + 2).unwrap_or_default();
+                    frame.print_from(Rect { y, ..content }, 0, &l, skip);
                 }
                 if overflow {
                     let bar = Rect::new(area.x + area.width - 1, body.y, 1, body.height);
