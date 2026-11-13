@@ -414,6 +414,7 @@ in the greys; red, amber and sage keep their meaning.
 ## Platform notes
 
 Everything works on macOS, Linux and Windows. Prompts read single keypresses with `stty` on
-Unix and the console API on Windows (Windows Terminal or a Windows 10+ console). Focus
-awareness, terminal background detection and the Ctrl-C handler that restores the cursor are
-Unix only; on Windows they quietly do nothing.
+Unix and the console API on Windows (Windows Terminal or a Windows 10+ console). Ctrl-C puts
+the cursor and the terminal back everywhere. Focus awareness and terminal background
+detection need a terminal that answers: on Windows that's Windows Terminal, and in the older
+console they quietly do nothing rather than wait for answers that never come.
