@@ -13,24 +13,29 @@ pub fn content_width() -> usize {
 /// Columns in the terminal tinsel draws on (stdout, or the [`Target`](crate::Target)), falling
 /// back to `$COLUMNS`, then 80.
 pub fn width() -> usize {
-    ioctl_size()
-        .map(|(cols, _)| cols)
-        .or_else(|| std::env::var("COLUMNS").ok()?.parse().ok())
-        .filter(|&w| w > 0)
-        .unwrap_or(80)
+    measured_or(ioctl_size().map(|(cols, _)| cols), "COLUMNS", 80)
 }
 
 /// Rows in the terminal tinsel draws on, falling back to `$LINES`, then 24.
 pub(crate) fn height() -> usize {
-    ioctl_size()
-        .map(|(_, rows)| rows)
-        .or_else(|| std::env::var("LINES").ok()?.parse().ok())
-        .filter(|&h| h > 0)
-        .unwrap_or(24)
+    measured_or(ioctl_size().map(|(_, rows)| rows), "LINES", 24)
+}
+
+/// What the terminal measured, or else what the environment variable `var` says, or else
+/// `default`.
+fn measured_or(measured: Option<usize>, var: &str, default: usize) -> usize {
+    measured
+        .or_else(|| std::env::var(var).ok()?.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(default)
 }
 
 /// Whether both ends are a terminal: something to draw on, and someone typing.
 pub(crate) fn interactive() -> bool {
+    #[cfg(test)]
+    if let Some(terminal) = crate::output::pretended_terminal() {
+        return terminal;
+    }
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
 
@@ -386,13 +391,19 @@ mod win {
 /// stdin reach the shell afterwards. Best effort: newer Linux kernels refuse (TIOCSTI).
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn push_back_input(bytes: &[u8]) {
+    push_back_to(0, bytes);
+}
+
+/// [`push_back_input`], to the terminal open as `fd`.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn push_back_to(fd: i32, bytes: &[u8]) {
     #[cfg(target_os = "macos")]
     const TIOCSTI: std::ffi::c_ulong = 0x8001_7472;
     #[cfg(target_os = "linux")]
     const TIOCSTI: std::ffi::c_ulong = 0x5412;
     for b in bytes {
         // SAFETY: TIOCSTI reads one byte through the pointer.
-        if unsafe { ioctl(0, TIOCSTI, b as *const u8) } != 0 {
+        if unsafe { ioctl(fd, TIOCSTI, b as *const u8) } != 0 {
             return;
         }
     }
