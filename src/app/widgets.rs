@@ -1473,4 +1473,87 @@ mod tests {
         f.render(f.area(), Panel::new("x").body(List::new(["a", "b"]).selected(1)));
         assert_eq!(f.snapshot().plain(), "╭─ x ────╮\n╰────────╯");
     }
+
+    #[test]
+    fn wrapping_keeps_every_kind_of_escape_whole() {
+        let osc = "\x1b]8;;https://x.y\x1b\\link\x1b]8;;\x07";
+        assert_eq!(wrap(&format!("{osc} b"), 10), [format!("{osc} b")]);
+        assert_eq!(wrap("a\x1bc b", 10), ["a\x1bc b"]);
+        assert_eq!(wrap("cut\x1b", 10), ["cut\x1b"]);
+        // escapes alone take no room, so the leading spaces around them go as usual
+        assert_eq!(wrap("\x1b[1m \x1b[0m x", 10), ["\x1b[1m\x1b[0mx"]);
+    }
+
+    #[test]
+    fn widgets_know_their_size() {
+        crate::set_color_mode(crate::ColorMode::None);
+        assert_eq!(String::from("ab\ncde").size(), Some((3, 2)));
+        assert_eq!(Line::new().push("abcd", TEXT).size(), Some((4, 1)));
+        assert_eq!(
+            Block::from(vec!["  ab".to_string(), "  abc".to_string()]).size(),
+            Some((3, 2))
+        );
+        assert_eq!(Table::new(["n"]).row(["1"]).size(), Some((1, 3)));
+        assert_eq!(Card::success("x").size(), None);
+        assert_eq!(Card::success("x").width(20).size().map(|s| s.0), Some(20));
+        assert_eq!(List::new(["a", "bcd"]).size(), Some((5, 2)));
+        assert_eq!(List::new(Vec::<String>::new()).size(), Some((18, 1)));
+    }
+
+    #[test]
+    fn dropping_columns_stops_at_text() {
+        assert_eq!(drop_columns(" x  y", 3), "x  y");
+        assert_eq!(drop_columns("  ", 4), "");
+    }
+
+    #[test]
+    fn clipping_to_nothing_leaves_no_ellipsis() {
+        assert_eq!(clip("\x1b[1mbold\x1b[0m", 0), "\x1b[1m\x1b[0m");
+    }
+
+    #[test]
+    fn panel_counts_are_pills_in_colour() {
+        let drawn = |focused: bool, title: &str| {
+            let mut f = Frame::new(30, 3);
+            let panel = Panel::new(title).count(7).focused(focused);
+            crate::style::with_color_mode(crate::ColorMode::TrueColor, || f.render(f.area(), panel));
+            f.snapshot().to_string()
+        };
+        assert_ne!(drawn(true, "jobs"), drawn(false, "jobs"));
+        assert!(drawn(true, "jobs").contains(" 7 "));
+        let styled = crate::style::with_color_mode(crate::ColorMode::TrueColor, || paint(crate::palette::SAGE, "ok"));
+        assert!(crate::text::strip_ansi(&drawn(true, &styled)).contains("ok"));
+    }
+
+    #[test]
+    fn nothing_is_centred_or_scrolled_in_no_room() {
+        let mut f = Frame::new(4, 2);
+        centered(&mut f, Rect::new(0, 0, 0, 0), "x");
+        scrollbar(&mut f, Rect::new(0, 0, 1, 0), 0, 10);
+        assert_eq!(f.snapshot().plain(), "\n");
+        assert_eq!(big("1.5").plain().lines().last().map(|l| l.contains('•')), Some(true));
+    }
+
+    #[test]
+    fn panels_carry_a_status_and_a_footer() {
+        let styled = crate::style::with_color_mode(crate::ColorMode::TrueColor, || paint(crate::palette::SAGE, "jobs"));
+        let running =
+            crate::style::with_color_mode(crate::ColorMode::TrueColor, || paint(crate::palette::ROSE, "2 running"));
+        let panel = Panel::new(styled).status(running).footer("q quit").focused(false);
+        let mut f = Frame::new(40, 4);
+        crate::style::with_color_mode(crate::ColorMode::TrueColor, || f.render(f.area(), panel));
+        let shown = f.snapshot().plain();
+        assert!(
+            shown.contains("jobs") && shown.contains("2 running") && shown.contains("q quit"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn a_short_list_needs_no_scrollbar() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let mut f = Frame::new(10, 4);
+        f.render(f.area(), List::new(["a", "b"]).selected(1));
+        assert_eq!(f.snapshot().plain(), "  a\n› b\n\n");
+    }
 }
