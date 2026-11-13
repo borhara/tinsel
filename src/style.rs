@@ -574,4 +574,70 @@ mod tests {
         assert_eq!(for_accent(palette::SAGE, 220.0), palette::SAGE);
         assert_eq!(Accent::from_name("200"), Some(Accent::Hue(200.0)));
     }
+
+    #[test]
+    fn colour_depth_comes_from_the_terminal_and_the_environment() {
+        assert_eq!(pick_color_mode(true, true, Some("truecolor")), ColorMode::None);
+        assert_eq!(pick_color_mode(false, false, None), ColorMode::None);
+        assert_eq!(pick_color_mode(false, true, Some("24bit")), ColorMode::TrueColor);
+        assert_eq!(pick_color_mode(false, true, Some("TrueColor")), ColorMode::TrueColor);
+        assert_eq!(pick_color_mode(false, true, None), ColorMode::Ansi256);
+        assert_eq!(crate::output::with_terminal(false, detect), ColorMode::None);
+    }
+
+    #[test]
+    fn the_theme_comes_from_its_name_then_the_palette_then_the_background() {
+        // the background would say otherwise, so these weren't decided by asking
+        let (dark, light) = (|| Some((0, 0, 0)), || Some((255, 255, 255)));
+        assert_eq!(pick_theme(Some("light"), Some("0;0"), dark), Theme::Light);
+        assert_eq!(pick_theme(Some("dark"), None, light), Theme::Dark);
+        assert_eq!(pick_theme(Some("sepia"), Some("0;15"), dark), Theme::Light);
+        assert_eq!(pick_theme(None, Some("15;7"), dark), Theme::Light);
+        assert_eq!(pick_theme(None, Some("15;0"), light), Theme::Dark);
+        with_color_mode(ColorMode::None, || {
+            assert_eq!(pick_theme(None, None, light), Theme::Dark)
+        });
+        with_color_mode(ColorMode::TrueColor, || {
+            assert_eq!(pick_theme(None, None, dark), Theme::Dark);
+            assert_eq!(pick_theme(None, None, light), Theme::Light);
+            assert_eq!(pick_theme(None, None, || Some((250, 250, 250))), Theme::Light);
+            assert_eq!(pick_theme(None, None, || Some((20, 20, 20))), Theme::Dark);
+            assert_eq!(pick_theme(None, None, || None), Theme::Dark);
+        });
+        // with no terminal to ask, whatever the environment says it's a theme
+        let _ = with_color_mode(ColorMode::TrueColor, detect_theme);
+    }
+
+    #[test]
+    fn blue_is_a_hue_too() {
+        let (h, s, _) = to_hsl(Rgb(0, 0, 255));
+        assert!((h * 360.0 - 240.0).abs() < 0.5 && s == 1.0);
+    }
+
+    #[test]
+    fn gradients_of_one_stop_or_none() {
+        assert_eq!(sample(&[], 0.5), palette::TEXT);
+        assert_eq!(sample(&[palette::SAGE], 0.5), palette::SAGE);
+    }
+
+    #[test]
+    fn every_accent_has_a_name_and_a_hue() {
+        let hues: Vec<f32> = ["pink", "purple", "violet", "blue", "teal", "orange", "-20"]
+            .iter()
+            .map(|n| Accent::from_name(n).unwrap().hue())
+            .collect();
+        assert_eq!(hues, [PINK_HUE, 275.0, 275.0, 220.0, 178.0, 24.0, 340.0]);
+        assert_eq!(Accent::from_name("plaid"), None);
+    }
+
+    #[test]
+    fn colours_fall_back_to_the_256_palette() {
+        let red = with_color_mode(ColorMode::Ansi256, || sgr(Rgb(255, 0, 0), 38));
+        assert_eq!(red, "38;5;196");
+    }
+
+    #[test]
+    fn dim_text_is_faint() {
+        assert_eq!(with_color_mode(ColorMode::TrueColor, || dim("x")), "\x1b[2mx\x1b[22m");
+    }
 }
