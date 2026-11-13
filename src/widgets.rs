@@ -375,14 +375,14 @@ impl Card {
     ///   ╰─────────────── 12s ─╯
     /// ```
     pub fn title(mut self, title: impl Into<Label>) -> Self {
-        self.title = Some(title.into().styled(|t| crate::style::bold(&paint(TEXT, t))));
+        self.title = Some(title.into().styled(&|t| crate::style::bold(&paint(TEXT, t))));
         self
     }
 
     /// Text set into the bottom border, at the right: `╰─── 12s ─╯`. A time, a count down, a
     /// note. Muted unless styled otherwise.
     pub fn footer(mut self, footer: impl Into<Label>) -> Self {
-        self.footer = Some(footer.into().styled(|t| paint(MUTED, t)));
+        self.footer = Some(footer.into().styled(&|t| paint(MUTED, t)));
         self
     }
 
@@ -486,7 +486,7 @@ enum LabelText {
 }
 
 impl Label {
-    fn styled(self, style: impl Fn(&str) -> String) -> Line {
+    fn styled(self, style: &dyn Fn(&str) -> String) -> Line {
         match self.0 {
             LabelText::Plain(text) => Line::new().raw(&style(&text)),
             LabelText::Styled(line) => line,
