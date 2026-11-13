@@ -403,4 +403,36 @@ mod tests {
             ["  ▎ a quote", "", "  │ let x = 1;", "", "  a   b", "  ┈┈┈┈┈", "  1   2"].join("\n")
         );
     }
+
+    #[test]
+    fn headings_rules_and_task_lists() {
+        let out = plain("## Second\n\n### Third\n\n---\n\n- [ ] todo\n- [x] done\n  more about it\n");
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines.contains(&"  Second") && lines.contains(&"  Third"), "{out}");
+        assert!(lines.iter().any(|l| l.trim().starts_with("───")), "{out}");
+        assert!(out.contains("○ todo") && out.contains("● done"), "{out}");
+        assert!(!out.contains("more about it"), "{out}");
+    }
+
+    #[test]
+    fn inline_markup_is_styled_and_taken_out() {
+        let out = plain(r"*it* and **bold**ly, \*not\*, `open, [label](https://x.y), [just brackets] and [half](open");
+        assert_eq!(
+            // however wide the terminal, so wherever it wraps
+            out.split_whitespace().collect::<Vec<_>>().join(" "),
+            "it and boldly, *not*, `open, label, [just brackets] and [half](open"
+        );
+    }
+
+    #[test]
+    fn links_link_in_colour() {
+        let out = crate::style::with_color_mode(crate::ColorMode::TrueColor, || markdown("[docs](https://docs.rs)"));
+        assert!(out.lines()[0].contains("\x1b]8;;https://docs.rs"), "{out:?}");
+    }
+
+    #[test]
+    fn long_paragraphs_wrap() {
+        let out = plain(&"word ".repeat(40));
+        assert!(out.lines().count() > 1, "{out}");
+    }
 }
