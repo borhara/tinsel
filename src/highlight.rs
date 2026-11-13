@@ -206,15 +206,15 @@ pub(crate) fn line(src: &str, lang: Lang, dim: bool) -> String {
             i = end;
             continue;
         }
-        if lang == Lang::Shell && matches!(c, '|' | ';' | '&') {
-            command_pending = true;
-        }
         // stop before anything that starts a token of its own: a flag, in a shell
         let end = scan(&chars, i + 1, |c| {
             !is_word(c) && !"\"'`#$/".contains(c) && !c.is_ascii_digit() && !(lang == Lang::Shell && c == '-')
         });
         let end = end.max(i + 1);
         let punct = take(i, end);
+        if lang == Lang::Shell && punct.contains(['|', ';', '&']) {
+            command_pending = true;
+        }
         out += &paint(if c.is_whitespace() { base } else { tone(SOFT) }, &punct);
         i = end;
     }
@@ -326,5 +326,13 @@ mod tests {
     fn shell_flags_are_quieter() {
         let out = coloured("cargo build --release", Lang::Shell);
         assert!(out.contains(&painted(SOFT, "--release")), "{out:?}");
+    }
+
+    #[test]
+    fn a_command_after_a_pipe_is_a_command() {
+        let out = coloured("cargo build | tee log", Lang::Shell);
+        assert!(out.contains(&painted(ROSE, "tee")), "{out:?}");
+        let out = coloured("make&&ls", Lang::Shell);
+        assert!(out.contains(&painted(ROSE, "ls")), "{out:?}");
     }
 }
