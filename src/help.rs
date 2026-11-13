@@ -218,7 +218,10 @@ impl Help {
     /// The help with line `i` revealed `shown(i)` of the way (0..=1). `anim` is the time into
     /// the entrance and since everything arrived, while it's playing.
     fn render(&self, shown: &dyn Fn(usize) -> f32, anim: Option<(f32, f32)>) -> Vec<String> {
+        // prose keeps a readable measure; rows use the whole terminal, so they only wrap when
+        // they don't fit
         let width = content_width();
+        let rows_width = term::width().saturating_sub(2).max(width);
         let mut lines: Vec<String> = Vec::new();
         // each line arrives faded and a little to the right, then settles
         let mut push = |build: &LineBuilder| {
@@ -314,7 +317,7 @@ impl Help {
                 match group.kind {
                     Kind::Items => {
                         let lw = text::width(left);
-                        let desc_w = width.saturating_sub(4 + left_w + 2).max(20);
+                        let desc_w = rows_width.saturating_sub(4 + left_w + 2).max(20);
                         let desc = text::wrap(right, desc_w);
                         let hang = " ".repeat(4 + left_w + 2);
                         if lw > left_w {
@@ -346,7 +349,7 @@ impl Help {
                             };
                             format!("    {} {cmd}", paint(tint(MUTED), "$"))
                         });
-                        for d in text::wrap(right, width.saturating_sub(6)) {
+                        for d in text::wrap(right, rows_width.saturating_sub(6)) {
                             push(&|tint, _| format!("      {}", paint(tint(SOFT), &d)));
                         }
                     }
