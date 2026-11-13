@@ -137,6 +137,12 @@ pub trait App {
         30
     }
 
+    /// The terminal window's title while the app runs, such as the app's name and what it
+    /// shows. Left alone unless changed; the old title comes back when the app quits.
+    fn title(&self) -> Option<String> {
+        None
+    }
+
     /// Whether to report clicks and the scroll wheel. Off unless changed, since while it's on
     /// the terminal can't select text with the mouse.
     fn mouse(&self) -> bool {
@@ -186,9 +192,22 @@ fn drive<A: App + ?Sized>(
     let mut next_tick = start + tick;
     let mut size = screen();
     let mut shown: Option<Frame> = None;
+    let mut titled: Option<String> = None;
     loop {
         if REDRAW.with(|r| r.replace(false)) {
             shown = None;
+            titled = None;
+        }
+        let title = app.title();
+        if title.is_some() && title != titled {
+            // control characters would end the sequence early
+            let clean: String = title
+                .iter()
+                .flat_map(|t| t.chars())
+                .filter(|c| !c.is_control())
+                .collect();
+            write!(out, "\x1b]0;{clean}\x07")?;
+            titled = title;
         }
         let now_size = screen();
         if now_size != size {
@@ -416,8 +435,9 @@ pub fn navigate(selected: &mut usize, len: usize, event: &Event) -> bool {
 /// Whether an app has the screen, so a panic can give it back before its message is printed.
 static ON_SCREEN: AtomicBool = AtomicBool::new(false);
 
-const ENTER: &str = "\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[2J";
-const LEAVE: &str = "\x1b[0m\x1b[?1000l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l";
+// the window title is saved on entering (22t) and put back on leaving (23t)
+const ENTER: &str = "\x1b[22;0t\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[2J";
+const LEAVE: &str = "\x1b[0m\x1b[?1000l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t";
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
 
 /// The alternate screen, raw keys and a hidden cursor, for as long as it lives.
@@ -728,6 +748,32 @@ mod tests {
         assert_eq!(app.seen, [Event::Key(Key::Char('x')), Event::Key(Key::Ctrl('c'))]);
         let out = String::from_utf8(out).unwrap();
         assert!(out.contains("seen 0") && out.starts_with("\x1b[?2026h"), "{out:?}");
+    }
+
+    #[test]
+    fn the_title_is_set_once_until_it_changes() {
+        struct Titled(usize);
+        impl App for Titled {
+            fn view(&self, _: &mut Frame) {}
+            fn event(&mut self, event: &Event) -> Flow {
+                if *event == Event::Tick {
+                    self.0 += 1;
+                }
+                if self.0 == 4 { Flow::Quit } else { Flow::Continue }
+            }
+            fn title(&self) -> Option<String> {
+                Some(if self.0 < 2 { "one\x07" } else { "two" }.into())
+            }
+        }
+        let rx = keys(&[]);
+        let mut out = Vec::new();
+        drive(&mut Titled(0), &rx, &mut out, || (10, 2)).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(out.matches("\x1b]0;").count(), 2, "{out:?}");
+        assert!(
+            out.contains("\x1b]0;one\x07") && out.contains("\x1b]0;two\x07"),
+            "{out:?}"
+        );
     }
 
     #[test]
