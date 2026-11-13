@@ -323,3 +323,150 @@ impl fmt::Display for Report {
         self.lines().fmt(f)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::output::{Output, capture, with_output};
+
+    #[test]
+    fn messages_print_as_lines_events_or_not_at_all() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let out = capture(|| {
+            success("built");
+            info("cached");
+            warn("slow");
+            hint("try again");
+            error("broke");
+        });
+        for want in ["  ●  built\n", "  ›  cached\n", "  ▲  slow\n", "  →  try again\n"] {
+            assert!(out.contains(want), "{want:?} in {out:?}");
+        }
+        assert!(!out.contains("broke"), "errors go to stderr");
+
+        let quiet = capture(|| {
+            with_output(Output::Quiet, || {
+                Tone::Success.print("q-msg");
+                Tone::Warn.print("q-msg");
+            })
+        });
+        assert!(quiet.contains("▲  q-msg") && !quiet.contains("●  q-msg"), "{quiet:?}");
+
+        let json = capture(|| with_output(Output::Json, || error("j-msg")));
+        assert!(
+            json.contains(r#"{"event":"message","level":"error","text":"j-msg"}"#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn counters_and_titles() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let out = capture(|| {
+            counter(2, 10, "c-pretty");
+            title("t-pretty", Some("sub"));
+            title("t-bare", None);
+        });
+        assert!(out.contains("   2/10  c-pretty\n"), "{out:?}");
+        assert!(
+            out.contains("\n  t-pretty  sub\n\n") && out.contains("\n  t-bare\n\n"),
+            "{out:?}"
+        );
+
+        let quiet = capture(|| {
+            with_output(Output::Quiet, || {
+                counter(1, 2, "c-quiet");
+                title("t-quiet", None);
+            })
+        });
+        assert!(!quiet.contains("c-quiet") && !quiet.contains("t-quiet"));
+
+        let json = capture(|| {
+            with_output(Output::Json, || {
+                counter(1, 2, "c-json");
+                title("t-json", None);
+            })
+        });
+        assert!(
+            json.contains(r#"{"event":"counter","n":1,"total":2,"text":"c-json"}"#),
+            "{json}"
+        );
+        assert!(
+            json.contains(r#"{"event":"title","text":"t-json","subtitle":""}"#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_rule_without_a_label_is_just_a_line() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let line = rule("");
+        assert!(line.trim().chars().all(|c| c == '─') && line.len() > 10);
+    }
+
+    #[test]
+    fn every_callout_has_its_colour() {
+        let colours: Vec<Rgb> = [Callout::Note, Callout::Tip, Callout::Warning, Callout::Danger]
+            .iter()
+            .map(|c| c.color())
+            .collect();
+        assert_eq!(colours, [ROSE, SAGE, AMBER, RED]);
+    }
+
+    #[derive(Debug)]
+    struct Wrapped(std::io::Error);
+
+    impl fmt::Display for Wrapped {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("couldn't read the config")
+        }
+    }
+
+    impl std::error::Error for Wrapped {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn reports_follow_the_whole_chain_and_show_code() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let report = Report::from_error("couldn't start", &Wrapped(std::io::Error::other("disk full")))
+            .code(crate::layout::Code::around("port = x\n", 1, 0).caret(8, 1, "here"));
+        let text = report.to_string();
+        assert!(
+            text.contains("╰─ couldn't read the config") && text.contains("╰─ disk full"),
+            "{text}"
+        );
+        assert!(text.contains("port = x") && text.contains("here"), "{text}");
+        report.eprint();
+
+        let json = capture(|| with_output(Output::Json, || report.clone().hint("fix it").eprint()));
+        assert!(json.contains(r#""event":"error","title":"couldn't start""#), "{json}");
+        assert!(
+            json.contains(r#""hint":"fix it""#) && json.contains("port = x"),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_rule_carries_its_label() {
+        crate::set_color_mode(crate::ColorMode::None);
+        assert!(rule("build").starts_with("  ── build ──"));
+    }
+
+    #[test]
+    fn every_level_is_named_in_events() {
+        let json = capture(|| {
+            with_output(Output::Json, || {
+                for print in [success, info, warn, hint] {
+                    print("x");
+                }
+            })
+        });
+        for level in ["success", "info", "warn", "hint"] {
+            assert!(json.contains(&format!(r#""level":"{level}""#)), "{level} in {json}");
+        }
+    }
+}
