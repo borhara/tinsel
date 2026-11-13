@@ -29,7 +29,7 @@ fn help() -> Help {
     let sections: Vec<&str> = SECTIONS.iter().map(|(n, _, _)| *n).collect();
     Help::new(
         "tinsel",
-        "clean, pink-hued terminal output for Rust CLIs, with a little sparkle. This is its tour: nothing real happens.",
+        "clean terminal output for Rust CLIs, with a little sparkle. This is its tour: nothing real happens.",
     )
     .version(env!("CARGO_PKG_VERSION"))
     .usage("tinsel <COMMAND> [OPTIONS]")

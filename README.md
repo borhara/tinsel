@@ -5,9 +5,8 @@
 [![License](https://img.shields.io/crates/l/tinsel)](LICENSE)
 [![MSRV](https://img.shields.io/badge/rust-1.85%2B-ec7aa4)](Cargo.toml)
 
-Clean, pink-hued terminal output for Rust CLIs, with a little sparkle. Live step lists,
-spinners, tables, trees, prompts and error reports that all look like they belong
-together. Zero dependencies.
+Clean terminal output for Rust CLIs, with a little sparkle. Live step lists, spinners,
+tables, trees, prompts and error reports that all look like they belong together.
 
 ```rust
 use tinsel::prelude::*;
