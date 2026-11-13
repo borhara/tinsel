@@ -760,4 +760,47 @@ mod tests {
         assert!(diff.contains("abc\x1b[2;1H"), "{diff:?}");
         assert!(diff.ends_with("ab\x1b[K"), "{diff:?}");
     }
+
+    #[test]
+    fn ignores_codes_it_doesnt_keep() {
+        let mut s = Style::default();
+        s.apply("38;9;58;1");
+        assert_eq!((s.fg, s.attrs), (Ink::Default, BOLD));
+        let mut f = Frame::new(6, 1);
+        f.print(f.area(), 0, "a\x1b[2Jb\x1bcd\x1b]8;;x\x1b\\e");
+        assert_eq!(f.row_text(0), "abde");
+    }
+
+    #[test]
+    fn dimming_palette_colours_uses_dim() {
+        crate::style::with_color_mode(crate::ColorMode::TrueColor, || {
+            let mut f = Frame::new(4, 1);
+            f.print(f.area(), 0, "\x1b[1;31mab\x1b[38;2;10;20;30mcd");
+            f.dim(f.area());
+            assert_eq!(f.cells[0].style.attrs, DIM);
+            assert_eq!(f.cells[0].style.fg, Ink::Indexed(1));
+            assert_ne!(f.cells[2].style.fg, Ink::Rgb(10, 20, 30));
+        });
+    }
+
+    #[test]
+    fn dimming_fades_towards_the_background_in_either_theme() {
+        use crate::style::{Theme, with_theme};
+        let dimmed = |theme| {
+            crate::style::with_color_mode(crate::ColorMode::TrueColor, || {
+                with_theme(theme, || {
+                    let mut f = Frame::new(2, 1);
+                    f.print(f.area(), 0, "ab");
+                    f.dim(f.area());
+                    f.cells[0].style.fg
+                })
+            })
+        };
+        // plain text fades as tinsel's own text colour, towards white on a light background
+        let faded = (dimmed(Theme::Dark), dimmed(Theme::Light));
+        assert!(
+            matches!(faded, (Ink::Rgb(dark, ..), Ink::Rgb(light, ..)) if light > dark),
+            "{faded:?}"
+        );
+    }
 }
