@@ -25,6 +25,107 @@ enum Ink {
     Rgb(u8, u8, u8),
 }
 
+impl Ink {
+    /// The colour a terminal shows for this ink, or `None` for its own default.
+    fn rgb(self) -> Option<Rgb> {
+        // the 16 named colours as most terminals draw them out of the box
+        const NAMED: [(u8, u8, u8); 16] = [
+            (0, 0, 0),
+            (205, 0, 0),
+            (0, 205, 0),
+            (205, 205, 0),
+            (0, 0, 238),
+            (205, 0, 205),
+            (0, 205, 205),
+            (229, 229, 229),
+            (127, 127, 127),
+            (255, 0, 0),
+            (0, 255, 0),
+            (255, 255, 0),
+            (92, 92, 255),
+            (255, 0, 255),
+            (0, 255, 255),
+            (255, 255, 255),
+        ];
+        match self {
+            Ink::Default => None,
+            Ink::Rgb(r, g, b) => Some(Rgb(r, g, b)),
+            Ink::Indexed(n @ 0..16) => {
+                let (r, g, b) = NAMED[n as usize];
+                Some(Rgb(r, g, b))
+            }
+            // a 6×6×6 cube, then 24 greys
+            Ink::Indexed(n @ 16..232) => {
+                let level = |i: u8| if i == 0 { 0 } else { 55 + 40 * i };
+                let i = n - 16;
+                Some(Rgb(level(i / 36), level(i / 6 % 6), level(i % 6)))
+            }
+            Ink::Indexed(n) => {
+                let grey = 8 + 10 * (n - 232);
+                Some(Rgb(grey, grey, grey))
+            }
+        }
+    }
+}
+
+/// The page's own text and background colours, for the theme in use.
+fn html_defaults() -> (Rgb, Rgb) {
+    let back = if crate::style::theme() == crate::style::Theme::Light {
+        Rgb(253, 250, 252)
+    } else {
+        Rgb(24, 20, 23)
+    };
+    (crate::style::shown(crate::palette::TEXT), back)
+}
+
+/// What a cell looks like on a page: its colours where they aren't the page's own, and the
+/// attributes CSS can draw.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Look {
+    ink: Option<Rgb>,
+    paper: Option<Rgb>,
+    attrs: u8,
+}
+
+impl Look {
+    /// The inline CSS for it, empty when it looks like the page's own text.
+    fn css(&self) -> String {
+        let mut rules = Vec::new();
+        if let Some(ink) = self.ink {
+            rules.push(format!("color:{}", css(ink)));
+        }
+        if let Some(paper) = self.paper {
+            rules.push(format!("background:{}", css(paper)));
+        }
+        for (bit, rule) in [
+            (BOLD, "font-weight:bold"),
+            (ITALIC, "font-style:italic"),
+            (UNDERLINE, "text-decoration:underline"),
+        ] {
+            if self.attrs & bit != 0 {
+                rules.push(rule.to_string());
+            }
+        }
+        rules.join(";")
+    }
+}
+
+/// A colour in CSS.
+fn css(Rgb(r, g, b): Rgb) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// Add a character to HTML text.
+fn escape(c: char, out: &mut String) {
+    match c {
+        '&' => out.push_str("&amp;"),
+        '<' => out.push_str("&lt;"),
+        '>' => out.push_str("&gt;"),
+        '"' => out.push_str("&quot;"),
+        c => out.push(c),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Style {
     fg: Ink,
@@ -98,6 +199,22 @@ impl Style {
             }
         }
         out.push('m');
+    }
+
+    /// How this style looks on a page whose own colours are `fg` and `bg`.
+    fn look(&self, fg: Rgb, bg: Rgb) -> Look {
+        let (mut ink, mut paper) = (self.fg.rgb().unwrap_or(fg), self.bg.rgb().unwrap_or(bg));
+        if self.attrs & REVERSE != 0 {
+            (ink, paper) = (paper, ink);
+        }
+        if self.attrs & DIM != 0 {
+            ink = crate::style::mix(ink, paper, 0.5);
+        }
+        Look {
+            ink: (ink != fg).then_some(ink),
+            paper: (paper != bg).then_some(paper),
+            attrs: self.attrs & (BOLD | ITALIC | UNDERLINE),
+        }
     }
 
     /// Whether a space in this style looks the same as an empty cell.
@@ -396,6 +513,97 @@ impl Frame {
     /// The frame as text, a line per row, trailing blanks trimmed. `.plain()` it in tests.
     pub fn snapshot(&self) -> Block {
         (0..self.height).map(|y| self.row_text(y)).collect()
+    }
+
+    /// The frame as a web page that looks just like the terminal: a `<pre>` on tinsel's
+    /// background for the [`theme`](crate::theme) in use, and each run of cells in the same
+    /// style a `<span>` with its colours and its bold, dim, italic, underline or reverse. For
+    /// screenshots in a README, or to see how something looks without a terminal. The colours
+    /// are the ones the frame was drawn with, so draw it in colour (see
+    /// [`set_color_mode`](crate::set_color_mode)) to see them. [`html_pre`](Frame::html_pre)
+    /// is just the `<pre>`, to put in a page of your own.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Panel};
+    ///
+    /// let mut frame = Frame::new(20, 3);
+    /// frame.render(frame.area(), Panel::new("hi").body("1 < 2"));
+    /// let page = frame.html();
+    /// assert!(page.starts_with("<!DOCTYPE html>") && page.contains("1 &lt; 2"));
+    /// // std::fs::write("screenshot.html", page)?;
+    /// ```
+    pub fn html(&self) -> String {
+        let (_, bg) = html_defaults();
+        format!(
+            "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>tinsel</title>\n</head>\n\
+             <body style=\"margin:0;padding:16px;background:{}\">\n{}\n</body>\n</html>\n",
+            css(bg),
+            self.html_pre()
+        )
+    }
+
+    /// The frame as a `<pre>` element, styled inline so it can go anywhere in a page. See
+    /// [`html`](Frame::html).
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(4, 1);
+    /// frame.print(frame.area(), 0, "a&b");
+    /// let pre = frame.html_pre();
+    /// assert!(pre.starts_with("<pre style=") && pre.ends_with("a&amp;b </pre>"));
+    /// ```
+    pub fn html_pre(&self) -> String {
+        let (fg, bg) = html_defaults();
+        let mut out = format!(
+            "<pre style=\"margin:0;padding:8px 12px;display:inline-block;color:{};background:{};\
+             font-family:ui-monospace,monospace;font-size:14px;line-height:1.25\">",
+            css(fg),
+            css(bg)
+        );
+        for y in 0..self.height {
+            if y > 0 {
+                out.push('\n');
+            }
+            let row = &self.cells[y * self.width..(y + 1) * self.width];
+            // runs of cells that look the same
+            let mut runs: Vec<(Look, String)> = Vec::new();
+            for cell in row.iter().filter(|c| c.ch != '\0') {
+                let look = cell.style.look(fg, bg);
+                let mut text = String::new();
+                escape(cell.ch, &mut text);
+                if char_width(cell.ch) == 2 {
+                    // fonts rarely draw wide characters exactly two columns across; make them
+                    text = format!("<span style=\"display:inline-block;width:2ch\">{text}</span>");
+                }
+                // a space shows only its background (and underline), so joins any run on the same one
+                // that isn't underlined
+                let space = cell.ch == ' ' && look.attrs & UNDERLINE == 0;
+                match runs.last_mut() {
+                    Some((last, run))
+                        if *last == look || (space && last.paper == look.paper && last.attrs & UNDERLINE == 0) =>
+                    {
+                        run.push_str(&text)
+                    }
+                    _ if space => runs.push((
+                        Look {
+                            paper: look.paper,
+                            ..Look::default()
+                        },
+                        text,
+                    )),
+                    _ => runs.push((look, text)),
+                }
+            }
+            for (look, text) in runs {
+                match look.css() {
+                    css if css.is_empty() => out.push_str(&text),
+                    css => out.push_str(&format!("<span style=\"{css}\">{text}</span>")),
+                }
+            }
+        }
+        out.push_str("</pre>");
+        out
     }
 
     /// What to send the terminal to turn `prev` (if it's the same size) into this frame.
