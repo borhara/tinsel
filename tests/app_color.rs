@@ -154,3 +154,22 @@ fn a_modal_fades_what_is_behind_it_and_casts_a_shadow() {
         after.lines()[bottom + 1]
     );
 }
+
+#[test]
+fn grid_headings_are_bold_rose_and_never_the_cursor_row() {
+    colour();
+    let mut cursor = Cursor::new();
+    cursor.select(0);
+    let mut f = Frame::new(16, 4);
+    f.render(
+        f.area(),
+        Grid::new(["name"]).heading("group").row(["api"]).cursor(&cursor),
+    );
+    let shown = f.snapshot();
+    let rose = format!("38;2;{};{};{}", palette::ROSE.0, palette::ROSE.1, palette::ROSE.2);
+    let heading = &shown.lines()[2];
+    assert!(heading.contains(&format!(";1;{rose}")), "bold and rose: {heading:?}");
+    // the band is behind the cursor's row, not the heading above it
+    assert!(!heading.contains("48;2;"), "{heading:?}");
+    assert!(shown.lines()[3].contains("48;2;"), "{shown:?}");
+}

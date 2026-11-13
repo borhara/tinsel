@@ -6,7 +6,7 @@ use super::widgets::{centered, scrollbar};
 use super::{Event, Frame, Rect, Widget};
 use crate::Spinner;
 use crate::style::palette::{BERRY, MUTED, RED, ROSE, TRACK};
-use crate::style::{ColorMode, Rgb, color_mode, mix, paint, sample};
+use crate::style::{ColorMode, Rgb, bold, color_mode, mix, paint, sample};
 use crate::table::{Align, Table};
 use crate::text;
 
@@ -86,6 +86,13 @@ impl Cursor {
     }
 }
 
+/// One line of a grid's body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Line<'g> {
+    Heading(&'g str),
+    Row(usize),
+}
+
 #[derive(Clone, Debug)]
 enum Body {
     Rows,
@@ -96,7 +103,8 @@ enum Body {
 /// A [`Table`] with a cursor: rows to move through with ↑↓, the chosen one lit with a bar
 /// and a soft band, scrolling down to keep it in view and sideways when the table is wider
 /// than its area, the header always on top. Cells are lined up exactly as a printed
-/// [`Table`] lines them up: numbers right, words left, styled cells fine.
+/// [`Table`] lines them up: numbers right, words left, styled cells fine. Rows can be
+/// gathered under [`heading`](Grid::heading)s.
 ///
 /// ```
 /// use tinsel::app::{Cursor, Frame, Grid};
@@ -116,6 +124,8 @@ enum Body {
 pub struct Grid<'a> {
     headers: Vec<String>,
     rows: Vec<Vec<String>>,
+    /// Group headings: (the row each goes above, its text), in the order they were added.
+    headings: Vec<(usize, String)>,
     align: Vec<(usize, Align)>,
     limits: Vec<(usize, usize)>,
     cursor: Option<&'a Cursor>,
@@ -136,6 +146,7 @@ impl<'a> Grid<'a> {
         Grid {
             headers: headers.into_iter().map(Into::into).collect(),
             rows: Vec::new(),
+            headings: Vec::new(),
             align: Vec::new(),
             limits: Vec::new(),
             cursor: None,
@@ -161,6 +172,36 @@ impl<'a> Grid<'a> {
     /// Add a row of cells. Styled cells ([`badge`](crate::badge)s, coloured dots) are fine.
     pub fn row<S: Into<String>>(mut self, cells: impl IntoIterator<Item = S>) -> Self {
         self.rows.push(cells.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Start a group: a heading drawn on its own line above the rows added after it, up to
+    /// the next heading. Headings aren't rows: the cursor, [`row_at`](Grid::row_at) and
+    /// [`Cursor::navigate`]'s `len` count only the rows, so row 0 is the first row under the
+    /// first heading, and moving steps over headings. Scrolling up to a group's first rows
+    /// brings its heading into view too.
+    ///
+    /// ```
+    /// use tinsel::app::{Cursor, Frame, Grid};
+    ///
+    /// tinsel::set_color_mode(tinsel::ColorMode::None);
+    /// let mut cursor = Cursor::new();
+    /// cursor.select(1);
+    /// let grid = Grid::new(["service", "pods"])
+    ///     .heading("frontend")
+    ///     .row(["web", "4"])
+    ///     .heading("backend")
+    ///     .row(["api", "12"])
+    ///     .cursor(&cursor);
+    /// let mut frame = Frame::new(20, 6);
+    /// frame.render(frame.area(), grid);
+    /// assert_eq!(
+    ///     frame.snapshot().plain(),
+    ///     "  service   pods\n  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n  frontend\n  web          4\n  backend\n› api         12"
+    /// );
+    /// ```
+    pub fn heading(mut self, text: impl Into<String>) -> Self {
+        self.headings.push((self.rows.len(), text.into()));
         self
     }
 
@@ -242,8 +283,37 @@ impl<'a> Grid<'a> {
             return None;
         }
         let top = self.cursor.map_or(0, |c| c.top.get());
-        let i = top + y - area.y - 2;
-        (i < self.rows.len()).then_some(i)
+        match self.lines().get(top + y - area.y - 2) {
+            Some(Line::Row(i)) => Some(*i),
+            _ => None,
+        }
+    }
+
+    /// The body's lines from the top: headings and rows, in order.
+    fn lines(&self) -> Vec<Line<'_>> {
+        let mut headings = self.headings.iter().peekable();
+        let mut lines = Vec::with_capacity(self.rows.len() + self.headings.len());
+        for i in 0..=self.rows.len() {
+            while let Some((_, text)) = headings.next_if(|h| h.0 <= i) {
+                lines.push(Line::Heading(text));
+            }
+            if i < self.rows.len() {
+                lines.push(Line::Row(i));
+            }
+        }
+        lines
+    }
+
+    /// Which line row `row` is on, counting headings.
+    fn line_of(&self, row: usize) -> usize {
+        row + self.headings.iter().filter(|h| h.0 <= row).count()
+    }
+
+    /// Which line the heading over row `row` is on, if it has one.
+    fn heading_of(&self, row: usize) -> Option<usize> {
+        // heading k sits after the k headings and the rows before it
+        let k = self.headings.iter().rposition(|h| h.0 <= row)?;
+        Some(self.headings[k].0 + k)
     }
 
     fn headers(&self) -> Vec<String> {
@@ -316,7 +386,8 @@ impl<'a> Grid<'a> {
         let widths = self.widths(&headers);
         let width = *widths.get(column)?;
         let inner = widths.iter().sum::<usize>() + 3 * widths.len().saturating_sub(1);
-        let overflow = matches!(self.body, Body::Rows) && self.rows.len() > area.height.saturating_sub(2);
+        let lines = self.rows.len() + self.headings.len();
+        let overflow = matches!(self.body, Body::Rows) && lines > area.height.saturating_sub(2);
         let room = area.width.saturating_sub(2 + overflow as usize);
         let spare = room.checked_sub(inner).filter(|&s| s > 0)?;
         let mut grid = self.clone();
@@ -341,7 +412,9 @@ impl Widget for Grid<'_> {
     fn size(&self) -> Option<(usize, usize)> {
         let widths = self.widths(&self.headers());
         let inner = widths.iter().sum::<usize>() + 3 * widths.len().saturating_sub(1);
-        Some((inner + 2, self.rows.len().max(1) + 2))
+        let headings = self.headings.iter().map(|h| text::width(&h.1)).max().unwrap_or(0);
+        let lines = self.rows.len() + self.headings.len();
+        Some((inner.max(headings) + 2, lines.max(1) + 2))
     }
 }
 
@@ -356,7 +429,9 @@ impl Grid<'_> {
         let rows = matches!(self.body, Body::Rows) && n > 0;
         let body = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
         let chosen = self.cursor.filter(|_| rows).map(|c| c.row.min(n - 1));
-        let overflow = rows && n > body.height;
+        let body_lines = self.lines();
+        let total = body_lines.len();
+        let overflow = rows && total > body.height;
         let content = Rect::new(
             area.x + 2,
             area.y,
@@ -384,13 +459,20 @@ impl Grid<'_> {
 
         let mut top = self.cursor.map_or(0, |c| c.top.get());
         if let Some(chosen) = chosen {
-            if chosen < top {
-                top = chosen;
-            } else if chosen >= top + body.height {
-                top = chosen + 1 - body.height;
+            let at = self.line_of(chosen);
+            if at < top {
+                top = at;
+            } else if at >= top + body.height {
+                top = at + 1 - body.height;
+            }
+            // show the row's heading too, if it fits on screen with the row
+            if let Some(heading) = self.heading_of(chosen) {
+                if heading < top && at - heading < body.height {
+                    top = heading;
+                }
             }
         }
-        top = top.min(n.saturating_sub(body.height));
+        top = top.min(total.saturating_sub(body.height));
         if let Some(c) = self.cursor {
             c.top.set(top);
             c.last_column.set(last_column);
@@ -421,9 +503,22 @@ impl Grid<'_> {
             Body::Rows if n == 0 => centered(frame, body, &paint(MUTED, &self.empty)),
             Body::Rows => {
                 let across = Rect::new(area.x, 0, area.width - overflow as usize, 1);
-                for (row, i) in (top..n).take(body.height).enumerate() {
+                for (row, &item) in body_lines.iter().skip(top).take(body.height).enumerate() {
                     let y = body.y + row;
                     let strip = Rect { y, ..across };
+                    let i = match item {
+                        Line::Row(i) => i,
+                        Line::Heading(heading) => {
+                            // headings stay put when the columns scroll sideways
+                            let fitted = if text::width(heading) > content.width {
+                                text::truncate(&text::strip_ansi(heading), content.width)
+                            } else {
+                                heading.to_string()
+                            };
+                            frame.print(Rect { y, ..content }, 0, &bold(&paint(ROSE, &fitted)));
+                            continue;
+                        }
+                    };
                     if Some(i) == chosen {
                         frame.tint(strip, band(self.focused));
                         let mark = if color_mode() == ColorMode::None { "›" } else { "▌" };
@@ -438,7 +533,7 @@ impl Grid<'_> {
                 }
                 if overflow {
                     let bar = Rect::new(area.x + area.width - 1, body.y, 1, body.height);
-                    scrollbar(frame, bar, top, n);
+                    scrollbar(frame, bar, top, total);
                 }
             }
         }
@@ -529,6 +624,109 @@ mod tests {
         assert_eq!(
             drawn(16, 4, grid().blank_cells()),
             "  name   owner\n  ┈┈┈┈┈┈┈┈┈┈┈┈\n  api\n  web    ops"
+        );
+    }
+
+    /// Two groups of three rows, under headings "a" and "b", rows named r0 to r5.
+    fn grouped(cursor: &Cursor) -> Grid<'_> {
+        let mut grid = Grid::new(["name"]).cursor(cursor);
+        for i in 0..6 {
+            if i % 3 == 0 {
+                grid = grid.heading(if i == 0 { "a" } else { "b" });
+            }
+            grid = grid.row([format!("r{i}")]);
+        }
+        grid
+    }
+
+    #[test]
+    fn headings_sit_between_rows_and_the_cursor_counts_rows_only() {
+        let mut cursor = Cursor::new();
+        cursor.select(3);
+        let shown = drawn(12, 10, grouped(&cursor));
+        assert_eq!(shown, "  name\n  ┈┈┈┈\n  a\n  r0\n  r1\n  r2\n  b\n› r3\n  r4\n  r5");
+        // moving steps from the last row of one group to the first of the next
+        cursor.select(2);
+        assert!(cursor.navigate(6, &Event::Key(super::super::Key::Down)));
+        assert_eq!(cursor.row(), 3);
+        assert_eq!(grouped(&cursor).size(), Some((6, 10)));
+    }
+
+    #[test]
+    fn scrolling_keeps_the_cursor_row_and_its_heading_in_view() {
+        let mut cursor = Cursor::new();
+        let mut at = |row: usize| {
+            cursor.select(row);
+            let shown = drawn(12, 5, grouped(&cursor));
+            let body: Vec<String> = shown
+                .lines()
+                .skip(2)
+                .map(|l| l.trim_end_matches(['│', '┃']).trim().to_string())
+                .collect();
+            (body.join(" "), cursor.top.get())
+        };
+        assert_eq!(at(0), ("a › r0 r1".into(), 0));
+        // down into the next group: its heading comes along
+        assert_eq!(at(3), ("r2 b › r3".into(), 3));
+        assert_eq!(at(5), ("r3 r4 › r5".into(), 5));
+        // back up to a group's first row: its heading shows again
+        assert_eq!(at(3), ("b › r3 r4".into(), 4));
+        // too far from its heading to show both: just the row
+        assert_eq!(at(2), ("› r2 b r3".into(), 3));
+        assert_eq!(at(1), ("a r0 › r1".into(), 0));
+    }
+
+    #[test]
+    fn clicks_on_headings_find_no_row() {
+        let mut cursor = Cursor::new();
+        cursor.select(5);
+        let area = Rect::new(0, 0, 12, 5);
+        drawn(12, 5, grouped(&cursor));
+        cursor.select(3);
+        drawn(12, 5, grouped(&cursor));
+        let grid = grouped(&cursor);
+        assert_eq!(cursor.top.get(), 4);
+        assert_eq!(grid.row_at(area, 3, 2), None, "the heading");
+        assert_eq!(grid.row_at(area, 3, 3), Some(3));
+        assert_eq!(grid.row_at(area, 3, 4), Some(4));
+        let flat = Grid::new(["n"]).heading("only").row(["x"]);
+        assert_eq!(flat.row_at(area, 3, 2), None);
+        assert_eq!(flat.row_at(area, 3, 3), Some(0));
+        assert_eq!(flat.row_at(area, 3, 4), None);
+    }
+
+    #[test]
+    fn headings_work_with_fill_and_sideways_scrolling() {
+        let grid = Grid::new(["name", "n"])
+            .heading("group")
+            .row(["a-long-name", "1"])
+            .max_width(0, 6)
+            .fill(0);
+        assert_eq!(
+            drawn(24, 4, grid),
+            "  name                 n\n  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n  group\n  a-long-name          1"
+        );
+        // the heading counts towards overflowing, so the scrollbar's column is kept free
+        let grid = Grid::new(["name", "n"]).heading("group").row(["abc", "1"]).fill(0);
+        assert_eq!(drawn(12, 3, grid), "  name    n\n  ┈┈┈┈┈┈┈┈┈\n  group    ┃");
+
+        let mut cursor = Cursor::new();
+        fn services(c: &Cursor) -> Grid<'_> {
+            Grid::new(["name", "env", "owner"])
+                .heading("services")
+                .row(["api", "production", "platform"])
+                .cursor(c)
+        }
+        drawn(16, 4, services(&cursor));
+        assert!(cursor.scroll_right());
+        let shown = drawn(16, 4, services(&cursor));
+        assert_eq!(shown.lines().nth(2), Some("  services"), "{shown}");
+        assert!(
+            shown
+                .lines()
+                .nth(3)
+                .is_some_and(|l| l.contains("production") && !l.contains("api")),
+            "{shown}"
         );
     }
 
