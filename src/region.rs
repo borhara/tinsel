@@ -198,14 +198,14 @@ impl Region {
         }));
     }
 
-    /// Redraw this many times a second (default 10). The view is called once a frame, so a
-    /// slow one wants a lower rate.
+    /// Redraw this many times a second (default 10), kept between 1 and 240. The view is
+    /// called once a frame, so a slow one wants a lower rate.
     ///
     /// ```no_run
     /// let region = tinsel::Region::new(|| tinsel::pairs(&[("queue", "12 jobs")])).fps(4);
     /// ```
     pub fn fps(self, fps: u32) -> Self {
-        lock(&self.state).every = Duration::from_secs(1) / fps.max(1);
+        lock(&self.state).every = crate::fps::frame(fps.clamp(1, 240));
         self
     }
 
