@@ -197,7 +197,7 @@ enum Key {
 }
 
 /// The next key, from bytes that `read` gives one at a time (`None` after a pause).
-fn read_key(read: &mut impl FnMut() -> io::Result<Option<u8>>) -> io::Result<Key> {
+fn read_key(read: &mut dyn FnMut() -> io::Result<Option<u8>>) -> io::Result<Key> {
     let first = loop {
         // reads time out every 0.1s, which is what lets a lone Esc be told apart
         if let Some(b) = read()? {
@@ -277,11 +277,7 @@ impl Drop for Ui {
     fn drop(&mut self) {
         if self.record && !self.frame.lines.is_empty() {
             let lines = self.frame.lines.iter().map(|l| text::strip_ansi(l).trim().to_string());
-            SCRIPT.with(|s| {
-                if let Some(s) = s.borrow_mut().as_mut() {
-                    s.answered.extend(lines);
-                }
-            });
+            SCRIPT.with(|s| s.borrow_mut().as_mut().map(|s| s.answered.extend(lines)));
         }
     }
 }
@@ -426,6 +422,10 @@ fn problem(why: &str) -> String {
 
 /// Whether there's someone to ask: a terminal on stdin, or a [`script`] of keys.
 fn interactive() -> bool {
+    #[cfg(test)]
+    if let Some(terminal) = crate::output::pretended_terminal() {
+        return scripted() || terminal;
+    }
     scripted() || io::stdin().is_terminal()
 }
 
@@ -869,9 +869,12 @@ impl<'a> Input<'a> {
 /// File and folder names that complete `typed`, as whole paths. Hidden files only show once
 /// a `.` is typed.
 fn complete_path(typed: &str) -> Vec<String> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default();
+    let home = std::env::var("HOME").or(std::env::var("USERPROFILE"));
+    complete_path_in(typed, &home.unwrap_or_default())
+}
+
+/// [`complete_path`], with `~` standing for `home`.
+fn complete_path_in(typed: &str, home: &str) -> Vec<String> {
     let expanded = match typed.strip_prefix('~') {
         Some(rest) if !home.is_empty() => format!("{home}{rest}"),
         _ => typed.to_string(),
@@ -1033,18 +1036,19 @@ where
         s.trim()
             .parse::<T>()
             .map(|_| ())
-            .map_err(|_| format!("“{s}” isn't a {}", kind_of_number::<T>()))
+            .map_err(|_| format!("“{s}” isn't a {}", kind_of_number(std::any::type_name::<T>())))
     });
     if let Some(d) = default {
         q = q.default(d.to_string());
     }
     let answer = q.ask()?;
-    answer.trim().parse().map_err(|_| Error::Invalid(answer))
+    // already checked, so it parses
+    let parsed = answer.trim().parse().ok();
+    parsed.ok_or(Error::Invalid(answer))
 }
 
 /// "whole number" or "number", from the type's name.
-fn kind_of_number<T>() -> &'static str {
-    let name = std::any::type_name::<T>();
+fn kind_of_number(name: &str) -> &'static str {
     if name.starts_with('u') {
         "whole number of 0 or more"
     } else if name.starts_with('i') {
@@ -1368,9 +1372,7 @@ impl<'a> Picker<'a> {
         } else {
             (target..=self.cursor).find(|&pos| self.selectable(pos))
         };
-        if let Some(pos) = found {
-            self.cursor = pos;
-        }
+        self.cursor = found.unwrap_or(self.cursor);
     }
 
     /// Handle a key that moves or filters; returns `false` for keys it doesn't use.
@@ -1431,7 +1433,7 @@ impl<'a> Picker<'a> {
 
     /// The visible rows, each option after `prefix(option, is cursor)`; with a count of
     /// options above and below when the list scrolls.
-    fn rows(&self, prefix: impl Fn(Option<usize>, bool) -> String) -> Vec<String> {
+    fn rows(&self, prefix: &dyn Fn(Option<usize>, bool) -> String) -> Vec<String> {
         let layout = self.layout();
         if layout.is_empty() {
             return vec![format!("      {}", paint(MUTED, "no matches"))];
@@ -1674,7 +1676,7 @@ impl<'a> Select<'a> {
         loop {
             let mut lines = picker.top();
             lines.extend(trouble.as_deref().map(problem));
-            lines.extend(picker.rows(|_, here| pointer(here)));
+            lines.extend(picker.rows(&|_, here| pointer(here)));
             lines.push(self.choices.keys(hint));
             ui.draw(&lines);
             match ui.key()? {
@@ -1814,7 +1816,7 @@ impl<'a> MultiSelect<'a> {
         loop {
             let mut lines = picker.top();
             lines.extend(trouble.as_deref().map(problem));
-            lines.extend(picker.rows(|i, here| {
+            lines.extend(picker.rows(&|i, here| {
                 let i = i.unwrap_or_default();
                 let mark = if picked[i] {
                     paint(ROSE, "◉")
@@ -1997,7 +1999,7 @@ impl<'a> Dropdown<'a> {
         loop {
             let mut lines = picker.top();
             lines.extend(trouble.as_deref().map(problem));
-            lines.extend(picker.rows(|_, here| pointer(here)));
+            lines.extend(picker.rows(&|_, here| pointer(here)));
             lines.push(self.choices.keys(hint));
             ui.draw(&lines);
             match ui.key()? {
@@ -2239,11 +2241,19 @@ fn calendar(at: Date, today: Date) -> Vec<String> {
 /// ```
 pub fn editor(question: &str, initial: &str) -> Result<String> {
     need_terminal()?;
-    let command = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .ok()
-        .filter(|e| !e.trim().is_empty())
-        .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.into());
+    let command = editor_command(std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok());
+    edit(question, initial, &command)
+}
+
+/// The editor to run: `$VISUAL`, then `$EDITOR`, unless they're empty, then the system's own.
+fn editor_command(visual: Option<String>, editor: Option<String>) -> String {
+    let set = |e: &Option<String>| e.as_ref().is_some_and(|e| !e.trim().is_empty());
+    let chosen = [visual, editor].into_iter().find(set).flatten();
+    chosen.unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.into())
+}
+
+/// [`editor`], running `command` with the file's path after its own arguments.
+fn edit(question: &str, initial: &str, command: &str) -> Result<String> {
     let mut words = command.split_whitespace();
     let program = words.next().unwrap_or("vi");
     let nanos = std::time::SystemTime::now()
