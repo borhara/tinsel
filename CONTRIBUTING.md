@@ -37,7 +37,8 @@ their own file under `tests/` (see `tests/styled.rs`). For `Live`, use `Live::he
 Prompts read keys through a `Ui`, so their tests type a script of keys with `Ui::script` (or
 the public `prompt::script`) and check what was drawn last (see the tests in `src/prompt.rs`).
 The live redraw can't be unit-tested in a pipe. Try both in a real terminal, and if you can,
-on macOS, Linux and Windows. CI checks that all three build.
+on macOS, Linux and Windows. CI runs every test on all three, though the ones on a real
+terminal (`src/processes.rs`) need a pseudo-terminal, so on Windows only those without one run.
 
 ## Recording the demo
 
