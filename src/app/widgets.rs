@@ -1046,6 +1046,114 @@ pub fn big(text: &str) -> Block {
     rows.iter().map(|r| gradient(r, &RAMP, 0.0)).collect()
 }
 
+// MARK: - Loading
+
+/// Something on its way: a spinner and a shimmering label, as a [`Live`](crate::Live) step
+/// shows while it runs, with a live bar under it once there's [`progress`](Loading::progress)
+/// to show. It animates on the app's clock, so it needs nothing kept between frames. Put it
+/// in a panel while its data loads, or in a footer while something saves.
+///
+/// ```
+/// use tinsel::app::{Frame, Loading};
+///
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// let mut frame = Frame::new(30, 2);
+/// frame.render(frame.area(), Loading::new("fetching pods").progress(0.5, "6 / 12"));
+/// let shown = frame.snapshot().plain();
+/// assert!(shown.contains("fetching pods") && shown.contains(" 50%  6 / 12"));
+/// ```
+#[derive(Clone, Debug)]
+pub struct Loading {
+    label: String,
+    detail: String,
+    progress: Option<(f32, String)>,
+    spinner: crate::Spinner,
+    centered: bool,
+}
+
+impl Loading {
+    /// A spinner beside `label`, saying what's happening.
+    pub fn new(label: impl Into<String>) -> Self {
+        Loading {
+            label: label.into(),
+            detail: String::new(),
+            progress: None,
+            spinner: crate::Spinner::default(),
+            centered: false,
+        }
+    }
+
+    /// A quieter line under the label, saying more: what it's waiting on, how long it's been.
+    /// Left out once there's progress to show.
+    pub fn detail(mut self, text: impl Into<String>) -> Self {
+        self.detail = text.into();
+        self
+    }
+
+    /// How far along it is, from 0 to 1, shown as a bar and a percentage, with `text`
+    /// beside it: `"6 / 12"`, `"17 MB"`.
+    pub fn progress(mut self, fraction: f32, text: impl Into<String>) -> Self {
+        self.progress = Some((fraction.clamp(0.0, 1.0), text.into()));
+        self
+    }
+
+    /// Which spinner: [`Sparkle`](crate::Spinner::Sparkle) unless changed.
+    pub fn spinner(mut self, spinner: crate::Spinner) -> Self {
+        self.spinner = spinner;
+        self
+    }
+
+    /// Sit in the middle of the area, as a panel's whole body does while it waits.
+    pub fn centered(mut self) -> Self {
+        self.centered = true;
+        self
+    }
+
+    /// The lines to draw at `t` seconds, the second in from the first by the spinner's width.
+    fn lines(&self, t: f32, width: usize) -> Vec<String> {
+        let mark = self.spinner.frame(t);
+        let indent = " ".repeat(mark.width() + 1);
+        let mut lines = vec![format!("{mark} {}", crate::shimmer(&self.label, t))];
+        if let Some((p, text)) = &self.progress {
+            let room = width.saturating_sub(indent.len() + 2 + text::width(text) + 6);
+            let bar = crate::live_bar(*p, room.clamp(8, 30), t);
+            let stats = format!("{:>3.0}%  {text}", p * 100.0);
+            lines.push(format!("{indent}{bar}  {}", paint(SOFT, stats.trim_end())));
+        } else if !self.detail.is_empty() {
+            lines.push(format!("{indent}{}", paint(MUTED, &self.detail)));
+        }
+        lines
+    }
+}
+
+impl Widget for Loading {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        if area.is_empty() {
+            return;
+        }
+        let lines = self.lines(frame.time(), area.width);
+        if !self.centered {
+            for (row, line) in lines.iter().enumerate() {
+                frame.print(area, row, line);
+            }
+            return;
+        }
+        // centred as a whole, so the second line keeps its place under the label
+        let w = lines.iter().map(|l| text::width(l)).max().unwrap_or(0).min(area.width);
+        let h = lines.len().min(area.height);
+        let at = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+        for (row, line) in lines.iter().enumerate() {
+            frame.print(at, row, line);
+        }
+    }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        let lines = self.lines(0.0, 60);
+        let widest = lines.iter().map(|l| text::width(l)).max().unwrap_or(0);
+        Some((widest, lines.len()))
+    }
+}
+
 // MARK: - Little touches
 
 /// Key hints for a footer: `q quit · ↑↓ move · tab next panel`.
@@ -1220,6 +1328,51 @@ impl Widget for Sparkles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loading_says_what_its_waiting_for_then_how_far_it_is() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let drawn = |loading: Loading, w, h| {
+            let mut f = Frame::new(w, h).at(1.0);
+            f.render(f.area(), loading);
+            f.snapshot().plain()
+        };
+        let waiting = drawn(Loading::new("fetching").detail("from eu-west"), 24, 2);
+        assert_eq!(
+            waiting.lines().map(|l| &l[l.find(' ').unwrap()..]).collect::<Vec<_>>(),
+            [" fetching", "    from eu-west"]
+        );
+        let mut lines = drawn(Loading::new("saving").progress(1.5, ""), 30, 2)
+            .lines()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        assert!(
+            lines.remove(1).trim_end().ends_with("100%"),
+            "clamped, and no trailing gap"
+        );
+        // centred as a whole in the area, the bar still under the label
+        let middle = drawn(
+            Loading::new("ab")
+                .spinner(crate::Spinner::Arc)
+                .progress(0.5, "x")
+                .centered(),
+            30,
+            4,
+        );
+        let rows: Vec<&str> = middle.lines().collect();
+        assert!(
+            rows[0].trim().is_empty() && rows[1].contains("ab") && rows[2].contains("50%  x"),
+            "{middle}"
+        );
+        assert_eq!(
+            rows[1].find(|c: char| c != ' '),
+            rows[2].find(|c: char| c != ' ').map(|i| i - 2),
+            "{middle}"
+        );
+        assert_eq!(drawn(Loading::new("x"), 0, 0), "");
+        assert_eq!(Loading::new("fetching").size(), Some((12, 1)));
+        assert_eq!(Loading::new("x").detail("y").size().map(|s| s.1), Some(2));
+    }
 
     #[test]
     fn blocks_lose_their_margin() {
