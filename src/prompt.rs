@@ -2483,6 +2483,8 @@ mod tests {
         assert_eq!("2026-03-14".parse(), Ok(Date::new(2026, 3, 14).unwrap()));
         assert!("2026-13-01".parse::<Date>().is_err());
         assert!("soon".parse::<Date>().is_err());
+        assert!("2026-300-01".parse::<Date>().is_err());
+        assert!("2026-01-300".parse::<Date>().is_err());
     }
 
     #[test]
@@ -2964,5 +2966,329 @@ mod tests {
         let many = ["api", "web", "worker", "scheduler", "gateway", "search", "billing"];
         assert_eq!(summary(&many), "api, web, worker, scheduler and 3 more");
         assert!(summary(&many).len() <= 40);
+    }
+
+    use crate::app::Key as K;
+    use crate::output::with_terminal;
+
+    #[test]
+    fn errors_say_what_happened() {
+        let io = Error::from(io::Error::other("gone"));
+        let all = [
+            (Error::Cancelled, "cancelled"),
+            (Error::Back, "went back to the previous question"),
+            (Error::NotATerminal, "this question needs a terminal to answer it"),
+            (Error::NoOptions, "there was nothing to choose from"),
+            (Error::Invalid("no".into()), "invalid answer: no"),
+        ];
+        for (e, said) in all {
+            assert_eq!(e.to_string(), said);
+            assert!(std::error::Error::source(&e).is_none());
+        }
+        assert_eq!(io.to_string(), "couldn't talk to the terminal: gone");
+        assert!(std::error::Error::source(&io).is_some());
+    }
+
+    #[test]
+    fn every_key_the_terminal_sends() {
+        let keys = keys_of(b"\t \x7f\x08\x1b[A\x1b[B\x1b[C\x1bOH\x1b[F\x01\x1c\x80");
+        assert_eq!(
+            keys,
+            [
+                Key::Tab,
+                Key::Space,
+                Key::Backspace,
+                Key::Backspace,
+                Key::Up,
+                Key::Down,
+                Key::Right,
+                Key::Home,
+                Key::End,
+                Key::Ctrl('a'),
+                Key::Other,
+                Key::Other,
+            ]
+        );
+        let tilde = keys_of(b"\x1b[1~\x1b[7~\x1b[4~\x1b[8~\x1b[3~\x1b[6~\x1b[2~\x1b[15~\x1bOx");
+        assert_eq!(
+            tilde,
+            [
+                Key::Home,
+                Key::Home,
+                Key::End,
+                Key::End,
+                Key::Delete,
+                Key::PageDown,
+                Key::Other,
+                Key::Other,
+                Key::Other,
+            ]
+        );
+        assert_eq!(keys_of("✦🎉".as_bytes()), [Key::Char('✦'), Key::Char('🎉')]);
+    }
+
+    #[test]
+    fn every_app_key_has_a_question_key() {
+        let pairs = [
+            (K::Ctrl('x'), Key::Ctrl('x')),
+            (K::Tab, Key::Tab),
+            (K::Backspace, Key::Backspace),
+            (K::Delete, Key::Delete),
+            (K::Esc, Key::Esc),
+            (K::Up, Key::Up),
+            (K::Down, Key::Down),
+            (K::Left, Key::Left),
+            (K::Right, Key::Right),
+            (K::Home, Key::Home),
+            (K::End, Key::End),
+            (K::PageUp, Key::PageUp),
+            (K::PageDown, Key::PageDown),
+            (K::BackTab, Key::Other),
+            (K::F(1), Key::Other),
+        ];
+        for (from, to) in pairs {
+            assert_eq!(Key::from(from), to, "{from:?}");
+        }
+    }
+
+    #[test]
+    fn frames_draw_over_themselves_on_screen() {
+        let mut frame = Frame::default();
+        frame.draw(&["one".into(), "two".into()]);
+        frame.draw(&["three".into()]);
+        assert_eq!(
+            (frame.drawn, frame.lines.as_slice()),
+            (1, ["three".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn passwords_show_dots() {
+        let mut keys = typed("hunter2");
+        keys.push(Key::Enter);
+        let mut ui = Ui::script(&keys);
+        assert_eq!(Input::new("Password").password().run(&mut ui).unwrap(), "hunter2");
+        assert_eq!(ui.shown(), ["  ●  Password  •••••••"]);
+        let mut ui = Ui::script(&[Key::Char('a'), Key::Left]);
+        let _ = Input::new("Password").password().run(&mut ui);
+        assert_eq!(ui.shown(), ["  ?  Password  ▏•"]);
+        assert!(matches!(
+            Input::new("x").run(&mut Ui::script(&[Key::Esc])),
+            Err(Error::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn tab_cycles_through_many_suggestions() {
+        let many = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8"];
+        let q = Input::new("Pick").suggestions(&many);
+        let mut ui = Ui::script(&[Key::Char('a'), Key::Tab, Key::Tab]);
+        let _ = q.run(&mut ui);
+        assert_eq!(ui.shown()[0], "  ?  Pick  a2▏");
+        assert_eq!(ui.shown()[1], "     a1  a2  a3  a4  a5  a6  +2");
+        let keys = [Key::Char('a'), Key::Char('7'), Key::Tab, Key::Enter];
+        assert_eq!(q.run(&mut Ui::script(&keys)).unwrap(), "a7");
+    }
+
+    #[test]
+    fn delete_takes_the_character_under_the_cursor() {
+        let mut e = LineEdit::default();
+        e.set("abc");
+        e.key(Key::Home);
+        assert!(e.key(Key::Delete));
+        assert!(e.key(Key::Ctrl('d')));
+        assert_eq!(e.text, "c");
+        assert!(!e.key(Key::PageUp));
+    }
+
+    #[test]
+    fn paths_complete_from_the_folder_typed_so_far() {
+        let dir = std::env::temp_dir().join(format!("tinsel-paths-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "").unwrap();
+        std::fs::write(dir.join(".hidden"), "").unwrap();
+        let typed = format!("{}/", dir.display());
+        assert_eq!(
+            complete_path_in(&typed, ""),
+            [format!("{typed}Cargo.toml"), format!("{typed}src/")]
+        );
+        assert_eq!(complete_path_in(&format!("{typed}."), ""), [format!("{typed}.hidden")]);
+        let home = dir.display().to_string();
+        assert_eq!(complete_path_in("~/C", &home), ["~/Cargo.toml"]);
+        assert_eq!(complete_path_in("/nonexistent/x", &home), Vec::<String>::new());
+        assert!(!complete_path("").is_empty(), "the current folder has files");
+        let q = Input::new("Path").paths();
+        let keys: Vec<Key> = typed
+            .chars()
+            .map(Key::Char)
+            .chain([Key::Char('s'), Key::Tab, Key::Enter])
+            .collect();
+        assert_eq!(q.run(&mut Ui::script(&keys)).unwrap(), format!("{typed}src/"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn numbers_and_typed_confirmations() {
+        assert_eq!(kind_of_number("u8"), "whole number of 0 or more");
+        assert_eq!(kind_of_number("i32"), "whole number");
+        assert_eq!(kind_of_number("f64"), "number");
+        let _script = script([K::Enter]);
+        assert_eq!(number::<u32>("Replicas", Some(3)).unwrap(), 3);
+        drop(_script);
+        let _script = script(crate::prompt::typed("my-app").into_iter().chain([K::Enter]));
+        assert!(confirm_typing("Delete?", "my-app").is_ok());
+    }
+
+    #[test]
+    fn notes_and_badges_need_an_option_to_go_on() {
+        let q = Select::new("q")
+            .note("n")
+            .badge("b")
+            .dim()
+            .option("a")
+            .badge("new")
+            .note("a note")
+            .dim();
+        let mut ui = Ui::script(&[]);
+        crate::style::with_color_mode(crate::ColorMode::TrueColor, || {
+            let _ = q.run(&mut ui);
+        });
+        assert!(
+            ui.frame.lines.iter().any(|l| l.contains(" new ")),
+            "{:?}",
+            ui.frame.lines
+        );
+    }
+
+    #[test]
+    fn long_lists_page_and_filter() {
+        let pick = |keys: &[Key]| run_select("Pick", &LONG, &mut Ui::script(keys));
+        assert_eq!(
+            pick(&[Key::PageDown, Key::PageUp, Key::PageDown, Key::Enter]).unwrap(),
+            8
+        );
+        let mut keys = typed("zz");
+        keys.extend([Key::PageUp, Key::Enter, Key::Backspace, Key::Backspace, Key::Enter]);
+        assert_eq!(pick(&keys).unwrap(), 0);
+        let mut keys = typed("ech");
+        keys.extend([Key::Ctrl('u'), Key::Enter]);
+        assert_eq!(pick(&keys).unwrap(), 4);
+        let short = |keys: &[Key]| run_select("Pick", &["a", "b"], &mut Ui::script(keys));
+        assert_eq!(short(&[Key::Char('k'), Key::Enter]).unwrap(), 1);
+    }
+
+    #[test]
+    fn multiselect_toggles_whats_shown_and_cancels() {
+        let mut keys = typed("zz");
+        keys.extend([Key::Space, Key::Ctrl('u'), Key::Ctrl('a'), Key::Enter]);
+        let all: Vec<usize> = (0..LONG.len()).collect();
+        assert_eq!(
+            run_multiselect("Pick", &LONG, &[], &mut Ui::script(&keys)).unwrap(),
+            all
+        );
+        assert!(matches!(
+            run_multiselect("Pick", &["a"], &[], &mut Ui::script(&[Key::Esc])),
+            Err(Error::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn the_shortcuts_ask_through_a_script() {
+        let _script = script([K::Down, K::Enter]);
+        assert_eq!(select("Env", &["dev", "prod"]).unwrap(), 1);
+        drop(_script);
+        let _script = script([K::Char(' '), K::Enter]);
+        assert_eq!(multiselect("Parts", &["a", "b"], &[]).unwrap(), [0]);
+    }
+
+    #[test]
+    fn asking_without_a_terminal_or_options() {
+        with_terminal(false, || {
+            assert_eq!(Select::new("q").option("a").default(0).ask().unwrap(), 0);
+            assert_eq!(MultiSelect::new("q").option("a").default(&[0]).ask().unwrap(), [0]);
+            assert_eq!(Dropdown::new("q").option("a").default(0).ask().unwrap(), "a");
+        });
+        let _script = script([K::Enter]);
+        assert!(matches!(
+            Select::new("q").disabled("a", "no").ask(),
+            Err(Error::NoOptions)
+        ));
+        // nothing to choose from is an answer, unless none isn't allowed
+        assert!(MultiSelect::new("q").ask().unwrap().is_empty());
+        let at_least_one =
+            MultiSelect::new("q").validate(|p| if p.is_empty() { Err("pick one".into()) } else { Ok(()) });
+        assert!(matches!(at_least_one.ask(), Err(Error::NoOptions)));
+        assert!(matches!(
+            Dropdown::new("q").disabled("a", "no").ask(),
+            Err(Error::NoOptions)
+        ));
+        assert_eq!(Dropdown::new("q").option("a").ask().unwrap(), "a");
+    }
+
+    #[test]
+    fn dropdowns_take_spaces_and_ignore_keys_they_dont_use() {
+        let keys = [Key::Char('a'), Key::Space, Key::Char('b'), Key::Tab, Key::Enter];
+        let q = Dropdown::new("Name").option("x").allow_custom();
+        assert_eq!(q.run(&mut Ui::script(&keys)).unwrap(), "a b");
+    }
+
+    #[test]
+    fn dates_are_picked_on_a_calendar() {
+        let start = Date::new(2026, 11, 12).unwrap();
+        let moves = [
+            K::Left,
+            K::Char('l'),
+            K::Up,
+            K::Char('j'),
+            K::PageUp,
+            K::Char(']'),
+            K::Right,
+            K::Char('h'),
+            K::Down,
+            K::Char('k'),
+            K::PageDown,
+            K::Char('['),
+            K::Char('x'),
+            K::Enter,
+        ];
+        let script = script(moves);
+        assert_eq!(date("When", Some(start)).unwrap(), start);
+        assert_eq!(script.answered(), ["●  When  2026-11-12"]);
+        let _script = crate::prompt::script([K::Char('t'), K::Enter]);
+        assert_eq!(date("When", Some(start)).unwrap(), Date::today());
+        let _cancel = crate::prompt::script([K::Esc]);
+        assert!(matches!(date("When", None), Err(Error::Cancelled)));
+        // a month that ends on a Sunday has no part-week left over
+        let may = calendar(Date::new(2026, 5, 31).unwrap(), Date::new(2026, 5, 1).unwrap());
+        assert!(may.last().unwrap().contains("31"));
+    }
+
+    #[test]
+    fn the_editor_comes_from_the_environment() {
+        let set = |s: &str| Some(s.to_string());
+        assert_eq!(editor_command(set("code -w"), set("nano")), "code -w");
+        assert_eq!(editor_command(set(" "), set("nano")), "nano");
+        assert_eq!(editor_command(None, None), if cfg!(windows) { "notepad" } else { "vi" });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_editor_writes_the_answer() {
+        let dir = std::env::temp_dir().join(format!("tinsel-editor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tool = |name: &str, body: &str| {
+            use std::os::unix::fs::PermissionsExt;
+            let path = dir.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path.display().to_string()
+        };
+        let writes = tool("writes", r#"printf 'one\n\ntwo\n' >> "$1""#);
+        assert_eq!(edit("Notes", "zero\n", &writes).unwrap(), "zero\none\n\ntwo\n");
+        assert!(matches!(edit("Notes", "", "false"), Err(Error::Cancelled)));
+        assert!(matches!(edit("Notes", "", "/nonexistent/editor"), Err(Error::Io(_))));
+        let deletes = tool("deletes", r#"rm "$1""#);
+        assert!(matches!(edit("Notes", "", &deletes), Err(Error::Io(_))));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
