@@ -458,7 +458,7 @@ fn read_piped() -> Result<Option<String>> {
 ///
 /// Without a terminal it reads a line instead: `y`, `yes`, `n` or `no` in any case, and an
 /// empty line (or the end of the input) takes the default. Anything else is an
-/// [`Error::Invalid`].
+/// [`Error::Invalid`], unless the question is [`lenient`](Confirm::lenient).
 ///
 /// ```no_run
 /// if tinsel::prompt::confirm("Deploy to production?", false)? {
@@ -484,6 +484,7 @@ pub struct Confirm {
     default: bool,
     back: bool,
     at_end: Option<bool>,
+    lenient: bool,
 }
 
 impl Confirm {
@@ -494,6 +495,7 @@ impl Confirm {
             default: false,
             back: false,
             at_end: None,
+            lenient: false,
         }
     }
 
@@ -516,11 +518,28 @@ impl Confirm {
         self
     }
 
+    /// Read a piped answer the way shell scripts often do: anything starting with `y` or `Y`
+    /// is yes, anything else is no, and an empty line takes the [`default`](Confirm::default).
+    /// Without it, only `y`, `yes`, `n` and `no` (in any case) are answers, and anything else
+    /// is an [`Error::Invalid`]. Keys typed at a terminal work the same either way.
+    ///
+    /// ```no_run
+    /// use tinsel::prompt::Confirm;
+    ///
+    /// // `echo yep | my-cli` says yes, `echo nope | my-cli` says no
+    /// let go = Confirm::new("Go?").lenient().ask()?;
+    /// # Ok::<(), tinsel::prompt::Error>(())
+    /// ```
+    pub fn lenient(mut self) -> Self {
+        self.lenient = true;
+        self
+    }
+
     /// Ask the question. Without a terminal, reads the answer from stdin as [`confirm`] does.
     pub fn ask(self) -> Result<bool> {
         if !interactive() {
             return match read_piped()? {
-                Some(line) => yes_or_no(&line, self.default),
+                Some(line) => yes_or_no(&line, self.default, self.lenient),
                 None => Ok(self.at_end.unwrap_or(self.default)),
             };
         }
@@ -552,9 +571,13 @@ impl Confirm {
     }
 }
 
-/// A yes or no answer read from a pipe.
-fn yes_or_no(line: &str, default: bool) -> Result<bool> {
-    match line.trim().to_lowercase().as_str() {
+/// A yes or no answer read from a pipe. Leniently, anything but an empty line is an answer.
+fn yes_or_no(line: &str, default: bool, lenient: bool) -> Result<bool> {
+    let answer = line.trim().to_lowercase();
+    if lenient && !answer.is_empty() {
+        return Ok(answer.starts_with('y'));
+    }
+    match answer.as_str() {
         "" => Ok(default),
         "y" | "yes" => Ok(true),
         "n" | "no" => Ok(false),
@@ -2623,12 +2646,37 @@ mod tests {
     #[test]
     fn confirm_reads_piped_answers() {
         for (line, want) in [("y", true), ("YES", true), (" no ", false), ("N", false)] {
-            assert_eq!(yes_or_no(line, false).unwrap(), want, "{line}");
+            assert_eq!(yes_or_no(line, false, false).unwrap(), want, "{line}");
         }
         // an empty line, or nothing at all, takes the default
-        assert!(yes_or_no("", true).unwrap());
-        assert!(!yes_or_no("", false).unwrap());
-        assert!(matches!(yes_or_no("maybe", true), Err(Error::Invalid(_))));
+        assert!(yes_or_no("", true, false).unwrap());
+        assert!(!yes_or_no("", false, false).unwrap());
+        assert!(matches!(yes_or_no("maybe", true, false), Err(Error::Invalid(_))));
+        assert!(matches!(yes_or_no("yep", false, false), Err(Error::Invalid(_))));
+    }
+
+    #[test]
+    fn lenient_confirm_takes_anything_starting_with_y_as_yes() {
+        for (line, want) in [
+            ("y", true),
+            ("Yep", true),
+            ("  yes please ", true),
+            ("YES", true),
+            ("n", false),
+            ("nope", false),
+            ("maybe", false),
+            ("ok", false),
+            ("1", false),
+        ] {
+            assert_eq!(yes_or_no(line, false, true).unwrap(), want, "{line}");
+            assert_eq!(yes_or_no(line, true, true).unwrap(), want, "{line}");
+        }
+        // an empty line still takes the default
+        assert!(yes_or_no("", true, true).unwrap());
+        assert!(!yes_or_no("  ", false, true).unwrap());
+        // and the keys at a terminal are the same
+        let go = Confirm::new("Go?").default(true).lenient();
+        assert!(!go.run(&mut Ui::script(&[Key::Char('q'), Key::Char('n')])).unwrap());
     }
 
     #[test]
