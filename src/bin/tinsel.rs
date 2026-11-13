@@ -43,14 +43,23 @@ fn help() -> Help {
     .command("help", "this")
     .flag("--spinner <NAME>", "sparkle, dots, comet, wave, arc, orbit or pulse")
     .flag("--theme <light|dark>", "preview the other theme")
-    .flag("--accent <NAME>", "pink, violet, blue, teal, orange, or a hue in degrees")
+    .flag(
+        "--accent <NAME>",
+        "pink, violet, blue, teal, orange, or a hue in degrees",
+    )
     .flag("--bar <line|waveform>", "how the deploy draws its progress bars")
     .flag("--json", "every message, step and error as a line of JSON")
     .flag("--quiet", "only what needs attention")
     .flag("--stderr", "draw on stderr, leaving stdout for something else")
     .example("tinsel showcase table", "just the tables")
-    .example("tinsel demo --bar waveform --accent teal", "the deploy, in teal, with waveform progress")
-    .example("tinsel demo --json | jq -r .event", "what a program reading tinsel's JSON sees")
+    .example(
+        "tinsel demo --bar waveform --accent teal",
+        "the deploy, in teal, with waveform progress",
+    )
+    .example(
+        "tinsel demo --json | jq -r .event",
+        "what a program reading tinsel's JSON sees",
+    )
     .footer("docs and examples: https://docs.rs/tinsel")
 }
 
