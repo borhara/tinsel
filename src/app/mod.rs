@@ -134,7 +134,7 @@ pub trait App {
     /// How many times a second to draw and send [`Event::Tick`]. 30 unless changed; lower
     /// it for a dashboard with nothing animated.
     fn fps(&self) -> u32 {
-        30
+        crate::fps()
     }
 
     /// The terminal window's title while the app runs, such as the app's name and what it
@@ -981,6 +981,6 @@ mod tests {
         assert_eq!(app.event(&Event::Key(Key::Char('q'))), Flow::Quit);
         assert_eq!(app.event(&Event::Key(Key::Esc)), Flow::Quit);
         assert_eq!(app.event(&Event::Tick), Flow::Continue);
-        assert_eq!((app.fps(), app.mouse()), (30, false));
+        assert_eq!((app.fps(), app.mouse()), (crate::fps(), false));
     }
 }

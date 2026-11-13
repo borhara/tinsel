@@ -1,7 +1,7 @@
 //! One-line live output for a single task: `spin` around a closure, or a standalone `Progress`.
 
 use std::fmt::Display;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -15,6 +15,8 @@ use crate::{format, term, text};
 /// Redraws one line in place from a background thread until finished.
 struct Ticker {
     stop: Arc<AtomicBool>,
+    /// Frames a second; 0 for the global rate.
+    fps: Arc<AtomicU32>,
     thread: Option<JoinHandle<()>>,
     prev_interrupt: Option<usize>,
 }
@@ -26,15 +28,18 @@ impl Ticker {
         output::write("\x1b[?25l\x1b[?7l");
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
+        let fps = Arc::new(AtomicU32::new(0));
+        let rate = fps.clone();
         let thread = thread::spawn(move || {
             let t0 = Instant::now();
             while !flag.load(Ordering::Relaxed) {
                 output::write(&format!("\r{}\x1b[K", frame(t0.elapsed().as_secs_f32())));
-                thread::sleep(Duration::from_millis(33));
+                thread::sleep(crate::fps::frame(rate.load(Ordering::Relaxed)));
             }
         });
         Ticker {
             stop,
+            fps,
             thread: Some(thread),
             prev_interrupt,
         }
@@ -187,6 +192,14 @@ impl Progress {
             ticker,
             finished: false,
         }
+    }
+
+    /// Draw this many frames a second, rather than [`fps`](crate::fps) for every display.
+    pub fn fps(self, fps: u32) -> Self {
+        if let Some(ticker) = &self.ticker {
+            ticker.fps.store(fps.clamp(1, 240), Ordering::Relaxed);
+        }
+        self
     }
 
     /// Show amounts as bytes (`12 MB / 34 MB · 4.1 MB/s`) rather than plain counts.
