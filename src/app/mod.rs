@@ -92,10 +92,15 @@ use crate::block::Block;
 use crate::term;
 
 /// Something that happened, handed to [`App::event`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     /// A key was pressed.
     Key(Key),
+    /// Text was pasted, all at once, with its line breaks as `\n`: a newline in it is part
+    /// of the text, not a press of Enter. [`Input`] takes it as typed. Terminals that can't
+    /// say what's pasted (older ones, Windows consoles outside Windows Terminal) send it as
+    /// keys instead.
+    Paste(String),
     /// The mouse was clicked or scrolled (only if [`App::mouse`] says so).
     Mouse(Mouse),
     /// Time passed: [`App::fps`] of these arrive a second.
@@ -442,8 +447,9 @@ pub fn navigate(selected: &mut usize, len: usize, event: &Event) -> bool {
 static ON_SCREEN: AtomicBool = AtomicBool::new(false);
 
 // the window title is saved on entering (22t) and put back on leaving (23t)
-const ENTER: &str = "\x1b[22;0t\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[2J";
-const LEAVE: &str = "\x1b[0m\x1b[?1000l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t";
+// and pastes arrive bracketed (2004), so they can be told apart from typing
+const ENTER: &str = "\x1b[22;0t\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?2004h\x1b[2J";
+const LEAVE: &str = "\x1b[0m\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t";
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
 
 /// The alternate screen, raw keys and a hidden cursor, for as long as it lives.
@@ -719,9 +725,9 @@ mod tests {
         }
 
         fn event(&mut self, event: &Event) -> Flow {
-            self.seen.push(*event);
+            self.seen.push(event.clone());
             let ticks = self.seen.iter().filter(|e| **e == Event::Tick).count();
-            if Some(*event) == self.quit_on || self.quit_after_ticks == Some(ticks) {
+            if Some(event) == self.quit_on.as_ref() || self.quit_after_ticks == Some(ticks) {
                 return Flow::Quit;
             }
             Flow::Continue
@@ -735,7 +741,7 @@ mod tests {
     fn keys(rx_events: &[Event]) -> mpsc::Receiver<Event> {
         let (tx, rx) = mpsc::channel();
         for e in rx_events {
-            tx.send(*e).unwrap();
+            tx.send(e.clone()).unwrap();
         }
         // kept open, so the loop waits on ticks rather than seeing the events stop
         std::mem::forget(tx);
