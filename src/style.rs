@@ -332,15 +332,20 @@ fn for_accent(rgb: Rgb, hue: f32) -> Rgb {
     from_hsl((deg + hue - PINK_HUE).rem_euclid(360.0) / 360.0, s, l)
 }
 
-/// The SGR parameters for a colour; `layer` is 38 for foreground, 48 for background.
-pub(crate) fn sgr(rgb: Rgb, layer: u8) -> String {
+/// A palette colour as it's drawn, in the accent and theme in use.
+pub(crate) fn shown(rgb: Rgb) -> Rgb {
     let hue = accent_hue();
     let rgb = if (hue - PINK_HUE).abs() > 0.5 {
         for_accent(rgb, hue)
     } else {
         rgb
     };
-    let Rgb(r, g, b) = if theme() == Theme::Light { for_light(rgb) } else { rgb };
+    if theme() == Theme::Light { for_light(rgb) } else { rgb }
+}
+
+/// The SGR parameters for a colour; `layer` is 38 for foreground, 48 for background.
+pub(crate) fn sgr(rgb: Rgb, layer: u8) -> String {
+    let Rgb(r, g, b) = shown(rgb);
     if color_mode() == ColorMode::TrueColor {
         format!("{layer};2;{r};{g};{b}")
     } else {

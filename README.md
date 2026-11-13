@@ -240,7 +240,9 @@ app::run(Dash { latency: vec![84.0, 90.0, 120.0, 340.0, 95.0] })?;   // q or Esc
 
 Anything tinsel draws (tables, trees, cards, any `Block`) goes straight into a panel, next to
 `List`, `Tabs`, `Plot`, `Stat`, `big` text, `hints` and twinkling `Sparkles`.
-`app::snapshot(&app, 80, 24)` draws a frame without a terminal, for tests.
+`app::snapshot(&app, 80, 24)` draws a frame without a terminal, for tests, and
+`Frame::html()` (or `Block::html()`) turns one into a web page that looks just like it, for
+screenshots.
 
 **Report an error** with its whole cause chain:
 
@@ -332,7 +334,7 @@ cargo run --example deploy         # small, copyable examples: hello, deploy, pa
 | **code** | `diff` · `Code` excerpts with syntax colouring (Rust, TOML, JSON, YAML, shell, Python, JS), a highlighted line and a caret under the problem |
 | **documents** | `markdown` · `json` · `Help` with an animated entrance · `Block::page` |
 | **inline** | `badge` · `link` (clickable) · `Card` · `paint`, `bold`, `dim`, `italic`, `underline`, `gradient` |
-| **apps** | `app::run` full-screen apps · `Panel` · `List` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys, mouse and resize events · `app::snapshot` for tests |
+| **apps** | `app::run` full-screen apps · `Panel` · `List` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys, mouse and resize events · `app::snapshot` for tests · `Frame::html` for screenshots |
 | **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` / `Select` · `multiselect` / `MultiSelect` (filter as you type, headings, disabled options with a reason, validation) · `Dropdown` for long lists (notes, badges, your own answer) · `.back()` to go back a question · `editor` · suggestions and path completion · `confirm_typing` |
 | **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_focus` · `set_history` · `set_accent` · `set_theme` · `set_color_mode` · `timings` |
 | **helpers** | `text::{width, pad, truncate, wrap, strip_ansi}` · `format::{bytes, duration, count, ago, plural}` |

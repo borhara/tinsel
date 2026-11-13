@@ -115,6 +115,37 @@ impl Block {
         let _ = child.wait();
     }
 
+    /// The block as a web page that looks just like it does in the terminal, colours and all,
+    /// as [`Frame::html`](crate::app::Frame::html) draws a frame. Draw the block in colour
+    /// (see [`set_color_mode`](crate::set_color_mode)) to see them.
+    ///
+    /// ```
+    /// let page = tinsel::pairs(&[("url", "https://example.com/?a=1&b=2")]).html();
+    /// assert!(page.contains("a=1&amp;b=2"));
+    /// ```
+    pub fn html(&self) -> String {
+        self.frame().html()
+    }
+
+    /// The block as a `<pre>` element, styled inline so it can go anywhere in a page. See
+    /// [`html`](Block::html).
+    ///
+    /// ```
+    /// let pre = tinsel::Block::from(vec!["<b>".to_string()]).html_pre();
+    /// assert!(pre.ends_with("&lt;b&gt;</pre>"));
+    /// ```
+    pub fn html_pre(&self) -> String {
+        self.frame().html_pre()
+    }
+
+    /// The block drawn into a frame just big enough for it.
+    fn frame(&self) -> crate::app::Frame {
+        let width = self.lines.iter().map(|l| crate::text::width(l)).max().unwrap_or(0);
+        let mut frame = crate::app::Frame::new(width, self.len());
+        frame.lines(frame.area(), self);
+        frame
+    }
+
     fn emit(&self) {
         let lines: Vec<String> = self.lines.iter().map(|l| crate::text::strip_ansi(l)).collect();
         crate::output::emit("block", &[("lines", crate::output::Val::List(&lines))]);
