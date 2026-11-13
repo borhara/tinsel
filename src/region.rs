@@ -398,4 +398,82 @@ mod tests {
         // a terminal keeps it by drawing it, not by printing it again
         assert!(!Mode::Draw.prints_last_frame(true));
     }
+
+    use crate::output::{capture, with_output, with_terminal};
+
+    fn view(text: &'static str) -> impl FnMut() -> Block + Send + 'static {
+        move || Block::from(vec![text.to_string()])
+    }
+
+    #[test]
+    fn draws_on_a_terminal_until_finished() {
+        let out = capture(|| {
+            with_terminal(true, || {
+                let region = Region::new(view("r-view")).fps(240);
+                region.log("r-log");
+                std::thread::sleep(Duration::from_millis(20));
+                region.finish();
+                Region::new(view("r-kept")).keep().finish();
+            })
+        });
+        assert!(out.starts_with("\x1b[?25l") && out.ends_with("\x1b[?25h"), "{out:?}");
+        assert!(
+            out.contains("r-view") && out.contains("r-log") && out.contains("r-kept"),
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn off_a_terminal_logs_are_lines_or_events() {
+        let out = capture(|| {
+            with_terminal(false, || {
+                let region = Region::new(view("p-view"));
+                region.log("p-log");
+                region.refresh();
+                drop(region);
+                Region::new(view("p-kept")).keep().finish();
+            })
+        });
+        assert!(
+            out.contains("p-log\n") && out.contains("p-kept\n") && !out.contains("p-view"),
+            "{out:?}"
+        );
+        let json = capture(|| {
+            with_output(Output::Json, || {
+                let region = Region::new(view("j-view")).keep();
+                region.log("j-log");
+            })
+        });
+        assert!(json.contains(r#"{"event":"log","text":"j-log"}"#), "{json}");
+        assert!(json.contains(r#"{"event":"block","lines":["j-view"]}"#), "{json}");
+        let quiet = capture(|| with_output(Output::Quiet, || Region::new(view("q-view")).keep().log("q-log")));
+        assert!(!quiet.contains("q-"), "{quiet}");
+    }
+
+    #[test]
+    fn a_panic_stops_every_region_mid_draw() {
+        capture(|| {
+            let busy = with_terminal(true, || Region::new(view("busy")));
+            let poisoned = with_terminal(true, || Region::new(view("poisoned")));
+            let state = poisoned.state.clone();
+            let _ = std::thread::spawn(move || {
+                let _held = state.lock().unwrap();
+                panic!("poison the region");
+            })
+            .join();
+            // held for a moment while abandon_all waits its turn
+            let held = busy.state.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let holder = std::thread::spawn(move || {
+                let _held = held.lock().unwrap();
+                tx.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(10));
+            });
+            rx.recv().unwrap();
+            assert!(abandon_all());
+            holder.join().unwrap();
+            assert!(lock(&busy.state).abandoned && lock(&poisoned.state).abandoned);
+            assert!(!abandon_all());
+        });
+    }
 }
