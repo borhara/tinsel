@@ -154,4 +154,16 @@ mod tests {
         assert_eq!(width(&pad("\x1b[1mab\x1b[22m", 5)), 5);
         assert_eq!(pad_left("7", 3), "  7");
     }
+
+    #[test]
+    fn strips_every_kind_of_escape() {
+        assert_eq!(strip_ansi("\x1b[1;31mred\x1b[0m"), "red");
+        assert_eq!(strip_ansi("\x1bcreset"), "reset");
+        assert_eq!(strip_ansi("\x1b]0;title\x07after"), "after");
+    }
+
+    #[test]
+    fn a_long_word_starts_its_own_line() {
+        assert_eq!(wrap("ab abcdefghij", 4), ["ab", "abcd", "efgh", "ij"]);
+    }
 }
