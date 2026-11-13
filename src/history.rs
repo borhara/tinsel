@@ -298,12 +298,106 @@ mod tests {
     fn can_be_turned_off_from_code() {
         set_history(false);
         assert!(History::open("tinsel-test").is_none());
+        set_history(true);
+        assert_eq!(cache_dir().is_some(), std::env::var_os("HOME").is_some());
         ENABLED.store(0, Ordering::Relaxed);
+        let _ = cache_dir();
     }
 
     #[test]
     fn file_names_are_safe() {
         assert_eq!(sanitize("my app/../x"), "my_app_.._x");
         assert_eq!(sanitize(".hidden"), "app.hidden");
+    }
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tinsel-history-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn the_cache_lives_under_xdg_or_home() {
+        let (xdg, home) = (Some(OsString::from("/x")), Some(OsString::from("/h")));
+        assert_eq!(cache_dir_from(xdg, home.clone()), Some(PathBuf::from("/x/tinsel")));
+        assert_eq!(cache_dir_from(None, home), Some(PathBuf::from("/h/.cache/tinsel")));
+        assert_eq!(cache_dir_from(None, None), None);
+    }
+
+    #[test]
+    fn the_program_is_named_after_its_executable() {
+        assert!(!History::default_app().is_empty());
+    }
+
+    #[test]
+    fn saves_and_reports_what_it_learned() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let dir = scratch_dir("report");
+        let mut h = History::load(&dir, "my app");
+        h.save();
+        assert!(!dir.exists(), "nothing recorded, nothing written");
+        for (key, runs) in [
+            ("deploy › Build", &[40.0, 40.0, 80.0][..]),
+            ("deploy › Upload", &[10.0, 10.0, 5.0]),
+            ("deploy › Test", &[20.0, 21.0]),
+            ("deploy › Lint", &[3.0]),
+        ] {
+            for &secs in runs {
+                h.record(key, secs);
+            }
+        }
+        h.runs.insert("deploy › Never".into(), Vec::new());
+        h.save();
+        History::load(&dir, "other").save();
+        std::fs::write(dir.join("empty.tsv"), "").unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a history").unwrap();
+
+        let all = report_in(Some(&dir), None).plain();
+        assert!(all.starts_with("  my_app\n"), "{all}");
+        for want in ["100% slower", "50% faster", "steady", "first run"] {
+            assert!(all.contains(want), "{want} in {all}");
+        }
+        assert!(
+            !all.contains("Never") && !all.contains("empty") && !all.contains("notes"),
+            "{all}"
+        );
+        assert_eq!(report_in(Some(&dir), Some("my_app")).plain(), all);
+
+        let mut second = History::load(&dir, "second");
+        second.record("x › y", 1.0);
+        second.save();
+        assert!(report_in(Some(&dir), None).plain().contains("\n\n  second\n"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn says_so_when_theres_nothing_to_report() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let none = report_in(None, None).plain();
+        assert!(none.contains("no step timings recorded yet"), "{none}");
+        assert_eq!(report_in(Some(&scratch_dir("missing")), None).plain(), none);
+        assert_eq!(crate::timings(Some("tinsel-never-ran")).plain(), none);
+    }
+
+    #[test]
+    fn a_history_that_cant_be_written_is_let_go() {
+        let mut h = History::load(Path::new("/dev/null/nowhere"), "x");
+        h.record("k", 1.0);
+        h.save();
+    }
+
+    #[test]
+    fn a_history_in_a_read_only_place_is_let_go() {
+        let dir = scratch_dir("read-only");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&dir, perms.clone()).unwrap();
+        let mut h = History::load(&dir, "x");
+        h.record("k", 1.0);
+        h.save();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&dir, perms).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
