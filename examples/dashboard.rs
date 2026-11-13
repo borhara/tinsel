@@ -4,11 +4,15 @@
 //!
 //! ←→ or 1/2 switch tabs, ↑↓ choose a service, ? for help, q to quit. Clicks and the scroll
 //! wheel work too.
+//!
+//! To draw one frame as a web page instead of running, for a screenshot:
+//!
+//!   cargo run --example dashboard -- --html 120x36 > dashboard.html
 
 use tinsel::app::{
-    self, App, Event, Flow, Frame, Key, List, MouseKind, Panel, Plot, Size::*, Sparkles, Stat, Tabs, hints,
+    self, App, Event, Flow, Footer, Frame, Key, List, MouseKind, Panel, Plot, Size::*, Sparkles, Stat, Tabs,
 };
-use tinsel::{Line, Table, badge, meter, paint, palette, shimmer};
+use tinsel::{ColorMode, Line, Table, Theme, badge, meter, paint, palette, shimmer};
 
 struct Service {
     name: &'static str,
@@ -107,12 +111,34 @@ impl Dashboard {
         *s.latency.last().unwrap_or(&0.0)
     }
 
+    fn slow(&self, s: &Service) -> bool {
+        self.latest(s) > s.base * 2.0
+    }
+
+    /// The tabs, marked with how things are: ✔ while all is calm, a count of slow services
+    /// when not, and how many lines the logs have.
+    fn tabs(&self) -> Tabs {
+        let slow = self.services.iter().filter(|s| self.slow(s)).count();
+        let tabs = Tabs::new(TABS).selected(self.tab);
+        let tabs = if slow == 0 {
+            tabs.badge(0, "✔", palette::SAGE)
+        } else {
+            tabs.badge(0, slow.to_string(), palette::AMBER)
+        };
+        tabs.badge(1, self.logs.len().to_string(), palette::MUTED)
+    }
+
+    /// A dot for a service: green while it's quick, amber while it's slow.
+    fn dot(&self, s: &Service) -> String {
+        paint(if self.slow(s) { palette::AMBER } else { palette::SAGE }, "●")
+    }
+
     fn overview(&self, frame: &mut Frame, area: app::Rect) {
         let [stats, body] = area.rows_gap(0, [Fixed(7), Fill(1)]);
         let cells = stats.columns_gap(1, [Fill(1), Fill(1), Fill(1), Fill(1)]);
         let total: f64 = self.services.iter().map(|s| 12_000.0 / self.latest(s).max(1.0)).sum();
         let p95 = self.latest(&self.services[self.selected]);
-        let slow = self.services.iter().filter(|s| self.latest(s) > s.base * 2.0).count();
+        let slow = self.services.iter().filter(|s| self.slow(s)).count();
         let secs = frame.time() as u64;
         let stat = |label: &str, value: String, note: &str, color| {
             Panel::new("").body(Stat::new(label, value).note(note, color))
@@ -150,14 +176,7 @@ impl Dashboard {
         );
 
         let [side, main] = body.columns_gap(1, [Fixed(26), Fill(1)]);
-        let names = self.services.iter().map(|s| {
-            let dot = if self.latest(s) > s.base * 2.0 {
-                paint(palette::AMBER, "●")
-            } else {
-                paint(palette::SAGE, "●")
-            };
-            format!("{dot} {}", s.name)
-        });
+        let names = self.services.iter().map(|s| format!("{} {}", self.dot(s), s.name));
         frame.render(
             side,
             Panel::new("services")
@@ -170,9 +189,14 @@ impl Dashboard {
         let s = &self.services[self.selected];
         frame.render(
             chart,
-            Panel::new(format!("{} latency", s.name))
-                .body(Plot::new(&s.latency))
-                .footer(format!("now {:.0}ms", self.latest(s))),
+            Panel::new(format!(
+                "{} {}",
+                self.dot(s),
+                paint(palette::TEXT, &format!("{} latency", s.name))
+            ))
+            .status(format!("last {} readings", s.latency.len()))
+            .body(Plot::new(&s.latency))
+            .footer(format!("now {:.0}ms", self.latest(s))),
         );
 
         let [gauges, table] = details.columns_gap(1, [Fill(1), Fill(1)]);
@@ -186,7 +210,7 @@ impl Dashboard {
             .row(["eu-west-2", "12"])
             .row(["us-east-1", "8"])
             .row(["ap-south-1", "3"]);
-        frame.render(table, Panel::new("regions").body(regions));
+        frame.render(table, Panel::new("regions").status("23 pods").body(regions));
     }
 }
 
@@ -202,8 +226,7 @@ impl App for Dashboard {
             .push("✦ ", palette::ROSE)
             .append(shimmer("tinsel status", t));
         frame.render(name, title);
-        let tabs_widget = Tabs::new(TABS).selected(self.tab);
-        frame.render(tabs, &tabs_widget);
+        frame.render(tabs, self.tabs());
 
         let body = body.shrink(1, 0);
         if self.tab == 0 {
@@ -220,10 +243,12 @@ impl App for Dashboard {
             );
         }
 
-        frame.render(
-            footer.shrink(2, 0),
-            hints(&[("q", "quit"), ("←→", "tabs"), ("↑↓", "service"), ("?", "help")]),
-        );
+        // the keys that matter most first: a narrow footer keeps those
+        let footer_keys = Footer::new()
+            .keys(&[("↑↓", "service"), ("←→", "tabs")])
+            .keys(&[("?", "help"), ("q", "quit")])
+            .status(format!("{} services", self.services.len()));
+        frame.render(footer.shrink(2, 0), footer_keys);
 
         if self.help {
             let help = Table::new(["key", "does"])
@@ -256,7 +281,7 @@ impl App for Dashboard {
             Event::Mouse(m) if m.kind == MouseKind::Click => {
                 // where view puts the tabs: two in from the edge, after the 22-column name
                 let tabs = app::Rect::new(24, 1, 60, 1);
-                if let Some(i) = Tabs::new(TABS).at(tabs, m.x, m.y) {
+                if let Some(i) = self.tabs().at(tabs, m.x, m.y) {
                     self.tab = i;
                 }
             }
@@ -274,9 +299,36 @@ impl App for Dashboard {
     fn mouse(&self) -> bool {
         true
     }
+
+    fn title(&self) -> Option<String> {
+        Some(format!("tinsel status · {}", TABS[self.tab]))
+    }
 }
 
 fn main() -> std::io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if let [_, flag, size] = args.as_slice() {
+        if flag == "--html" {
+            let (w, h) = size.split_once('x').expect("a size like 120x36");
+            print!(
+                "{}",
+                screenshot(w.parse().expect("a width"), h.parse().expect("a height"))
+            );
+            return Ok(());
+        }
+    }
     app::run(Dashboard::new())?;
     Ok(())
+}
+
+/// One frame as a web page, in colour on a dark background, a few minutes in with a
+/// service chosen: for the README.
+fn screenshot(width: usize, height: usize) -> String {
+    tinsel::set_color_mode(ColorMode::TrueColor);
+    tinsel::set_theme(Theme::Dark);
+    let mut dash = Dashboard::new();
+    dash.selected = 2;
+    let mut frame = Frame::new(width, height).at(754.0);
+    dash.view(&mut frame);
+    frame.html()
 }

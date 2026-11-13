@@ -7,15 +7,19 @@
 //! switches panel, 1-4 pick a group, / filters, d shows only drifted services, x restarts,
 //! r refreshes, e picks the environment the details show, s signs in (leaving the dashboard
 //! while a login command runs), ? for help, q to quit.
+//!
+//! To draw one frame as a web page instead of running, for a screenshot:
+//!
+//!   cargo run --example services -- --html 120x30 > services.html
 
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use tinsel::app::{
-    self, App, Cursor, Event, Flow, Footer, Frame, Grid, Input, Key, List, Modal, Panel, Size::*, Toasts, Waker,
+    self, App, Cursor, Event, Flow, Footer, Frame, Grid, Input, Key, List, Modal, Panel, Size::*, Tabs, Toasts, Waker,
 };
-use tinsel::{Line, Spinner, Table, Tone, format, paint, palette, shimmer};
+use tinsel::{ColorMode, Line, Spinner, Table, Theme, Tone, format, paint, palette, shimmer};
 
 #[derive(Clone)]
 struct Service {
@@ -38,6 +42,15 @@ enum Health {
 impl Service {
     fn drifted(&self) -> bool {
         self.staging != self.production
+    }
+
+    /// A coloured mark and a word for how it's doing.
+    fn health(&self) -> (String, &'static str) {
+        match self.health {
+            Health::Healthy => (paint(palette::SAGE, "●"), "healthy"),
+            Health::Slow => (paint(palette::AMBER, "▲"), "slow"),
+            Health::Down => (paint(palette::RED, "✕"), "down"),
+        }
     }
 }
 
@@ -139,6 +152,28 @@ impl Dashboard {
         d
     }
 
+    /// A dashboard with the data already in, without the wait: for screenshots.
+    fn loaded(services: Vec<Service>) -> Self {
+        let (send, results) = mpsc::channel();
+        Dashboard {
+            services,
+            group: 0,
+            pane: Pane::Table,
+            cursor: Cursor::new(),
+            filter: Input::new().prompt("/").placeholder("filter services by name"),
+            drifted_only: false,
+            env: 1,
+            dialog: None,
+            toasts: Toasts::new(),
+            loading: false,
+            refreshed: Instant::now().checked_sub(Duration::from_secs(40)),
+            results,
+            send,
+            waker: Waker::new(),
+            round: 1,
+        }
+    }
+
     /// Load in the background; the dashboard is woken the moment it's done.
     fn refresh(&mut self) {
         if self.loading {
@@ -153,14 +188,18 @@ impl Dashboard {
         self.round += 1;
     }
 
+    /// The services in the table, in its order: by group, then by name.
     fn shown(&self) -> Vec<&Service> {
         let filter = self.filter.value().to_lowercase();
-        self.services
+        let mut shown: Vec<&Service> = self
+            .services
             .iter()
             .filter(|s| self.group == 0 || s.group == GROUPS[self.group])
             .filter(|s| s.name.contains(&filter))
             .filter(|s| !self.drifted_only || s.drifted())
-            .collect()
+            .collect();
+        shown.sort_by_key(|s| (s.group, s.name));
+        shown
     }
 
     fn chosen(&self) -> Option<&Service> {
@@ -202,11 +241,30 @@ impl Dashboard {
         let t = frame.time();
         let title = Line::new().push("✦ ", palette::ROSE).append(shimmer("services", t));
         frame.render(area, title);
-        let env = Line::new()
-            .push("environment ", palette::MUTED)
-            .push(ENVS[self.env], palette::PETAL);
-        let w = env.width();
-        frame.render(app::Rect::new(area.x + area.width.saturating_sub(w), area.y, w, 1), env);
+        let tabs = self.environments();
+        // each tab is its title, a mark and a space either side, with a space between tabs
+        let w = ENVS.iter().map(|e| e.len() + 4).sum::<usize>() + ENVS.len() - 1;
+        frame.render(
+            app::Rect::new(area.x + area.width.saturating_sub(w), area.y, w, 1),
+            tabs,
+        );
+    }
+
+    /// The environments as tabs, the one the details show chosen. Production is red, so it's
+    /// never picked by mistake, and each has a mark: ○ while loading, ✖ when a service is down.
+    fn environments(&self) -> Tabs {
+        let down = self.services.iter().any(|s| s.health == Health::Down);
+        let mut tabs = Tabs::new(ENVS).selected(self.env).color(1, palette::RED);
+        for i in 0..ENVS.len() {
+            tabs = if self.services.is_empty() {
+                tabs.badge(i, "○", palette::MUTED)
+            } else if down && i == 1 {
+                tabs.badge(i, "✖", palette::RED)
+            } else {
+                tabs.badge(i, "✔", palette::SAGE)
+            };
+        }
+        tabs
     }
 
     fn groups(&self, frame: &mut Frame, area: app::Rect) {
@@ -233,6 +291,8 @@ impl Dashboard {
             .cursor(&self.cursor)
             .focused(self.pane == Pane::Table)
             .striped()
+            .blank_cells()
+            .fill(6)
             .sorted(0)
             .empty(if self.services.is_empty() {
                 "nothing here yet"
@@ -240,17 +300,18 @@ impl Dashboard {
                 "no services match"
             })
             .loading(self.loading && self.services.is_empty());
-        for s in &shown {
+        for (i, s) in shown.iter().enumerate() {
+            // in the "all" view, services sit under their group's name
+            if self.group == 0 && (i == 0 || shown[i - 1].group != s.group) {
+                grid = grid.heading(paint(palette::PETAL, s.group));
+            }
             let production = if s.drifted() {
                 paint(palette::AMBER, &s.production)
             } else {
                 s.production.clone()
             };
-            let health = match s.health {
-                Health::Healthy => format!("{} healthy", paint(palette::SAGE, "●")),
-                Health::Slow => format!("{} slow", paint(palette::AMBER, "▲")),
-                Health::Down => format!("{} down", paint(palette::RED, "✕")),
-            };
+            let (mark, word) = s.health();
+            let health = format!("{mark} {word}");
             let drift = if s.drifted() {
                 paint(palette::AMBER, "drifted")
             } else {
@@ -277,9 +338,14 @@ impl Dashboard {
             format!("{} of {}", self.cursor.row().min(shown.len() - 1) + 1, shown.len())
         };
 
+        let status = match self.refreshed {
+            Some(at) if !self.loading => format!("{} · refreshed {}", ENVS[self.env], format::ago(at.elapsed())),
+            _ => ENVS[self.env].to_string(),
+        };
         let filtering = self.pane == Pane::Filter || !self.filter.value().is_empty();
         let panel = Panel::new(GROUPS[self.group])
             .count(count)
+            .status(status)
             .footer(position)
             .focused(self.pane != Pane::Groups);
         let inner = panel.inner(area);
@@ -313,24 +379,25 @@ impl Dashboard {
         let lines = table.lines();
         // drop the empty header and its rule: just the pairs
         let pairs: tinsel::Block = lines.lines().iter().skip(2).cloned().collect();
-        frame.render(
-            area,
-            Panel::new(format!("{} in {}", s.name, ENVS[self.env])).body(pairs),
+        let (mark, _) = s.health();
+        let title = format!(
+            "{mark} {}",
+            paint(palette::TEXT, &format!("{} in {}", s.name, ENVS[self.env]))
         );
+        frame.render(area, Panel::new(title).body(pairs));
     }
 
     fn footer(&self, frame: &mut Frame, area: app::Rect) {
         let status = if self.loading {
             format!("{} refreshing", Spinner::Sparkle.frame(frame.time()))
-        } else if let Some(at) = self.refreshed {
-            format!("refreshed {}", format::ago(at.elapsed()))
         } else {
             String::new()
         };
+        // the keys that matter most first: a narrow footer keeps those
         let footer = Footer::new()
-            .keys(&[("↑↓", "move"), ("tab", "panel"), ("/", "filter"), ("d", "drifted")])
-            .keys(&[("?", "help"), ("q", "quit")])
-            .keys(&[("x", "restart"), ("r", "refresh"), ("e", "env"), ("s", "sign in")])
+            .keys(&[("↑↓", "move"), ("/", "filter"), ("?", "help")])
+            .keys(&[("x", "restart"), ("r", "refresh"), ("e", "env")])
+            .keys(&[("tab", "panel"), ("d", "drifted"), ("s", "sign in"), ("q", "quit")])
             .status(status);
         frame.render(area, footer);
     }
@@ -506,6 +573,10 @@ impl App for Dashboard {
     fn fps(&self) -> u32 {
         10
     }
+
+    fn title(&self) -> Option<String> {
+        Some(format!("services · {} · {}", GROUPS[self.group], ENVS[self.env]))
+    }
 }
 
 /// A stand-in for a real login command, which would open a browser or ask for a code.
@@ -519,6 +590,29 @@ fn login() -> std::io::Result<std::process::ExitStatus> {
 }
 
 fn main() -> std::io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if let [_, flag, size] = args.as_slice() {
+        if flag == "--html" {
+            let (w, h) = size.split_once('x').expect("a size like 120x30");
+            print!(
+                "{}",
+                screenshot(w.parse().expect("a width"), h.parse().expect("a height"))
+            );
+            return Ok(());
+        }
+    }
     app::run(Dashboard::new())?;
     Ok(())
+}
+
+/// One frame as a web page, in colour on a dark background, with the services loaded and
+/// one chosen: for the README.
+fn screenshot(width: usize, height: usize) -> String {
+    tinsel::set_color_mode(ColorMode::TrueColor);
+    tinsel::set_theme(Theme::Dark);
+    let mut dash = Dashboard::loaded(fetch(1));
+    dash.cursor.select(5);
+    let mut frame = Frame::new(width, height).at(2.0);
+    dash.view(&mut frame);
+    frame.html()
 }
