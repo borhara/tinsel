@@ -761,4 +761,63 @@ mod tests {
         let grid = Grid::new(["name"]).row(["api", "extra"]).fill(1);
         assert_eq!(drawn(20, 3, grid), "  name\n  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n  api    extra");
     }
+
+    #[test]
+    fn alignment_sort_marks_and_messages() {
+        let grid = Grid::new(["n", "name"])
+            .row(["1", "a"])
+            .align(0, Align::Left)
+            .sorted_desc(0);
+        assert_eq!(drawn(12, 3, grid), "  n ▼   name\n  ┈┈┈┈┈┈┈┈┈┈\n  1     a");
+        let none = Grid::new(["name"]).empty("no services").loading(false).sorted(5);
+        assert!(drawn(20, 3, none).ends_with("no services"));
+        drawn(0, 0, Grid::new(["x"]));
+    }
+
+    #[test]
+    fn long_headings_are_cut_to_fit() {
+        let grid = Grid::new(["n"]).heading("a heading much too long").row(["1"]);
+        let shown = drawn(10, 4, grid);
+        assert!(shown.lines().nth(2).unwrap().ends_with('…'), "{shown}");
+    }
+
+    #[test]
+    fn a_heading_too_far_above_stays_off_screen() {
+        let mut cursor = Cursor::new();
+        cursor.select(7);
+        let mut grid = Grid::new(["name"]).heading("far").cursor(&cursor);
+        for i in 0..8 {
+            grid = grid.row([format!("r{i}")]);
+        }
+        let shown = drawn(10, 5, grid);
+        assert!(!shown.contains("far") && shown.contains("r7"), "{shown}");
+    }
+
+    #[test]
+    fn loading_rows_shimmer_in_colour() {
+        let grid = Grid::new(["name", "status"]).loading(true);
+        let mut f = Frame::new(30, 6).at(0.5);
+        crate::style::with_color_mode(ColorMode::TrueColor, || f.render(f.area(), grid));
+        assert!(f.snapshot().plain().contains('━'));
+    }
+
+    #[test]
+    fn a_grid_one_row_tall_shows_just_its_header() {
+        let grid = Grid::new(["name", "status"]).row(["api", "up"]);
+        assert_eq!(drawn(4, 1, grid), "  n");
+    }
+
+    #[test]
+    fn striped_rows_alternate() {
+        let cursor = Cursor::new();
+        let grid = Grid::new(["n"])
+            .row(["a"])
+            .row(["b"])
+            .row(["c"])
+            .striped()
+            .cursor(&cursor);
+        let mut f = Frame::new(10, 5);
+        crate::style::with_color_mode(ColorMode::TrueColor, || f.render(f.area(), grid));
+        assert_ne!(f.snapshot().lines()[3], f.snapshot().lines()[4]);
+    }
 }
