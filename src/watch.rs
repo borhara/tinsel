@@ -196,4 +196,70 @@ mod tests {
         assert!(enabled());
         ENABLED.store(0, Ordering::Relaxed);
     }
+
+    /// Hands out `chunks` a read at a time, then stops the listener.
+    struct Typing<'a> {
+        chunks: Vec<&'static [u8]>,
+        stop: &'a AtomicBool,
+    }
+
+    impl Read for Typing<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.chunks.is_empty() {
+                self.stop.store(true, Ordering::Relaxed);
+                return Err(io::Error::other("no more"));
+            }
+            let chunk = self.chunks.remove(0);
+            buf[..chunk.len()].copy_from_slice(chunk);
+            Ok(chunk.len())
+        }
+    }
+
+    fn typed(focus: &Focus) -> Vec<u8> {
+        focus.typed.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn sorts_focus_reports_from_typing() {
+        let (focus, stop) = (Focus::default(), AtomicBool::new(false));
+        let mut input = Typing {
+            chunks: vec![b"ab\x1b[O", b"\x1b", b"[Ic\x1b[x", b"\x1b["],
+            stop: &stop,
+        };
+        assert!(!focus.away());
+        listen(&mut input, &focus, &stop);
+        assert!(focus.heard.load(Ordering::Relaxed) && !focus.away());
+        assert_eq!(typed(&focus), b"abc\x1b[x\x1b[");
+    }
+
+    #[test]
+    fn a_long_enough_absence_counts_as_coming_back() {
+        let focus = Focus::default();
+        let t0 = Instant::now();
+        focus.focus_changed(false, t0);
+        assert!(focus.away());
+        // a second report of leaving doesn't move when they left
+        focus.focus_changed(false, t0 + Duration::from_secs(1));
+        focus.focus_changed(true, t0 + Duration::from_secs(2));
+        assert_eq!(
+            focus.just_returned(t0 + Duration::from_secs(2)),
+            None,
+            "only two seconds"
+        );
+        focus.focus_changed(false, t0 + Duration::from_secs(10));
+        let back = t0 + Duration::from_secs(14);
+        focus.focus_changed(true, back);
+        let left = t0 + Duration::from_secs(10);
+        assert_eq!(
+            focus.just_returned(back + Duration::from_millis(100)),
+            Some((left, back))
+        );
+        assert_eq!(
+            focus.just_returned(back + Duration::from_secs(1)),
+            None,
+            "the welcome is over"
+        );
+        // coming back without having left
+        focus.focus_changed(true, back);
+    }
 }
