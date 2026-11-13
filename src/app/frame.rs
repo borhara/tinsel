@@ -326,6 +326,7 @@ impl Frame {
             if skip > 0 {
                 // half of a wide character scrolled off: the half still showing is a space
                 if w > skip && col < end {
+                    let style = self.over(row + col, style);
                     self.put(row, col, Cell { ch: ' ', style });
                     col += 1;
                 }
@@ -335,6 +336,7 @@ impl Frame {
             if col + w > end {
                 break;
             }
+            let style = self.over(row + col, style);
             self.put(row, col, Cell { ch: c, style });
             if w == 2 {
                 self.put(row, col + 1, Cell { ch: '\0', style });
@@ -342,6 +344,14 @@ impl Frame {
             col += w;
         }
         col - x
+    }
+
+    /// Text with no background of its own shows whatever's behind it, such as a tint.
+    fn over(&self, at: usize, mut style: Style) -> Style {
+        if style.bg == Ink::Default {
+            style.bg = self.cells[at].style.bg;
+        }
+        style
     }
 
     /// Set one cell, tidying up any wide character it cuts in half.

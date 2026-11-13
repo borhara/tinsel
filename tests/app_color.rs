@@ -56,6 +56,23 @@ fn the_chosen_row_and_tint_paint_the_background() {
 }
 
 #[test]
+fn text_drawn_over_a_tint_keeps_it() {
+    colour();
+    let tinted = |tint_first: bool| {
+        let mut f = Frame::new(4, 1);
+        if tint_first {
+            f.tint(f.area(), palette::BERRY);
+        }
+        f.print(f.area(), 0, "ab");
+        if !tint_first {
+            f.tint(f.area(), palette::BERRY);
+        }
+        f.snapshot().to_string()
+    };
+    assert_eq!(tinted(true), tinted(false));
+}
+
+#[test]
 fn colours_survive_the_trip_through_cells() {
     colour();
     let mut f = Frame::new(30, 6);
