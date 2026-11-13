@@ -95,6 +95,8 @@ mod message;
 mod notify;
 mod output;
 mod panic;
+#[cfg(test)]
+mod processes;
 pub mod prompt;
 mod region;
 mod spin;
