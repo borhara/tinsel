@@ -65,6 +65,7 @@ pub struct Table {
     border: Border,
     title: Option<String>,
     striped: bool,
+    blank: bool,
 }
 
 impl Table {
@@ -124,6 +125,20 @@ impl Table {
     /// Tint every other row faintly, to help the eye along wide tables.
     pub fn striped(mut self) -> Self {
         self.striped = true;
+        self
+    }
+
+    /// Leave empty body cells blank, instead of marking each with a muted `·`.
+    ///
+    /// ```
+    /// use tinsel::Table;
+    ///
+    /// tinsel::set_color_mode(tinsel::ColorMode::None);
+    /// let table = Table::new(["name", "note"]).row(["api", ""]).blank_cells();
+    /// assert_eq!(table.lines().plain(), "  name   note\n  ┈┈┈┈┈┈┈┈┈┈┈\n  api");
+    /// ```
+    pub fn blank_cells(mut self) -> Self {
+        self.blank = true;
         self
     }
 
@@ -392,10 +407,11 @@ impl Table {
                     .map(|c| {
                         let raw = cells[c].get(i).map_or("", String::as_str);
                         // plain cells get the row's colour; styled ones keep their own; an
-                        // empty body cell gets a quiet dot, so it reads as empty, not missing
+                        // empty body cell gets a quiet dot, so it reads as empty, not missing,
+                        // unless the table asks for blanks
                         let cell = if raw.contains('\x1b') {
                             raw.to_string()
-                        } else if look.body && i == 0 && cells[c].iter().all(String::is_empty) {
+                        } else if look.body && !self.blank && i == 0 && cells[c].iter().all(String::is_empty) {
                             paint(MUTED, "·")
                         } else if look.bold {
                             bold(&paint(look.color, raw))
@@ -520,7 +536,28 @@ impl fmt::Display for Table {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_number;
+    use super::{Border, Table, parse_number};
+    use crate::style::{ColorMode, set_color_mode};
+
+    #[test]
+    fn empty_cells_get_a_dot_unless_blank() {
+        set_color_mode(ColorMode::None);
+        let table = || {
+            Table::new(["name", "owner", "n"])
+                .row(["api", "", "1"])
+                .row(["web", "ops", ""])
+        };
+        assert_eq!(
+            table().lines().plain(),
+            "  name   owner   n\n  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n  api    ·       1\n  web    ops     ·"
+        );
+        assert_eq!(
+            table().blank_cells().lines().plain(),
+            "  name   owner   n\n  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n  api            1\n  web    ops"
+        );
+        let grid = table().blank_cells().border(Border::Square).lines().plain();
+        assert!(!grid.contains('·'), "{grid}");
+    }
 
     #[test]
     fn numbers_understand_units() {
