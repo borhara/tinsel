@@ -32,20 +32,99 @@ static OUTPUT: AtomicU8 = AtomicU8::new(0);
 
 /// The output shape in use. Decided once from `TINSEL_OUTPUT`, unless [`set_output`] has chosen one.
 pub fn output() -> Output {
+    #[cfg(test)]
+    if let Some(out) = TEST_OUTPUT.get() {
+        return out;
+    }
     match OUTPUT.load(Ordering::Relaxed) {
         1 => Output::Pretty,
         2 => Output::Json,
         3 => Output::Quiet,
         _ => {
-            let out = match std::env::var("TINSEL_OUTPUT").as_deref() {
-                Ok("json") => Output::Json,
-                Ok("quiet") => Output::Quiet,
-                _ => Output::Pretty,
-            };
+            let out = parse_output(std::env::var("TINSEL_OUTPUT").ok().as_deref());
             set_output(out);
             out
         }
     }
+}
+
+fn parse_output(env: Option<&str>) -> Output {
+    match env {
+        Some("json") => Output::Json,
+        Some("quiet") => Output::Quiet,
+        _ => Output::Pretty,
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_OUTPUT: std::cell::Cell<Option<Output>> = const { std::cell::Cell::new(None) };
+    static TEST_TERMINAL: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    static TEST_TARGET: std::cell::Cell<Option<Target>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with an output shape on this thread alone, so a unit test that wants JSON doesn't
+/// turn it on for the tests running beside it.
+#[cfg(test)]
+pub(crate) fn with_output<T>(out: Output, f: impl FnOnce() -> T) -> T {
+    let before = TEST_OUTPUT.replace(Some(out));
+    let result = f();
+    TEST_OUTPUT.set(before);
+    result
+}
+
+/// Run `f` as if the stream tinsel draws on were a terminal (or not), on this thread alone.
+#[cfg(test)]
+pub(crate) fn with_terminal<T>(terminal: bool, f: impl FnOnce() -> T) -> T {
+    let before = TEST_TERMINAL.replace(Some(terminal));
+    let result = f();
+    TEST_TERMINAL.set(before);
+    result
+}
+
+/// What [`with_terminal`] is pretending, if anything.
+#[cfg(test)]
+pub(crate) fn pretended_terminal() -> Option<bool> {
+    TEST_TERMINAL.get()
+}
+
+/// What was written while capturing, from any thread. One capture at a time.
+#[cfg(test)]
+static CAPTURED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+#[cfg(test)]
+static CAPTURING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+fn captured() -> std::sync::MutexGuard<'static, Option<String>> {
+    CAPTURED.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Run `f`, returning what it wrote to the stream tinsel draws on instead of writing it.
+/// Writes from other threads in the meantime are caught too, so look for what you expect
+/// rather than comparing the whole thing. Unless `f` says otherwise, it's drawn for people on
+/// stdout, whatever `TINSEL_OUTPUT` and `TINSEL_TARGET` say for the tests as a whole.
+#[cfg(test)]
+pub(crate) fn capture(f: impl FnOnce()) -> String {
+    let mut f = Some(f);
+    capture_while(&mut || f.take().into_iter().for_each(|f| f()))
+}
+
+/// [`capture`], for any closure.
+#[cfg(test)]
+fn capture_while(f: &mut dyn FnMut()) -> String {
+    let _one = CAPTURING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    *captured() = Some(String::new());
+    let before = (TEST_OUTPUT.get(), TEST_TARGET.get());
+    TEST_OUTPUT.set(before.0.or(Some(Output::Pretty)));
+    TEST_TARGET.set(before.1.or(Some(Target::Stdout)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    TEST_OUTPUT.set(before.0);
+    TEST_TARGET.set(before.1);
+    let out = captured().take().unwrap_or_default();
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+    out
 }
 
 /// Choose the output shape, for a `--json` or `--quiet` flag.
@@ -82,6 +161,10 @@ static TARGET: AtomicU8 = AtomicU8::new(0);
 /// Where tinsel draws. Decided once from `TINSEL_TARGET` (`stderr` or `stdout`), unless
 /// [`set_target`] has chosen.
 pub fn target() -> Target {
+    #[cfg(test)]
+    if let Some(target) = TEST_TARGET.get() {
+        return target;
+    }
     match TARGET.load(Ordering::Relaxed) {
         1 => Target::Stdout,
         2 => Target::Stderr,
@@ -137,6 +220,10 @@ fn on_terminal(target: Target, stdout: &dyn Fn() -> bool, stderr: &dyn Fn() -> b
 
 /// Whether the stream tinsel draws on is a terminal.
 pub(crate) fn is_terminal() -> bool {
+    #[cfg(test)]
+    if let Some(terminal) = pretended_terminal() {
+        return terminal;
+    }
     on_terminal(target(), &|| std::io::stdout().is_terminal(), &|| {
         std::io::stderr().is_terminal()
     })
@@ -166,6 +253,10 @@ pub(crate) fn writer() -> Box<dyn Write> {
 
 /// Write to the stream tinsel draws on, and flush.
 pub(crate) fn write(s: &str) {
+    #[cfg(test)]
+    if let Some(buf) = captured().as_mut() {
+        return buf.push_str(s);
+    }
     let mut out = writer();
     let _ = out.write_all(s.as_bytes());
     let _ = out.flush();
