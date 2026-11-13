@@ -117,6 +117,9 @@ pub(crate) fn parse(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, u
 /// `ESC [ params final`: arrows, Home/End and friends, function keys, and SGR mouse reports.
 fn csi(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, usize)> {
     use super::Event;
+    if bytes[2..].starts_with(PASTE_START) {
+        return paste(bytes);
+    }
     // older terminals ignore SGR mouse mode and send `ESC [ M` and three raw bytes instead,
     // which mustn't be read as keys (a click in column 81 would be a `q`)
     if bytes.get(2) == Some(&b'M') {
@@ -172,6 +175,21 @@ fn csi(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, usize)> {
         _ => return Some((None, n)),
     };
     Some((Some(Event::Key(key)), n))
+}
+
+/// What a terminal sends around pasted text, after `ESC [`, once bracketed paste is on.
+const PASTE_START: &[u8] = b"200~";
+const PASTE_END: &[u8] = b"\x1b[201~";
+
+/// `ESC [ 200~ text ESC [ 201~`: pasted text, all of it, with its line breaks as `\n`. It's
+/// waited for even through a pause, since a big paste over a slow link arrives in pieces, and
+/// read as keys its newlines would be Enter.
+fn paste(bytes: &[u8]) -> Option<(Option<super::Event>, usize)> {
+    let start = 2 + PASTE_START.len();
+    let len = bytes[start..].windows(PASTE_END.len()).position(|w| w == PASTE_END)?;
+    let text = String::from_utf8_lossy(&bytes[start..start + len]);
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    Some((Some(super::Event::Paste(text)), start + len + PASTE_END.len()))
 }
 
 fn ss3(b: u8) -> Option<Key> {
@@ -365,6 +383,23 @@ mod tests {
                     y: 0
                 }),
             ]
+        );
+    }
+
+    #[test]
+    fn reads_a_paste_whole_even_through_a_pause() {
+        let pasted = b"\x1b[200~one\r\ntwo\rthree\x1b[A\x1b[201~x";
+        assert_eq!(
+            keys(pasted),
+            [Event::Paste("one\ntwo\nthree\x1b[A".into()), Event::Key(Key::Char('x'))]
+        );
+        // half a paste is waited for, pause or not
+        assert_eq!(parse(b"\x1b[200~half\n", true), None);
+        assert_eq!(parse(b"\x1b[200~half\x1b[20", false), None);
+        // and an empty one is still a paste
+        assert_eq!(
+            parse(b"\x1b[200~\x1b[201~", true),
+            Some((Some(Event::Paste(String::new())), 12))
         );
     }
 

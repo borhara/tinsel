@@ -90,8 +90,9 @@ impl Input {
 
     /// Type, delete or move the cursor, if the box has focus and the event is a key it uses:
     /// characters, Backspace and Delete, ←→, Home and End (or Ctrl-A and Ctrl-E), Ctrl-U
-    /// and Ctrl-K to clear before or after the cursor, and Ctrl-W to delete a word. Returns
-    /// whether it used the event, so Enter, Esc and Tab are left for the app.
+    /// and Ctrl-K to clear before or after the cursor, and Ctrl-W to delete a word. Pasted
+    /// text goes in at the cursor, on one line: its line breaks and tabs become spaces.
+    /// Returns whether it used the event, so Enter, Esc and Tab are left for the app.
     ///
     /// ```
     /// use tinsel::app::{Event, Input, Key};
@@ -106,10 +107,24 @@ impl Input {
     /// assert!(!name.event(&Event::Key(Key::Enter)));
     /// ```
     pub fn event(&mut self, event: &Event) -> bool {
-        let Event::Key(key) = event else { return false };
         if !self.focused {
             return false;
         }
+        let key = match event {
+            Event::Key(key) => key,
+            Event::Paste(text) => {
+                let text = text.chars().filter_map(|c| match c {
+                    '\n' | '\t' => Some(' '),
+                    c if c.is_control() => None,
+                    c => Some(c),
+                });
+                let before = self.value.len();
+                self.value.splice(self.at..self.at, text);
+                self.at += self.value.len() - before;
+                return true;
+            }
+            _ => return false,
+        };
         let at = self.at;
         match *key {
             Key::Char(c) => {
@@ -243,6 +258,20 @@ mod tests {
         assert!(!input.event(&Event::Tick) && !input.event(&Event::Key(Key::Tab)));
         input.clear();
         assert!(input.value().is_empty() && input.is_focused());
+    }
+
+    #[test]
+    fn a_paste_goes_in_at_the_cursor_on_one_line() {
+        let mut input = Input::new();
+        let paste = Event::Paste("b\nc\td\x07".into());
+        assert!(!input.event(&paste), "no focus, no pasting");
+        input.focus(true);
+        input.set_value("a!");
+        typed(&mut input, &[Key::Left]);
+        assert!(input.event(&paste));
+        assert_eq!(input.value(), "ab c d!");
+        typed(&mut input, &[Key::Char('?')]);
+        assert_eq!(input.value(), "ab c d?!");
     }
 
     #[test]
