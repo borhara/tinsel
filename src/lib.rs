@@ -125,7 +125,7 @@ pub use table::{Align, Border, Table};
 pub use term::{CtrlC, content_width, set_ctrl_c, width};
 pub use tree::Tree;
 pub use watch::set_focus;
-pub use widgets::{BarStyle, Card, Spinner, bar, live_bar, live_waveform, pop, shimmer, waveform};
+pub use widgets::{BarStyle, Card, Label, Spinner, bar, live_bar, live_waveform, pop, shimmer, waveform};
 
 /// What [`Live`] displays have learned about how long steps take, as a table per program:
 /// recent runs as a sparkline, the usual time, the last run, and whether it was unusually
