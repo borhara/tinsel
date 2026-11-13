@@ -442,4 +442,56 @@ mod tests {
         assert_eq!(text::strip_ansi(&settled[2]), text::strip_ansi(&partway[2]));
         assert!(partway[5].is_empty());
     }
+
+    use crate::output::{capture, with_output, with_terminal};
+
+    #[test]
+    fn loose_items_long_options_and_a_footer() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let long = "--a-very-long-option-name <WITH-A-VALUE>";
+        let help = Help::new("app", "x")
+            .item("one", "first")
+            .item(long, "described underneath")
+            .footer("docs.rs/app")
+            .command("run", "runs")
+            .command("stop", "stops");
+        assert!(help.lines().plain().contains("    stop  stops\n"));
+        let lines = help.lines().plain();
+        assert!(lines.contains("\n    one   first\n"), "{lines}");
+        assert!(lines.contains(&format!("\n    {long}\n")), "{lines}");
+        assert!(lines.ends_with("  →  docs.rs/app\n"), "{lines:?}");
+        assert_eq!(help.to_string(), help.lines().to_string());
+        assert!(capture(|| help.print()).contains("docs.rs/app"));
+    }
+
+    #[test]
+    fn examples_stay_plain_until_they_arrive() {
+        let help = Help::new("app", "x").example("app run", "runs");
+        let partway =
+            crate::style::with_color_mode(crate::ColorMode::TrueColor, || help.render(&|_| 0.5, Some((1.0, 0.2))));
+        let example = partway.iter().find(|l| l.contains("app run")).unwrap();
+        // one colour for the whole command, faded
+        assert!(example.ends_with("mapp run\x1b[39m"), "{example:?}");
+    }
+
+    #[test]
+    fn animates_its_entrance_on_a_terminal() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let help = Help::new("app", "does things").command("run", "run it");
+        let out = capture(|| with_terminal(true, || help.animate()));
+        assert!(
+            out.starts_with("\x1b[?25l") && out.ends_with("\x1b[?7h\x1b[?25h"),
+            "{out:?}"
+        );
+        assert!(
+            out.contains("\x1b[") && out.contains("F") && out.contains("run it"),
+            "{out:?}"
+        );
+        // taller than the screen: the rest is printed under the part that animated
+        let tall = (0..crate::term::height() + 4).fold(Help::new("app", "x"), |h, i| h.item(format!("i{i}"), "x"));
+        let out = capture(|| with_terminal(true, || tall.animate()));
+        assert!(out.contains(&format!("i{}", crate::term::height() + 3)), "{out:?}");
+        let plain = capture(|| with_output(crate::Output::Quiet, || help.animate()));
+        assert!(plain.contains("run it") && !plain.contains("\x1b[?25l"));
+    }
 }
