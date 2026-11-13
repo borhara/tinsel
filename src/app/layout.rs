@@ -123,9 +123,16 @@ impl Rect {
 
 /// Lengths for each piece of `total`, with `gap` between them.
 fn split<const N: usize>(total: usize, gap: usize, sizes: &[Size; N]) -> [usize; N] {
-    let mut left = total.saturating_sub(gap * N.saturating_sub(1));
-    let whole = left;
     let mut lens = [0; N];
+    split_into(total, gap, sizes, &mut lens);
+    lens
+}
+
+/// [`split`], into `lens`, one for each of `sizes`.
+fn split_into(total: usize, gap: usize, sizes: &[Size], lens: &mut [usize]) {
+    let n = sizes.len();
+    let mut left = total.saturating_sub(gap * n.saturating_sub(1));
+    let whole = left;
     for (len, size) in lens.iter_mut().zip(sizes) {
         let want = match *size {
             Size::Fixed(n) => n,
@@ -137,7 +144,7 @@ fn split<const N: usize>(total: usize, gap: usize, sizes: &[Size; N]) -> [usize;
     }
     let weights: usize = sizes.iter().map(|s| if let Size::Fill(w) = s { *w } else { 0 }).sum();
     if weights == 0 {
-        return lens;
+        return;
     }
     let share = left;
     let last = sizes.iter().rposition(|s| matches!(s, Size::Fill(w) if *w > 0));
@@ -148,7 +155,6 @@ fn split<const N: usize>(total: usize, gap: usize, sizes: &[Size; N]) -> [usize;
             left -= *len;
         }
     }
-    lens
 }
 
 #[cfg(test)]
