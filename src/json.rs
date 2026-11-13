@@ -293,4 +293,32 @@ mod tests {
         assert!(json("\"open").is_err());
         assert!(json("1 2").is_err());
     }
+
+    #[test]
+    fn empty_objects_and_short_arrays_stay_on_one_line() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let out = json(r#"{"o":{},"a":["x",1,true]}"#).unwrap().plain();
+        assert!(
+            out.contains(r#""o": {}"#) && out.contains(r#""a": ["x", 1, true]"#),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn long_or_nested_arrays_get_a_line_each() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let long = format!(r#"["{}", "{}"]"#, "a".repeat(30), "b".repeat(30));
+        assert_eq!(json(&long).unwrap().len(), 4);
+        assert_eq!(json("[[1]]").unwrap().len(), 3);
+    }
+
+    #[test]
+    fn explains_each_kind_of_mistake() {
+        let msg = |s: &str| json(s).unwrap_err().to_string();
+        assert!(msg("{1: 2}").starts_with("expected a key in quotes"));
+        assert!(msg(r#"{"a": 1 "b"}"#).starts_with("expected ',' or '}'"));
+        assert!(msg("[1-2]").starts_with("this isn't a number"));
+        assert!(msg("[nope]").starts_with("expected a value"));
+        assert!(msg("[1,").starts_with("the text ended too soon"));
+    }
 }
