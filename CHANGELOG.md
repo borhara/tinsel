@@ -1,34 +1,10 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
+
+## [0.1.0] - 2026-11-12
 
 First release.
-
-- `prompt::confirm` reads a piped answer (`y`, `yes`, `n`, `no`, or an empty line for the
-  default) when stdin isn't a terminal, so scripts can answer it
-- `prompt::script` answers questions from a list of keys on the current thread, drawing
-  nothing, so tests can run code that asks them; `Script::answered` lists what each question
-  ended on, and `prompt::typed` turns text into keys
-- → answers a question as Enter does (in typed answers, from the end of the line)
-- `Input::initial`: text already typed in when the question opens, to edit or take as it is
-- `Confirm::end_of_input`: the answer once piped input has run out, when that shouldn't be
-  the default
-- `app::Keys` reads keys one at a time with a timeout in the normal terminal, outside a
-  full-screen app, and from a `prompt::script` in tests
-- `App::event` sees Ctrl-C before the app quits
-- `set_ctrl_c` and `CtrlC`: exit with a line of the program's own, or leave Ctrl-C to the
-  program, while a spinner or other live drawing is on screen
-- Going back in multi-question flows: questions asked with `.back()` return
-  `prompt::Error::Back` when ← is pressed (in typed answers, from the start of the line);
-  `prompt::Confirm` builder and `Input::back`
-- `prompt::Select` and `prompt::MultiSelect` builders: a default, group headings, options
-  that can't be picked (shown with the reason), notes and badges, a hint under the
-  question, validation and `.back()`; the default is the answer without a terminal
-- `prompt::Dropdown` for long lists such as versions: a scrolling window with counts above
-  and below, notes lined up on the right, badges, quieter options, and `allow_custom` to
-  type an answer that isn't listed
-- Filtered lists show how many options match; the option under the cursor is bold, as in
-  app lists; several answers collapse to whole names and how many more (`api, web and 3 more`)
 
 - `app`: full-screen terminal apps. An `App` trait (`view`, `event`, `fps`, `mouse`) run by
   `app::run`, with keys, mouse, ticks and resizes as `Event`s, only changed rows redrawn, and
@@ -36,24 +12,6 @@ First release.
   `Panel` (shimmering when focused), `List`, `Tabs`, `Plot`, `Stat`, `big`, `hints`,
   `Sparkles`, and every `Block`-drawing type as a `Widget`; `navigate`; `app::snapshot` for
   tests; `examples/dashboard.rs`
-- `app::Grid`: a table with a cursor, kept in view as it moves, scrolling sideways a column
-  at a time with the header always showing; striped rows, a sort mark, and loading, empty
-  and error states. Its place is kept in an `app::Cursor`
-- `app::Input`: a box to type into inside an app, for filters and searches, with a cursor,
-  the usual editing keys, a prompt and a placeholder
-- `app::Modal`: a dialog in the middle of the screen, sized to what's inside it, rising into
-  place over a faded backdrop with a soft shadow; `Frame::dim`, `Widget::size` and
-  `app::time`
-- `app::Waker`: wake a running app from another thread with `Event::Wake`, so it can tick
-  slowly and still show results the moment they're ready
-- `app::suspend`: leave the full-screen view to run something in the normal terminal (a
-  command that asks for input, an editor), then come back and redraw
-- `app::Toasts`: short messages in a `Tone` that slide into a corner of an app, with a line
-  running down until they go
-- `Panel::count` puts a count in a pill beside a panel's title; `app::Footer` lays out key
-  hints in groups with a status at the right
-- `examples/services.rs`: a services dashboard with groups, a table per environment, details,
-  a filter, dialogs, toasts, background refreshes and signing in from inside the app
 - `Live` steps that learn their usual duration and show an estimate next run
 - Focus awareness: calmer animation while you're away, a notification when a long run finishes
   unnoticed, a twinkle for what finished when you return; `tinsel::notify`
@@ -95,19 +53,5 @@ First release.
   `Code::numbers(false)`
 - `Help`, with `animate` for an entrance on a terminal; `tinsel help` uses it
 - `markdown`, `json` (`JsonError`) and `Block::page`
-- `Step::skip`, `Step::cancel` and `Step::wait` (on someone, like an approval), drawn as `–`,
-  `⊘` and `◌`, as `[skip]`, `[cancelled]` and `[wait]` lines, and as `skipped`, `cancelled`
-  and `waiting` JSON states; a finished or failed step can `start` again, timed afresh and
-  remembered once
-- `Live` progress bars say how long is left at the rate so far
-- `spin` and `Progress` finish in the same columns as `Live` steps, the time at the right edge
-- `Region`: any `Block` redrawn in place at a set rate (`fps`), cleared when it finishes
-  unless `keep`, with `log` printing above it; off a terminal only logged lines and a kept
-  last frame print; `Region::headless` and `snapshot` for tests
-- `Live::no_focus`, `set_focus` and `set_history` turn focus awareness and remembered
-  timings off from code, alongside `TINSEL_NO_FOCUS` and `TINSEL_NO_HISTORY`
-- `set_target(Target::Stderr)` and `TINSEL_TARGET=stderr` draw everything on stderr, for tools
-  whose stdout carries something else; colour and animation then follow whether stderr is a
-  terminal
 - `prompt::Input::suggestions`, `complete` and `paths` (Tab completes, → takes the
   suggestion); `prompt::confirm_typing`
