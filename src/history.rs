@@ -6,7 +6,8 @@
 //! estimate is their median, so one unusually slow run doesn't throw it off.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
@@ -43,21 +44,24 @@ pub(crate) struct History {
 impl History {
     /// The history for a program, or `None` if there's nowhere to keep it or it's turned off.
     pub(crate) fn open(app: &str) -> Option<History> {
-        let on = match ENABLED.load(Ordering::Relaxed) {
-            1 => true,
-            2 => false,
-            _ => std::env::var_os("TINSEL_NO_HISTORY").is_none(),
-        };
-        if !on {
-            return None;
-        }
-        let path = cache_dir()?.join(format!("{}.tsv", sanitize(app)));
+        Some(History::load(&cache_dir()?, app))
+    }
+
+    /// The history for a program, kept in `dir` rather than the cache, for tests.
+    #[cfg(test)]
+    pub(crate) fn open_in(dir: &Path, app: &str) -> Option<History> {
+        Some(History::load(dir, app))
+    }
+
+    /// The history for a program, kept in `dir`.
+    fn load(dir: &Path, app: &str) -> History {
+        let path = dir.join(format!("{}.tsv", sanitize(app)));
         let runs = std::fs::read_to_string(&path).map(|s| parse(&s)).unwrap_or_default();
-        Some(History {
+        History {
             path,
             runs,
             dirty: false,
-        })
+        }
     }
 
     /// A history kept nowhere, for tests.
@@ -77,10 +81,9 @@ impl History {
 
     /// The program's own name, used when nothing else is given.
     pub(crate) fn default_app() -> String {
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-            .unwrap_or_else(|| "tinsel".into())
+        let exe = std::env::current_exe().ok();
+        let name = exe.as_deref().and_then(Path::file_stem);
+        name.map_or("tinsel".into(), |s| s.to_string_lossy().into_owned())
     }
 
     /// The typical duration of a step, in seconds, from its recent runs.
@@ -139,22 +142,27 @@ impl History {
 /// What's been learned about step timings, as a table per program: recent runs as a
 /// sparkline, the usual time, the last time, and whether the last run was unusually slow or fast.
 pub(crate) fn report(app: Option<&str>) -> Block {
-    let apps: Vec<String> = match app {
-        Some(a) => vec![a.to_string()],
-        None => cache_dir()
-            .and_then(|d| std::fs::read_dir(d).ok())
-            .map(|entries| {
-                let mut names: Vec<String> = entries
-                    .filter_map(|e| e.ok()?.file_name().to_str()?.strip_suffix(".tsv").map(String::from))
-                    .collect();
-                names.sort();
-                names
-            })
-            .unwrap_or_default(),
+    report_in(cache_dir().as_deref(), app)
+}
+
+/// [`report`] for the histories kept in `dir`.
+fn report_in(dir: Option<&Path>, app: Option<&str>) -> Block {
+    let apps: Vec<String> = match (dir, app) {
+        (None, _) => Vec::new(),
+        (Some(_), Some(a)) => vec![a.to_string()],
+        (Some(d), None) => {
+            let entries = std::fs::read_dir(d).into_iter().flatten().flatten();
+            let mut names: Vec<String> = entries
+                .filter_map(|e| e.file_name().to_str()?.strip_suffix(".tsv").map(String::from))
+                .collect();
+            names.sort();
+            names
+        }
     };
     let mut out = Block::new();
     for app in &apps {
-        let Some(history) = History::open(app).filter(|h| !h.runs.is_empty()) else {
+        let history = dir.map(|d| History::load(d, app)).filter(|h| !h.runs.is_empty());
+        let Some(history) = history else {
             continue;
         };
         if !out.is_empty() {
@@ -199,10 +207,20 @@ pub(crate) fn key(parent: &str, label: &str) -> String {
     clean(&format!("{parent} › {label}"))
 }
 
+/// Where histories are kept, or `None` if there's nowhere or they're turned off.
 fn cache_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CACHE_HOME")
+    let on = match ENABLED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => std::env::var_os("TINSEL_NO_HISTORY").is_none(),
+    };
+    on.then(|| cache_dir_from(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME")))?
+}
+
+fn cache_dir_from(xdg: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    let base = xdg
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+        .or_else(|| home.map(|h| PathBuf::from(h).join(".cache")))?;
     Some(base.join("tinsel"))
 }
 
