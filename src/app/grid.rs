@@ -324,9 +324,9 @@ impl<'a> Grid<'a> {
             }
         }
         if let Some((col, spaces)) = self.grow {
-            if let Some(h) = headers.get_mut(col) {
-                h.push_str(&" ".repeat(spaces));
-            }
+            // a column of cells can be wider than the headers go
+            headers.resize(headers.len().max(col + 1), String::new());
+            headers[col].push_str(&" ".repeat(spaces));
         }
         headers
     }
@@ -392,7 +392,8 @@ impl<'a> Grid<'a> {
         let spare = room.checked_sub(inner).filter(|&s| s > 0)?;
         let mut grid = self.clone();
         grid.limits.push((column, width + spare));
-        grid.grow = Some((column, width + spare - text::width(&headers[column])));
+        let header = headers.get(column).map_or(0, |h| text::width(h));
+        grid.grow = Some((column, width + spare - header));
         Some(grid)
     }
 }
@@ -755,5 +756,11 @@ mod tests {
         assert_eq!(grid.row_at(area, 3, 2), Some(7));
         assert_eq!(grid.row_at(area, 3, 1), None);
         assert_eq!(grid.row_at(area, 30, 2), None);
+    }
+
+    #[test]
+    fn a_fill_column_without_a_header_still_fills() {
+        let grid = Grid::new(["name"]).row(["api", "extra"]).fill(1);
+        assert_eq!(drawn(20, 3, grid), "  name\n  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n  api    extra");
     }
 }
