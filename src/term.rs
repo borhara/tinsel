@@ -726,6 +726,25 @@ fn interrupted() -> ! {
     std::process::exit(130)
 }
 
+/// Ctrl-C, pressed by a test: a signal on Unix, and on Windows a call to the handler as the
+/// console would make it (asking the console means interrupting the test runner too).
+#[cfg(test)]
+pub(crate) fn press_ctrl_c() {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn raise(sig: i32) -> i32;
+        }
+        // SAFETY: raise only delivers a signal, to whichever handler is set
+        unsafe { raise(SIGINT) };
+    }
+    #[cfg(windows)]
+    // SAFETY: as the console calls it, with Ctrl-C
+    unsafe {
+        win::on_ctrl(0);
+    }
+}
+
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn guard_interrupt() -> Option<usize> {
     None
