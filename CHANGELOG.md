@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/borhara/tinsel/compare/v0.2.0...v0.3.0) - 2026-11-13
+
+### Added
+
+- *(app)* tabs with colours and badges of their own
+- *(app)* a status on a panel's top border, and titles that keep their own colours
+- *(app)* Frame::html and Block::html draw what the terminal shows as a web page
+- *(prompt)* Confirm::lenient takes any piped answer starting with y as yes
+- *(app)* group a Grid's rows under headings the cursor steps over
+- *(table)* blank_cells leaves empty cells blank instead of dotted, on Table and Grid
+- *(help)* use the terminal's full width for commands, options and examples
+- 60fps by default, with set_fps, TINSEL_FPS and per-display rates
+- *(app)* a grid column that fills the spare width
+- *(app)* set the window title while an app runs
+- *(card)* set a title and footer into the border, colour it and fit it to its rows
+
+### Fixed
+
+- *(app)* faded text in the default colour fades for real and is never bold
+- *(app)* a narrow footer drops whole hints from the end and keeps its status
+- *(app)* a modal's shadow fades what's under it instead of blacking it out
+- *(region)* keep its frame rate between 1 and 240, like everything else
+- *(app)* keep a tint under text drawn over it
+
+### Other
+
+- changelog entries come from commit messages, and rewrap a long line
+- README pictures of the dashboard and services examples, drawn with tinsel
+- *(examples)* show panel statuses, tab badges, grouped grid rows and window titles
+
 ## [0.2.0](https://github.com/borhara/tinsel/compare/v0.1.0...v0.2.0) - 2026-11-13
 
 ### Added
