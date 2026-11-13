@@ -236,12 +236,11 @@ fn words(src: &str, base: Rgb) -> Vec<Word> {
         };
         let starts_with_space = piece.starts_with(char::is_whitespace);
         for (n, w) in piece.split_whitespace().enumerate() {
-            if n == 0 && joined && !starts_with_space {
-                if let Some(last) = out.last_mut() {
-                    last.plain += w;
-                    last.painted += &paint_word(w);
-                    continue;
-                }
+            // carry on the last word, as in **bold**ly
+            if let Some(last) = out.last_mut().filter(|_| n == 0 && joined && !starts_with_space) {
+                last.plain += w;
+                last.painted += &paint_word(w);
+                continue;
             }
             out.push(Word {
                 plain: w.to_string(),
@@ -353,9 +352,7 @@ fn wrap(words: &[Word], width: usize, first: &str, rest: &str) -> Block {
         line += &w.painted;
         used += wlen;
     }
-    if used > 0 || out.is_empty() {
-        out.push(line);
-    }
+    out.push(line);
     out.into()
 }
 
