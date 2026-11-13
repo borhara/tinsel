@@ -4,7 +4,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 use tinsel::app::{Frame, Grid, List, Panel, Rect, Size};
-use tinsel::{Block, ColorMode, Theme, palette, set_color_mode, set_theme};
+use tinsel::{Accent, Block, ColorMode, Theme, palette, set_accent, set_color_mode, set_theme};
 
 /// Colour on and the dark theme, held until the test ends: one test here tries the light
 /// theme, and the theme is process-wide too.
@@ -13,6 +13,7 @@ fn colour() -> MutexGuard<'static, ()> {
     let guard = THEME.lock().unwrap_or_else(|e| e.into_inner());
     set_color_mode(ColorMode::TrueColor);
     set_theme(Theme::Dark);
+    set_accent(Accent::Pink);
     guard
 }
 
