@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/borhara/tinsel/compare/v0.1.0...v0.2.0) - 2026-11-13
+
+### Added
+
+- keys with a timeout, Ctrl-C choices, pre-filled input and the right arrow to answer
+- *(prompt)* answer questions from a script of keys, for tests
+- *(app)* counts on panel titles and a footer with a status
+- *(app)* toasts that slide into a corner
+- *(app)* suspend to run something in the normal terminal
+- *(app)* wake a running app from other threads
+- *(app)* modals over a faded screen
+- *(app)* add modal overlays
+- *(app)* a box to type into
+- *(app)* a table with a cursor
+- *(app)* add a grid with a cursor row and scrolling
+- *(prompt)* bold the option under the cursor and summarise several answers by name
+- *(demo)* ask the new list questions as steps that go back
+- *(prompt)* add Select, MultiSelect and Dropdown builders
+- *(prompt)* go back a question with the left arrow in confirm and input
+- *(prompt)* read a piped answer in confirm
+- *(live)* show time left beside step progress
+- *(showcase)* show skipped, cancelled and waiting steps, a region, and --stderr
+- *(region)* export Region and add tests
+- *(region)* add Region for redrawing any block in place
+- *(live)* turn focus and history off from code with no_focus, set_focus and set_history
+- *(live)* skipped, cancelled and waiting steps, and steps that run again
+- *(output)* draw on stderr with set_target
+
+### Fixed
+
+- *(app)* scroll grids to whole columns and mark what's off to either side
+- *(spin)* line finished spinners up with Live steps
+
+### Other
+
+- release from main with release-plz
+- split the changelog at 0.1.0
+- use generic names in the demos, examples and tests
+- *(app)* draw every piece together in plain text
+- *(app)* add a services dashboard example
+- *(app)* cover the grid
+- document the list builders
+- *(prompt)* read keys through a source tests can script
+- document Region
+- document the new step states
+- *(live)* cover skipped, cancelled, waiting and repeated steps
+
 ## [0.1.0] - 2026-11-12
 
 First release.
