@@ -238,6 +238,14 @@ impl App for Dash {
 app::run(Dash { latency: vec![84.0, 90.0, 120.0, 340.0, 95.0] })?;   // q or Esc quits
 ```
 
+![A full-screen dashboard drawn with tinsel: four big-number stats, a list of services with the worker chosen, a latency chart, resource meters and a table of regions](docs/dashboard.png)
+
+`Grid` is a table with a cursor, for lists you move through: rows can sit under group
+headings, a panel can say where its data came from on its top border, and tabs can carry
+their own colour and a mark:
+
+![A services dashboard drawn with tinsel: groups on the left, a table of services grouped under core, data and edge with one row chosen, staging and production tabs, and details for the chosen service](docs/services.png)
+
 Anything tinsel draws (tables, trees, cards, any `Block`) goes straight into a panel, next to
 `List`, `Tabs`, `Plot`, `Stat`, `big` text, `hints` and twinkling `Sparkles`.
 `app::snapshot(&app, 80, 24)` draws a frame without a terminal, for tests, and
@@ -318,6 +326,7 @@ cargo run -- help                  # the CLI's own help, with its entrance
 cargo run -- prompts               # the interactive questions
 cargo run -- timings               # what Live has learned about your step durations
 cargo run --example dashboard      # a live full-screen dashboard
+cargo run --example services       # services by group, with a filter, dialogs and toasts
 cargo run --example deploy         # small, copyable examples: hello, deploy, parallel, status, questions, errors
 ```
 
