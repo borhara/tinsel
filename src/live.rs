@@ -15,7 +15,6 @@ use crate::widgets::{self, BarStyle, Card, Spinner};
 use crate::{format, notify, term};
 
 const MAX_WIDTH: usize = 76;
-const FRAME: Duration = Duration::from_millis(33);
 /// Redraws slow right down while nobody's looking.
 const AWAY_FRAME: Duration = Duration::from_millis(250);
 /// Runs shorter than this never send a notification.
@@ -123,6 +122,8 @@ struct Shared {
     mode: Mode,
     spinner: Spinner,
     bar: BarStyle,
+    /// Frames a second; 0 for the global rate.
+    fps: u32,
     history: Option<History>,
     focus: Option<Arc<Focus>>,
     /// Listening for focus reports. Started from the drawing thread after its first frame,
@@ -334,6 +335,7 @@ impl Live {
                 mode,
                 spinner: Spinner::default(),
                 bar: BarStyle::default(),
+                fps: 0,
                 history: None,
                 focus: None,
                 watch: None,
@@ -368,15 +370,26 @@ impl Live {
             let mut first = true;
             while !stop.load(Ordering::Relaxed) {
                 draw(&shared, false);
+                let frame = crate::fps::frame(lock(&shared).fps);
                 if std::mem::take(&mut first) {
-                    thread::sleep(FRAME);
+                    thread::sleep(frame);
                     watch_focus(&shared);
                     continue;
                 }
                 let away = lock(&shared).focus.as_ref().is_some_and(|f| f.away());
-                thread::sleep(if away { AWAY_FRAME } else { FRAME });
+                thread::sleep(if away { AWAY_FRAME.max(frame) } else { frame });
             }
         }));
+    }
+
+    /// Draw this many frames a second, rather than [`fps`](crate::fps) for every display.
+    ///
+    /// ```no_run
+    /// let live = tinsel::Live::new("deploy", "my-app").fps(120);
+    /// ```
+    pub fn fps(self, fps: u32) -> Self {
+        lock(&self.shared).fps = fps.clamp(1, 240);
+        self
     }
 
     /// Don't listen for focus reports: no calmer animation while you're away, no notification
