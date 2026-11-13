@@ -554,7 +554,7 @@ pub(crate) fn restore_saved_terminal() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_osc_color;
+    use super::*;
 
     #[test]
     fn reads_osc_colour_replies() {
@@ -562,5 +562,46 @@ mod tests {
         assert_eq!(parse_osc_color("\x1b]11;rgb:1e1e/2020/2a2a\x1b\\"), Some((30, 32, 42)));
         assert_eq!(parse_osc_color("\x1b]11;rgb:ff/80/00\x07"), Some((255, 128, 0)));
         assert_eq!(parse_osc_color("garbage"), None);
+    }
+
+    #[test]
+    fn stty_says_when_it_couldnt() {
+        assert!(stty(&["--no-such-setting"]).is_err());
+    }
+
+    #[test]
+    fn nothing_is_asked_with_no_one_there() {
+        let _ = interactive();
+        assert_eq!(crate::output::with_terminal(false, query_background), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_terminal_is_put_back_as_it_was() {
+        // remembered first, so on a real terminal it's put back exactly as it is
+        remember_terminal();
+        HAVE_SAVED.store(true, std::sync::atomic::Ordering::SeqCst);
+        let out = crate::output::capture(restore_saved_terminal);
+        assert!(out.contains("\x1b[?25h"));
+        assert!(!HAVE_SAVED.load(std::sync::atomic::Ordering::SeqCst));
+        // nothing saved now, so only the cursor and the rest come back
+        assert!(crate::output::capture(restore_saved_terminal).contains("\x1b[?25h"));
+        forget_terminal();
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn typed_keys_go_back_only_to_a_terminal() {
+        use std::os::fd::AsRawFd;
+        // a file isn't a terminal, so there's nowhere to put them
+        let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+        push_back_to(file.as_raw_fd(), b"x");
+    }
+
+    #[test]
+    fn sizes_fall_back_to_the_environment_then_a_default() {
+        assert_eq!(measured_or(Some(120), "TINSEL_NO_SUCH_VARIABLE", 80), 120);
+        assert_eq!(measured_or(None, "TINSEL_NO_SUCH_VARIABLE", 24), 24);
+        assert_eq!(measured_or(Some(0), "TINSEL_NO_SUCH_VARIABLE", 80), 80);
     }
 }
