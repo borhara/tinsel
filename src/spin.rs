@@ -410,3 +410,172 @@ fn progress_line(label: &str, c: &Counts, elapsed: Duration, t: f32) -> String {
         paint(SOFT, &stats)
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::output::{Output, capture, with_output, with_terminal};
+
+    fn plain() {
+        crate::set_color_mode(crate::ColorMode::None);
+    }
+
+    #[test]
+    fn spinning_on_a_terminal_ends_on_a_mark() {
+        plain();
+        let out = capture(|| {
+            with_terminal(true, || {
+                assert_eq!(spin("s-ok", || std::thread::sleep(Duration::from_millis(30))), ());
+                let failed: Result<(), &str> = try_spin("s-fail", || Err("it broke"));
+                assert!(failed.is_err());
+            })
+        });
+        assert!(out.contains("\x1b[?25l") && out.contains("●   s-ok"), "{out:?}");
+        assert!(out.contains("✕   s-fail") && out.contains("it broke\n"), "{out:?}");
+    }
+
+    #[test]
+    fn spinning_elsewhere_prints_a_line_an_event_or_nothing() {
+        plain();
+        let out = capture(|| {
+            with_terminal(false, || {
+                spin("p-ok", || ());
+                let _ = try_spin("p-fail", || Err::<(), _>("nope"));
+            })
+        });
+        assert!(out.contains("  [ok] p-ok (") && !out.contains("p-fail"), "{out:?}");
+        let quiet = capture(|| with_output(Output::Quiet, || spin("q-ok", || ())));
+        assert!(!quiet.contains("q-ok"));
+        let json = capture(|| {
+            with_output(Output::Json, || {
+                spin("j-ok", || ());
+                let _ = try_spin("j-fail", || Err::<(), _>("nope"));
+            })
+        });
+        assert!(json.contains(r#""label":"j-ok","outcome":"ok""#), "{json}");
+        assert!(
+            json.contains(r#""label":"j-fail","outcome":"fail""#) && json.contains(r#""error":"nope""#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn progress_draws_on_a_terminal_and_finishes_on_a_mark() {
+        plain();
+        let out = capture(|| {
+            with_terminal(true, || {
+                let p = Progress::new("p-draw", 100)
+                    .fps(240)
+                    .bytes()
+                    .with_bar(BarStyle::Waveform);
+                p.inc(30);
+                p.set(50);
+                std::thread::sleep(Duration::from_millis(30));
+                p.finish();
+            })
+        });
+        assert!(out.contains("p-draw") && out.contains("●   p-draw"), "{out:?}");
+    }
+
+    #[test]
+    fn progress_counts_within_its_total() {
+        let p = with_terminal(false, || Progress::new("count", 10).fps(30));
+        p.inc(25);
+        assert_eq!(lock(&p.counts).done, 10);
+        p.set(40);
+        assert_eq!(lock(&p.counts).done, 10);
+        p.set_total(5);
+        assert_eq!(lock(&p.counts).done, 5);
+        p.add_total(5);
+        assert_eq!(lock(&p.counts).total, Some(10));
+        capture(|| p.finish());
+
+        let u = with_terminal(false, || Progress::unknown("unknown"));
+        u.inc(7);
+        u.set(9);
+        assert_eq!(lock(&u.counts).done, 9);
+        u.add_total(3);
+        assert_eq!(lock(&u.counts).total, Some(3));
+        assert!(capture(|| drop(u)).contains("[ok] unknown"));
+    }
+
+    #[test]
+    fn progress_off_a_terminal_reports_once() {
+        let json = capture(|| {
+            with_output(Output::Json, || {
+                let p = Progress::new("pj", 4);
+                p.inc(2);
+                p.finish();
+                Progress::unknown("pu").finish();
+            })
+        });
+        assert!(
+            json.contains(r#"{"event":"progress","label":"pj","done":2,"#) && json.contains(r#""total":4}"#),
+            "{json}"
+        );
+        assert!(json.contains(r#""label":"pu","done":0,"#), "{json}");
+        let quiet = capture(|| with_output(Output::Quiet, || Progress::new("pq", 1).finish()));
+        assert!(!quiet.contains("pq"));
+    }
+
+    #[test]
+    fn iterators_count_as_they_go() {
+        let out = capture(|| {
+            with_terminal(false, || {
+                let mut it = [1, 2, 3].iter().progress("known").with_bar(BarStyle::Line);
+                assert_eq!(it.size_hint(), (3, Some(3)));
+                assert_eq!(lock(&it.bar().unwrap().counts).total, Some(3));
+                assert_eq!(it.by_ref().count(), 3);
+                assert!(it.bar().is_none());
+                assert!(it.with_bar(BarStyle::Line).next().is_none());
+                let unknown = (0..10).filter(|n| n % 2 == 0).progress("filtered");
+                assert_eq!(lock(&unknown.bar().unwrap().counts).total, None);
+                assert_eq!(unknown.sum::<i32>(), 20);
+            })
+        });
+        assert!(out.contains("[ok] known") && out.contains("[ok] filtered"), "{out:?}");
+    }
+
+    #[test]
+    fn the_progress_line_shows_rate_and_time_left() {
+        plain();
+        let counts = |done, total| Counts {
+            done,
+            total,
+            bytes: false,
+            bar: BarStyle::Line,
+        };
+        let line = progress_line("work", &counts(50, Some(100)), Duration::from_secs(5), 0.0);
+        assert!(
+            line.contains(" 50%  50 / 100") && line.contains("10/s") && line.contains("5.0s left"),
+            "{line}"
+        );
+        let line = progress_line("work", &counts(0, Some(0)), Duration::from_secs(1), 0.0);
+        assert!(line.contains("100%  0 / 0") && !line.contains("/s"), "{line}");
+        let line = progress_line("work", &counts(0, None), Duration::from_secs(1), 0.0);
+        assert!(line.ends_with("  0"), "{line}");
+        let bytes = Counts {
+            bytes: true,
+            ..counts(2048, None)
+        };
+        let line = progress_line("work", &bytes, Duration::from_secs(1), 0.0);
+        assert!(line.contains("2.0 KB  ·  2.0 KB/s"), "{line}");
+    }
+
+    #[test]
+    fn an_iterator_that_carries_on_after_running_out_isnt_counted_twice() {
+        let mut calls = 0;
+        let resumes = std::iter::from_fn(move || {
+            calls += 1;
+            (calls != 2).then_some(calls)
+        });
+        let out = capture(|| {
+            with_terminal(false, || {
+                let mut it = resumes.progress("resumes");
+                assert_eq!((it.next(), it.next(), it.next()), (Some(1), None, Some(3)));
+            })
+        });
+        assert_eq!(out.matches("[ok] resumes").count(), 1, "{out:?}");
+    }
+}
