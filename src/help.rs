@@ -1,7 +1,6 @@
 //! `--help` output in tinsel's style, with a short entrance on a terminal.
 
 use std::fmt;
-use std::io::Write;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -103,11 +102,9 @@ impl Help {
     /// Add a row to the latest group: what to type on the left (`<args>` and `[optional]`
     /// parts are dimmed), what it does on the right.
     pub fn item(mut self, left: impl Into<String>, right: impl Into<String>) -> Self {
-        if self.groups.is_empty() {
-            self = self.group("");
-        }
-        if let Some(g) = self.groups.last_mut() {
-            g.rows.push((left.into(), right.into()));
+        match self.groups.last_mut() {
+            Some(g) => g.rows.push((left.into(), right.into())),
+            None => return self.group("").item(left, right),
         }
         self
     }
@@ -175,8 +172,7 @@ impl Help {
         let end = settle + 0.5;
 
         let prev = term::guard_interrupt();
-        let mut out = output::writer();
-        let _ = write!(out, "\x1b[?25l\x1b[?7l");
+        output::write("\x1b[?25l\x1b[?7l");
         let (start, mut drawn) = (Instant::now(), 0);
         loop {
             let t = start.elapsed().as_secs_f32();
@@ -203,15 +199,13 @@ impl Help {
                     buf += "\x1b[K\n";
                 }
             }
-            let _ = out.write_all(buf.as_bytes());
-            let _ = out.flush();
+            output::write(&buf);
             if done {
                 break;
             }
             sleep(Duration::from_millis(16));
         }
-        let _ = write!(out, "\x1b[?7h\x1b[?25h");
-        let _ = out.flush();
+        output::write("\x1b[?7h\x1b[?25h");
         term::restore_interrupt(prev);
     }
 
