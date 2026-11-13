@@ -45,7 +45,7 @@
 //! tinsel prints ([`Table`](crate::Table), [`Tree`](crate::Tree), [`Card`](crate::Card),
 //! any [`Block`]) is a widget already; on top of those there's [`Panel`], [`List`],
 //! [`Grid`] (a table with a cursor), [`ScrollView`] (lines to scroll through, or follow as they
-//! grow), [`Input`] (a box to type into), [`Tabs`], [`Plot`], [`Stat`], [`big`] text, [`hints`]
+//! grow), [`Input`] (a box to type into) and [`TextArea`] (several lines of it), [`Tabs`], [`Plot`], [`Stat`], [`big`] text, [`hints`]
 //! for the footer and [`Sparkles`] for the background.
 //!
 //! # Time
@@ -74,6 +74,7 @@ mod keys;
 mod layout;
 mod overlay;
 mod scroll;
+mod textarea;
 mod widgets;
 
 use std::io::{self, Write};
@@ -89,6 +90,7 @@ pub use keys::Keys;
 pub use layout::{Rect, Size};
 pub use overlay::{Modal, Toasts};
 pub use scroll::{Scroll, ScrollView};
+pub use textarea::TextArea;
 pub use widgets::{Footer, List, Panel, Plot, Sparkles, Stat, Tabs, Widget, big, hints};
 
 use crate::block::Block;

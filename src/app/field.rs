@@ -212,7 +212,7 @@ impl Widget for Input {
 }
 
 /// The character under the cursor, lit up: on rose in colour, reversed without.
-fn caret(c: char) -> String {
+pub(super) fn caret(c: char) -> String {
     if color_mode() == ColorMode::None {
         return format!("\x1b[7m{c}\x1b[27m");
     }
