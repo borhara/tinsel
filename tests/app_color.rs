@@ -2,11 +2,12 @@
 //! file (Cargo runs each file under `tests/` as a separate process).
 
 use tinsel::app::{Cursor, Frame, Grid, List, Modal, Panel, Plot, Rect, Sparkles, Stat, Tabs};
-use tinsel::{ColorMode, Theme, palette, set_color_mode, set_theme};
+use tinsel::{Accent, ColorMode, Theme, palette, set_accent, set_color_mode, set_theme};
 
 fn colour() {
     set_color_mode(ColorMode::TrueColor);
     set_theme(Theme::Dark);
+    set_accent(Accent::Pink);
 }
 
 #[test]
