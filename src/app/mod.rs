@@ -76,7 +76,7 @@ mod widgets;
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 pub use field::Input;
@@ -156,9 +156,15 @@ pub trait App {
 /// panics. When stdout isn't a terminal, one frame is printed instead, at the terminal's
 /// size (or 80×24), and the app is returned straight away.
 pub fn run<A: App>(mut app: A) -> io::Result<A> {
+    run_app(&mut app)?;
+    Ok(app)
+}
+
+/// [`run`], for any app.
+fn run_app(app: &mut dyn App) -> io::Result<()> {
     if !term::interactive() {
-        snapshot(&app, term::width(), term::height()).print();
-        return Ok(app);
+        snapshot(app, term::width(), term::height()).print();
+        return Ok(());
     }
     // decide these before stdin is in raw mode: finding out may mean asking the terminal
     crate::style::theme();
@@ -169,22 +175,22 @@ pub fn run<A: App>(mut app: A) -> io::Result<A> {
     let _waking = Waking::listen(tx.clone());
     let control = session.control.clone();
     session.reader = Some(std::thread::spawn(move || {
-        listen(term::read_byte, &tx, &control);
+        listen(&mut term::read_byte, &tx, &control);
         control.idle.store(true, Ordering::SeqCst);
     }));
-    drive(&mut app, &rx, &mut io::stdout(), || (term::width(), term::height()))?;
+    drive(app, &rx, &mut io::stdout(), &mut || (term::width(), term::height()))?;
     drop(session);
-    Ok(app)
+    Ok(())
 }
 
 /// The loop itself: draw, wait for an event or the next tick, and go round again until the app
 /// quits, Ctrl-C is pressed or the events stop. Kept apart from the terminal so it can be
 /// tested with any events, output and screen size.
-fn drive<A: App + ?Sized>(
-    app: &mut A,
+fn drive(
+    app: &mut dyn App,
     rx: &mpsc::Receiver<Event>,
-    out: &mut impl Write,
-    mut screen: impl FnMut() -> (usize, usize),
+    out: &mut dyn Write,
+    screen: &mut dyn FnMut() -> (usize, usize),
 ) -> io::Result<()> {
     let start = Instant::now();
     let _clock = Clock::start(start);
@@ -319,7 +325,7 @@ impl Waker {
         if WOKEN.swap(true, Ordering::SeqCst) {
             return;
         }
-        if let Some(tx) = WAKE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(tx) = WAKE.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
             let _ = tx.send(Event::Wake);
         }
     }
@@ -333,14 +339,14 @@ impl Waking {
         if WOKEN.load(Ordering::SeqCst) {
             let _ = tx.send(Event::Wake);
         }
-        *WAKE.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+        *WAKE.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx);
         Waking
     }
 }
 
 impl Drop for Waking {
     fn drop(&mut self) {
-        *WAKE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *WAKE.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 }
 
@@ -490,9 +496,7 @@ impl Session {
                 leave_screen();
                 // unwinding drops the session, which puts the terminal back once the reader
                 // has stopped; with panic = "abort" nothing else will
-                if cfg!(panic = "abort") {
-                    term::restore_saved_terminal();
-                }
+                cfg!(panic = "abort").then(term::restore_saved_terminal);
             }
             previous(info);
         }));
@@ -527,9 +531,7 @@ impl Drop for Session {
         // once the terminal is back in line mode, a read waits for Enter and would take the
         // first key of whatever reads stdin next
         self.control.stop.store(true, Ordering::SeqCst);
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
-        }
+        let _ = self.reader.take().map(std::thread::JoinHandle::join);
         leave_screen();
         // out of line mode, unless a suspended closure panicked and it's already there
         RUNNING.with(|r| r.borrow_mut().take());
@@ -587,8 +589,18 @@ fn leave_screen() {
 /// }
 /// ```
 pub fn suspend<T>(f: impl FnOnce() -> T) -> io::Result<T> {
+    let mut f = Some(f);
+    let mut out = None;
+    suspended(&mut || out = f.take().map(|f| f()))?;
+    // `suspended` has run it by the time it returns Ok
+    out.ok_or(io::ErrorKind::Other.into())
+}
+
+/// [`suspend`], for any closure.
+fn suspended(f: &mut dyn FnMut()) -> io::Result<()> {
     let Some((control, mouse)) = RUNNING.with(|r| r.borrow().as_ref().map(|r| (r.control.clone(), r.mouse))) else {
-        return Ok(f());
+        f();
+        return Ok(());
     };
     // the reader has to be out of its read before line mode is back, or it takes the first
     // thing typed; reads give up every 0.1s, so this is quick
@@ -600,10 +612,10 @@ pub fn suspend<T>(f: impl FnOnce() -> T) -> io::Result<T> {
     leave_screen();
     RUNNING.with(|r| r.borrow_mut().as_mut().map(|r| r.raw.take()));
 
-    let out = {
+    {
         let _ctrl_c = interrupt::Pass::new();
-        f()
-    };
+        f();
+    }
 
     let raw = term::RawMode::enter()?;
     RUNNING.with(|r| r.borrow_mut().as_mut().map(|r| r.raw = Some(raw)));
@@ -611,7 +623,7 @@ pub fn suspend<T>(f: impl FnOnce() -> T) -> io::Result<T> {
     enter_screen(mouse)?;
     REDRAW.with(|r| r.set(true));
     control.pause.store(false, Ordering::SeqCst);
-    Ok(out)
+    Ok(())
 }
 
 /// Ctrl-C while suspended: the app survives it, and whatever it's running gets it.
@@ -639,10 +651,8 @@ mod interrupt {
 
     impl Drop for Pass {
         fn drop(&mut self) {
-            if self.0 != SIG_ERR {
-                // SAFETY: the previous handler, as signal() returned it
-                unsafe { signal(SIGINT, self.0) };
-            }
+            // SAFETY: the previous handler, as signal() returned it
+            (self.0 != SIG_ERR).then(|| unsafe { signal(SIGINT, self.0) });
         }
     }
 }
@@ -660,17 +670,15 @@ mod interrupt {
 
 /// Read keys and mouse reports until told to stop, sending each as an event. `read` gives
 /// one byte, or `None` after a short pause with nothing typed.
-fn listen(mut read: impl FnMut() -> io::Result<Option<u8>>, tx: &mpsc::Sender<Event>, control: &Control) {
+fn listen(read: &mut dyn FnMut() -> io::Result<Option<u8>>, tx: &mpsc::Sender<Event>, control: &Control) {
     let mut pending: Vec<u8> = Vec::new();
     while !control.stop.load(Ordering::SeqCst) {
+        // busy first, then a look for a pause: a pause asked for before the look is seen,
+        // and one asked for after it waits for this read, which `suspend` sees as busy
+        control.idle.store(false, Ordering::SeqCst);
         if control.pause.load(Ordering::SeqCst) {
             control.idle.store(true, Ordering::SeqCst);
             std::thread::sleep(Duration::from_millis(10));
-            continue;
-        }
-        control.idle.store(false, Ordering::SeqCst);
-        // a pause asked for between the two looks waits for the next time round
-        if control.pause.load(Ordering::SeqCst) {
             continue;
         }
         // reads give up after 0.1s, so `stop` is checked often and a pause can end a sequence
@@ -743,7 +751,7 @@ mod tests {
             Event::Key(Key::Char('y')),
         ]);
         let mut out = Vec::new();
-        drive(&mut app, &rx, &mut out, || (20, 2)).unwrap();
+        drive(&mut app, &rx, &mut out, &mut || (20, 2)).unwrap();
         // the app sees Ctrl-C, which quits even so, and nothing after it is handled
         assert_eq!(app.seen, [Event::Key(Key::Char('x')), Event::Key(Key::Ctrl('c'))]);
         let out = String::from_utf8(out).unwrap();
@@ -756,9 +764,7 @@ mod tests {
         impl App for Titled {
             fn view(&self, _: &mut Frame) {}
             fn event(&mut self, event: &Event) -> Flow {
-                if *event == Event::Tick {
-                    self.0 += 1;
-                }
+                self.0 += usize::from(*event == Event::Tick);
                 if self.0 == 4 { Flow::Quit } else { Flow::Continue }
             }
             fn title(&self) -> Option<String> {
@@ -767,7 +773,7 @@ mod tests {
         }
         let rx = keys(&[]);
         let mut out = Vec::new();
-        drive(&mut Titled(0), &rx, &mut out, || (10, 2)).unwrap();
+        drive(&mut Titled(0), &rx, &mut out, &mut || (10, 2)).unwrap();
         let out = String::from_utf8(out).unwrap();
         assert_eq!(out.matches("\x1b]0;").count(), 2, "{out:?}");
         assert!(
@@ -784,11 +790,11 @@ mod tests {
         };
         let rx = keys(&[]);
         let sizes = std::cell::Cell::new(0);
-        let screen = || {
+        let mut screen = || {
             sizes.set(sizes.get() + 1);
             if sizes.get() > 2 { (30, 4) } else { (20, 2) }
         };
-        drive(&mut app, &rx, &mut Vec::new(), screen).unwrap();
+        drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
         assert_eq!(app.seen.iter().filter(|e| **e == Event::Tick).count(), 2);
         assert!(app.seen.contains(&Event::Resize(30, 4)), "{:?}", app.seen);
 
@@ -798,8 +804,8 @@ mod tests {
             ..Recorder::default()
         };
         let mut first = true;
-        let screen = || if std::mem::take(&mut first) { (5, 5) } else { (9, 9) };
-        drive(&mut app, &rx, &mut Vec::new(), screen).unwrap();
+        let mut screen = || if std::mem::take(&mut first) { (5, 5) } else { (9, 9) };
+        drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
         assert_eq!(app.seen, [Event::Resize(9, 9)]);
     }
 
@@ -808,23 +814,24 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         drop(tx);
         let mut app = Recorder::default();
-        drive(&mut app, &rx, &mut Vec::new(), || (10, 1)).unwrap();
+        drive(&mut app, &rx, &mut Vec::new(), &mut || (10, 1)).unwrap();
         assert!(app.seen.is_empty());
     }
 
     #[test]
     fn the_loop_reports_output_that_fails() {
+        /// Takes everything, then can't pass it on.
         struct Broken;
         impl Write for Broken {
-            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-                Err(io::Error::other("gone"))
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                Ok(buf.len())
             }
             fn flush(&mut self) -> io::Result<()> {
-                Ok(())
+                Err(io::Error::other("gone"))
             }
         }
         let rx = keys(&[]);
-        assert!(drive(&mut Recorder::default(), &rx, &mut Broken, || (10, 1)).is_err());
+        assert!(drive(&mut Recorder::default(), &rx, &mut Broken, &mut || (10, 1)).is_err());
     }
 
     #[test]
@@ -851,13 +858,19 @@ mod tests {
         };
         let (tx2, rx2) = mpsc::channel();
         tx2.send(Event::Wake).unwrap();
-        drive(&mut app, &rx2, &mut Vec::new(), || (10, 1)).unwrap();
+        drive(&mut app, &rx2, &mut Vec::new(), &mut || (10, 1)).unwrap();
         waker.wake();
         assert_eq!(rx.try_iter().collect::<Vec<_>>(), [Event::Wake]);
         drop(waking);
         WOKEN.store(false, Ordering::SeqCst);
         waker.wake();
         assert!(WAKE.lock().unwrap().is_none());
+
+        // not woken before it starts: nothing to deliver
+        WOKEN.store(false, Ordering::SeqCst);
+        let (tx3, rx3) = mpsc::channel();
+        drop(Waking::listen(tx3));
+        assert!(rx3.try_recv().is_err());
     }
 
     #[test]
@@ -873,7 +886,7 @@ mod tests {
         ]
         .into_iter();
         let (tx, rx) = mpsc::channel();
-        listen(move || script.next().unwrap(), &tx, &Control::default());
+        listen(&mut move || script.next().unwrap(), &tx, &Control::default());
         let got: Vec<Event> = rx.try_iter().collect();
         assert_eq!(
             got,
@@ -886,11 +899,18 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let stopped = Control::default();
         stopped.stop.store(true, Ordering::SeqCst);
-        listen(|| panic!("read after stop"), &tx, &stopped);
+        // one reader for both, so it can count its reads
+        let mut reads = 0;
+        let mut read = || {
+            reads += 1;
+            Ok(Some(b'q'))
+        };
+        listen(&mut read, &tx, &stopped);
 
         let (tx, rx) = mpsc::channel();
         drop(rx);
-        listen(|| Ok(Some(b'q')), &tx, &Control::default());
+        listen(&mut read, &tx, &Control::default());
+        assert_eq!(reads, 1, "nothing read after stop, then one key nobody took");
     }
 
     #[test]
@@ -900,7 +920,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let reader = {
             let control = control.clone();
-            std::thread::spawn(move || listen(|| Ok(Some(b'x')), &tx, &control))
+            std::thread::spawn(move || listen(&mut || Ok(Some(b'x')), &tx, &control))
         };
         while !control.idle.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(1));
@@ -936,7 +956,7 @@ mod tests {
         }
         let rx = keys(&[Event::Key(Key::Char('s'))]);
         let mut out = Vec::new();
-        drive(&mut Suspends(0), &rx, &mut out, || (10, 1)).unwrap();
+        drive(&mut Suspends(0), &rx, &mut out, &mut || (10, 1)).unwrap();
         assert_eq!(String::from_utf8(out).unwrap().matches("same").count(), 2);
     }
 
@@ -982,5 +1002,76 @@ mod tests {
         assert_eq!(app.event(&Event::Key(Key::Esc)), Flow::Quit);
         assert_eq!(app.event(&Event::Tick), Flow::Continue);
         assert_eq!((app.fps(), app.mouse()), (crate::fps(), false));
+        app.view(&mut Frame::new(1, 1));
+    }
+
+    #[test]
+    fn the_reader_waits_out_a_pause_and_stops_when_no_one_listens() {
+        let control = Arc::new(Control::default());
+        control.pause.store(true, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel();
+        let unpause = control.clone();
+        let lifted = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(unpause.idle.load(Ordering::SeqCst), "paused, so not reading");
+            unpause.pause.store(false, Ordering::SeqCst);
+        });
+        // a byte that's no key, a key, then nobody to send the next one to
+        let mut script = vec![Ok(Some(0x1c)), Ok(Some(b'a')), Ok(Some(b'b'))].into_iter();
+        let mut rx = Some(rx);
+        listen(
+            &mut || {
+                let next = script.next().unwrap_or(Err(io::Error::other("done")));
+                if matches!(next, Ok(Some(b'b'))) {
+                    assert_eq!(rx.take().unwrap().try_recv().unwrap(), Event::Key(Key::Char('a')));
+                }
+                next
+            },
+            &tx,
+            &control,
+        );
+        lifted.join().unwrap();
+        assert!(script.next().is_none());
+    }
+
+    #[test]
+    fn off_a_terminal_an_app_prints_one_frame() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let out = crate::output::capture(|| {
+            let app = crate::output::with_terminal(false, || run(Recorder::default())).unwrap();
+            assert!(app.seen.is_empty());
+        });
+        assert!(out.starts_with("seen 0"), "{out:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ctrl_c_is_passed_on_while_suspended() {
+        unsafe extern "C" {
+            fn raise(sig: i32) -> i32;
+        }
+        // drawing tests elsewhere set their own Ctrl-C handler; capturing keeps them apart
+        crate::output::capture(|| {
+            let pass = interrupt::Pass::new();
+            // SAFETY: SIGINT goes to `pass`, which does nothing
+            assert_eq!(unsafe { raise(2) }, 0);
+            drop(pass);
+        });
+        assert_eq!(suspend(|| 7).unwrap(), 7);
+    }
+
+    #[test]
+    fn the_app_clock_runs_while_it_does() {
+        struct Timed(f32);
+        impl App for Timed {
+            fn view(&self, _: &mut Frame) {}
+            fn event(&mut self, _: &Event) -> Flow {
+                self.0 = time();
+                Flow::Quit
+            }
+        }
+        let mut app = Timed(-1.0);
+        drive(&mut app, &keys(&[Event::Tick]), &mut Vec::new(), &mut || (1, 1)).unwrap();
+        assert!(app.0 >= 0.0);
     }
 }
