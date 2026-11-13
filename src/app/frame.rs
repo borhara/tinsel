@@ -381,10 +381,17 @@ impl Frame {
         for y in area.y..area.y + area.height {
             for cell in &mut self.cells[y * self.width + area.x..y * self.width + area.x + area.width] {
                 let s = &mut cell.style;
-                // colours the frame knows are faded by hand; the terminal's own, with DIM
-                if !matches!(s.fg, Ink::Rgb(..)) {
-                    s.attrs |= DIM;
+                // the default colour fades as tinsel's own text colour; the terminal's palette
+                // colours with DIM, which bold would cancel, so faded text is never bold
+                match s.fg {
+                    Ink::Default => {
+                        let Rgb(r, g, b) = crate::style::shown(crate::style::palette::TEXT);
+                        s.fg = Ink::Rgb(r, g, b);
+                    }
+                    Ink::Indexed(_) => s.attrs |= DIM,
+                    Ink::Rgb(..) => {}
                 }
+                s.attrs &= !BOLD;
                 s.fg = fade(s.fg, 0.4);
                 s.bg = fade(s.bg, 0.5);
             }
