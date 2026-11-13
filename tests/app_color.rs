@@ -146,13 +146,19 @@ fn a_modal_fades_what_is_behind_it_and_casts_a_shadow() {
         tinsel::text::strip_ansi(&before.lines()[0])
     );
     assert!(before.lines()[0].contains(&rose) && !after.lines()[0].contains(&rose));
-    // and under the modal's bottom edge, a shadow
+    // under the modal's bottom edge, a shadow: the same text again, fainter still, and no
+    // block of background painted over it
     let bottom = after.lines().iter().rposition(|l| l.contains('╰')).unwrap();
-    assert!(
-        after.lines()[bottom + 1].contains("48;2;"),
-        "{:?}",
-        after.lines()[bottom + 1]
+    let under = &after.lines()[bottom + 1];
+    assert_eq!(
+        tinsel::text::strip_ansi(under),
+        tinsel::text::strip_ansi(&before.lines()[bottom + 1])
     );
+    assert!(!under.contains("48;2;"), "{under:?}");
+    let faded = "38;2;94;49;66"; // rose, faded once
+    let shaded = "38;2;38;20;26"; // and again, in the shadow
+    assert!(after.lines()[0].contains(faded) && !after.lines()[0].contains(shaded));
+    assert!(under.contains(faded) && under.contains(shaded), "{under:?}");
 }
 
 #[test]

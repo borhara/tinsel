@@ -83,17 +83,26 @@ impl Widget for Modal<'_> {
             at.y = (at.y + rise.round() as usize).min((area.y + area.height).saturating_sub(at.height));
         }
         // a soft shadow below and to the right
-        let shadow = Rgb(14, 10, 12);
-        frame.tint(
-            Rect::new(at.x + 2, at.y + at.height, at.width, 1).intersect(area),
-            shadow,
-        );
-        frame.tint(
-            Rect::new(at.x + at.width, at.y + 1, 2, at.height).intersect(area),
-            shadow,
-        );
+        for under in [
+            Rect::new(at.x + 2, at.y + at.height, at.width, 1),
+            Rect::new(at.x + at.width, at.y + 1, 2, at.height),
+        ] {
+            shadow(frame, under.intersect(area));
+        }
         frame.clear(at);
         self.body.render(at, frame);
+    }
+}
+
+/// A gentle shadow over `area`, which has already been faded: what's there stays, a shade
+/// fainter again, rather than being blanked out. On a dark background that's all (a block
+/// of near-black over the terminal's own background reads as a hole, not a shadow); on a
+/// light one the cells also turn a pale grey, which is what a shadow on paper looks like.
+fn shadow(frame: &mut Frame, area: Rect) {
+    frame.dim(area);
+    if crate::style::theme() == crate::style::Theme::Light {
+        // redrawn for the light background, near-black becomes a pale grey
+        frame.tint(area, Rgb(8, 6, 7));
     }
 }
 
@@ -313,5 +322,20 @@ mod tests {
         assert_eq!(at(1.0), Some(4));
         assert_eq!(at(1.05), Some(3));
         assert_eq!(at(2.0), Some(2));
+    }
+
+    #[test]
+    fn the_shadow_keeps_what_is_under_it() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let mut f = Frame::new(20, 7);
+        for row in 0..7 {
+            f.print(f.area(), row, "api ok web ok db ok!");
+        }
+        f.render(f.area(), Modal::new(Panel::new("sure?").body("y / n")));
+        let shown = f.snapshot().plain();
+        let rows: Vec<&str> = shown.lines().collect();
+        // the rows below and beside the dialog read just as they did
+        assert_eq!(rows[5], "api ok web ok db ok!", "{shown}");
+        assert!(rows[3].ends_with("│ ok!"), "{shown}");
     }
 }
