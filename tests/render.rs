@@ -67,6 +67,14 @@ fn card_puts_a_blank_line_under_the_headline() {
 }
 
 #[test]
+fn a_long_key_keeps_a_space_before_its_value() {
+    plain();
+    let card = Card::new().kv("run again by", "Thursday").kv("url", "x.y").width(30);
+    assert!(card.lines().plain().contains("run again by Thursday"));
+    assert!(card.lines().plain().contains("url       x.y"));
+}
+
+#[test]
 fn a_card_can_carry_a_title_and_footer_in_its_border_and_fit_its_rows() {
     plain();
     let card = Card::new()
