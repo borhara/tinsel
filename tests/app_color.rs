@@ -179,3 +179,28 @@ fn grid_headings_are_bold_rose_and_never_the_cursor_row() {
     assert!(!heading.contains("48;2;"), "{heading:?}");
     assert!(shown.lines()[3].contains("48;2;"), "{shown:?}");
 }
+
+#[test]
+fn panel_titles_and_statuses_keep_their_own_colours() {
+    colour();
+    let rgb = |c: tinsel::Rgb| format!("38;2;{};{};{}", c.0, c.1, c.2);
+    let top = |panel: Panel| {
+        let mut f = Frame::new(40, 2);
+        f.render(f.area(), panel);
+        f.snapshot().lines()[0].clone()
+    };
+    let title = tinsel::Line::new().push("● ", palette::RED).push("api", palette::SAGE);
+    let shown = top(Panel::new(title.to_string()).status("staging"));
+    assert!(shown.contains(&rgb(palette::RED)) && shown.contains(&rgb(palette::SAGE)));
+    // plain text gets the panel's own colours: a soft title, a muted status
+    let shown = top(Panel::new("api").status("staging"));
+    assert!(shown.contains(&rgb(palette::SOFT)) && shown.contains(&rgb(palette::MUTED)));
+    let shown = top(Panel::new("api").status(tinsel::paint(palette::AMBER, "stale")));
+    assert!(shown.contains(&rgb(palette::AMBER)) && !shown.contains(&rgb(palette::MUTED)));
+    // a styled title is cut short by what shows, not by its escape codes
+    let mut f = Frame::new(9, 2);
+    f.render(f.area(), Panel::new(tinsel::paint(palette::RED, "services")));
+    let shown = f.snapshot();
+    assert_eq!(shown.plain().lines().next(), Some("╭─ s… ──╮"));
+    assert!(shown.lines()[0].contains(&rgb(palette::RED)));
+}
