@@ -62,6 +62,9 @@
 //! to stderr, for tools whose stdout carries something else; then it's stderr that has to
 //! be a terminal.
 //!
+//! Animations draw 60 frames a second. [`set_fps`] (or `TINSEL_FPS`) changes that for the
+//! whole program, and a display can choose its own: `Live::fps`, `Progress::fps`, `App::fps`.
+//!
 //! [`set_color_mode`] overrides all of that, for a `--color` flag or to get predictable text
 //! in tests:
 //!
@@ -80,6 +83,7 @@ pub mod app;
 mod block;
 mod chart;
 pub mod format;
+mod fps;
 mod help;
 mod highlight;
 mod history;
@@ -104,6 +108,7 @@ mod widgets;
 
 pub use block::Block;
 pub use chart::{bars, heatmap, histogram, meter, sparkline};
+pub use fps::{DEFAULT_FPS, fps, set_fps};
 pub use help::Help;
 pub use highlight::Lang;
 pub use history::set_history;
