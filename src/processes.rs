@@ -222,6 +222,7 @@ fn on_a_terminal() {
     let env = [
         ("VISUAL", editor.as_str()),
         ("COLORTERM", "truecolor"),
+        ("TERM", "xterm-256color"),
         ("TERM_PROGRAM", "WezTerm"),
         ("RUST_BACKTRACE", "1"),
         ("XDG_CACHE_HOME", scratch.to_str().unwrap()),
