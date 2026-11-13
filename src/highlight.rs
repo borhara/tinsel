@@ -179,7 +179,7 @@ pub(crate) fn line(src: &str, lang: Lang, dim: bool) -> String {
             i = end;
             continue;
         }
-        if is_word(c) || (lang == Lang::Shell && c == '-' && command_pending) {
+        if is_word(c) || (lang == Lang::Shell && c == '-') {
             let end = scan(&chars, i, |c| is_word(c) || (lang == Lang::Shell && "-./".contains(c)));
             let word = take(i, end);
             let color = if command_pending {
@@ -209,8 +209,9 @@ pub(crate) fn line(src: &str, lang: Lang, dim: bool) -> String {
         if lang == Lang::Shell && matches!(c, '|' | ';' | '&') {
             command_pending = true;
         }
+        // stop before anything that starts a token of its own: a flag, in a shell
         let end = scan(&chars, i + 1, |c| {
-            !is_word(c) && !"\"'`#$/".contains(c) && !c.is_ascii_digit()
+            !is_word(c) && !"\"'`#$/".contains(c) && !c.is_ascii_digit() && !(lang == Lang::Shell && c == '-')
         });
         let end = end.max(i + 1);
         let punct = take(i, end);
@@ -311,5 +312,19 @@ mod tests {
         assert_eq!(Lang::from_path("src/main.rs"), Some(Lang::Rust));
         assert_eq!(Lang::from_path("app.yml"), Some(Lang::Yaml));
         assert_eq!(Lang::from_path("Makefile"), None);
+    }
+
+    fn coloured(src: &str, lang: Lang) -> String {
+        crate::style::with_color_mode(crate::ColorMode::TrueColor, || line(src, lang, false))
+    }
+
+    fn painted(color: crate::Rgb, s: &str) -> String {
+        crate::style::with_color_mode(crate::ColorMode::TrueColor, || paint(color, s))
+    }
+
+    #[test]
+    fn shell_flags_are_quieter() {
+        let out = coloured("cargo build --release", Lang::Shell);
+        assert!(out.contains(&painted(SOFT, "--release")), "{out:?}");
     }
 }
