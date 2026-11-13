@@ -89,29 +89,36 @@ impl Block {
     /// tinsel::markdown(include_str!("../CHANGELOG.md")).page();
     /// ```
     pub fn page(&self) {
-        use std::io::{IsTerminal, Write};
-        let paged = crate::output::target() == crate::Target::Stdout && std::io::stdout().is_terminal();
+        self.page_with(std::env::var("PAGER").ok(), std::env::var_os("LESS").is_some());
+    }
+
+    /// [`page`](Block::page) through `pager` (a command line), unless it's empty; `less_set`
+    /// says whether `less` has options of its own already.
+    fn page_with(&self, pager: Option<String>, less_set: bool) {
+        use std::io::Write;
+        let paged = crate::output::target() == crate::Target::Stdout && crate::output::is_terminal();
         if crate::output::json() || !paged || self.len() < crate::term::height() {
             return self.print();
         }
-        let pager = std::env::var("PAGER").ok().filter(|p| !p.trim().is_empty());
+        let pager = pager.filter(|p| !p.trim().is_empty());
         let default = if cfg!(windows) { "more" } else { "less" };
         let command = pager.unwrap_or_else(|| default.to_string());
         let mut words = command.split_whitespace();
         let program = words.next().unwrap_or(default);
         let mut cmd = std::process::Command::new(program);
         cmd.args(words).stdin(std::process::Stdio::piped());
-        if program.ends_with("less") && std::env::var_os("LESS").is_none() {
+        if program.ends_with("less") && !less_set {
             // colours, quit if it fits after all, and leave the text on screen afterwards
             cmd.env("LESS", "-RFX");
         }
         let Ok(mut child) = cmd.spawn() else {
             return self.print();
         };
-        if let Some(mut stdin) = child.stdin.take() {
-            // the reader quitting early closes the pipe; that's fine
-            let _ = stdin.write_all(format!("{self}\n").as_bytes());
-        }
+        // the reader quitting early closes the pipe; that's fine
+        let _ = child
+            .stdin
+            .take()
+            .map(|mut stdin| stdin.write_all(format!("{self}\n").as_bytes()));
         let _ = child.wait();
     }
 
