@@ -61,4 +61,12 @@ mod tests {
         assert_eq!(frame(1000), Duration::from_secs(1) / 240);
         assert_eq!(frame(0), Duration::from_secs(1) / fps());
     }
+
+    #[test]
+    fn the_rate_comes_from_the_environment_kept_in_range() {
+        assert_eq!(parse_fps(None), DEFAULT_FPS);
+        assert_eq!(parse_fps(Some(" 30 ")), 30);
+        assert_eq!(parse_fps(Some("1000")), 240);
+        assert_eq!(parse_fps(Some("fast")), DEFAULT_FPS);
+    }
 }
