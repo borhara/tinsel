@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -186,8 +186,8 @@ pub struct Step {
     idx: usize,
 }
 
-fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
-    shared.lock().unwrap_or_else(|e| e.into_inner())
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn content_width() -> usize {
@@ -237,7 +237,7 @@ static DRAWING: Mutex<Vec<Weak<Mutex<Shared>>>> = Mutex::new(Vec::new());
 /// and nothing is drawn after it. Called by the panic hook before it prints. Returns whether
 /// there were any.
 pub(crate) fn abandon_all() -> bool {
-    let drawing = std::mem::take(&mut *DRAWING.lock().unwrap_or_else(|e| e.into_inner()));
+    let drawing = std::mem::take(&mut *lock(&DRAWING));
     let mut any = false;
     for shared in drawing.iter().filter_map(Weak::upgrade) {
         // the panicking thread might be the one holding the lock, so never wait forever
@@ -360,10 +360,7 @@ impl Live {
             s.history = History::open(&History::default_app());
             s.wants_focus = true;
         }
-        DRAWING
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(Arc::downgrade(&self.shared));
+        lock(&DRAWING).push(Arc::downgrade(&self.shared));
         output::write(HIDE_CURSOR);
         let (shared, stop) = (self.shared.clone(), self.stop.clone());
         self.thread = Some(thread::spawn(move || {
@@ -583,15 +580,10 @@ impl Live {
             Mode::Draw => {}
         }
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.thread.take() {
-            let _ = handle.join();
-        }
+        let _ = self.thread.take().map(JoinHandle::join);
         // the last frame is drawn settled, so a step that just finished shows ● rather than mid-twinkle
         draw(&self.shared, true);
-        DRAWING
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|w| w.upgrade().is_some_and(|s| !Arc::ptr_eq(&s, &self.shared)));
+        lock(&DRAWING).retain(|w| w.upgrade().is_some_and(|s| !Arc::ptr_eq(&s, &self.shared)));
         let watch = lock(&self.shared).watch.take();
         let away = watch.as_ref().is_some_and(|w| w.focus.away());
         if let Some(mut watch) = watch {
@@ -616,18 +608,14 @@ impl Drop for Live {
 
 /// Start listening for focus reports, unless the display has been told not to.
 fn watch_focus(shared: &Mutex<Shared>) {
-    if !lock(shared).wants_focus {
+    // held while the watch starts, so a `no_focus` meanwhile waits and then stops it
+    let mut s = lock(shared);
+    if !s.wants_focus {
         return;
     }
-    let Some(mut watch) = Watch::start() else { return };
-    let mut s = lock(shared);
-    if s.wants_focus {
-        s.focus = Some(watch.focus.clone());
-        s.watch = Some(watch);
-    } else {
-        drop(s);
-        watch.stop();
-    }
+    let Some(watch) = Watch::start() else { return };
+    s.focus = Some(watch.focus.clone());
+    s.watch = Some(watch);
 }
 
 fn add_step(shared: &Arc<Mutex<Shared>>, parent: Option<usize>, label: String) -> Step {
@@ -698,14 +686,13 @@ fn log(shared: &Mutex<Shared>, step: Option<usize>, text: &str) {
 /// never ran in full, so their times would drag the estimate down.
 fn record_history(s: &mut Shared) {
     let Some(mut history) = s.history.take() else { return };
-    for step in s
+    let runs = s
         .steps
         .iter()
         .filter(|st| matches!(st.state, State::Done | State::Warn))
-    {
-        if let (Some(began), Some(ended)) = (step.started, step.ended) {
-            history.record(&step.key, (ended - began).as_secs_f64());
-        }
+        .filter_map(|st| Some((&st.key, (st.ended? - st.started?).as_secs_f64())));
+    for (key, secs) in runs {
+        history.record(key, secs);
     }
     history.save();
     s.history = Some(history);
@@ -892,11 +879,16 @@ impl Step {
     pub fn try_run<T, E: std::fmt::Display>(&self, f: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
         self.start_if_pending();
         let result = f();
-        match &result {
-            Ok(_) => self.done(),
-            Err(e) => self.fail(e.to_string()),
-        }
+        self.ran(result.as_ref().err().map(ToString::to_string));
         result
+    }
+
+    /// Done, or failed with the error.
+    fn ran(&self, error: Option<String>) {
+        match error {
+            None => self.done(),
+            Some(e) => self.fail(e),
+        }
     }
 
     /// Like [`try_run`](Step::try_run), but on `Err` tries again, up to `retries` more times,
@@ -907,22 +899,27 @@ impl Step {
         self.start_if_pending();
         let mut attempt = 0;
         loop {
-            match f() {
-                Ok(v) => {
-                    self.settle_after(attempt);
-                    return Ok(v);
-                }
-                Err(e) if attempt < retries => {
-                    attempt += 1;
-                    self.detail(format!("attempt {} of {} · {e}", attempt + 1, retries + 1));
-                    thread::sleep(backoff(attempt));
-                }
-                Err(e) => {
-                    self.fail(attempts_note(&e.to_string(), attempt));
-                    return Err(e);
-                }
+            let result = f();
+            if !self.try_again(result.as_ref().err().map(ToString::to_string), &mut attempt, retries) {
+                return result;
             }
         }
+    }
+
+    /// After attempt number `attempt` (from 0) ended with `error` or without: whether to try
+    /// again, after a pause; if not, the step is settled.
+    fn try_again(&self, error: Option<String>, attempt: &mut u32, retries: u32) -> bool {
+        match error {
+            None => self.settle_after(*attempt),
+            Some(e) if *attempt < retries => {
+                *attempt += 1;
+                self.detail(format!("attempt {} of {} · {e}", *attempt + 1, retries + 1));
+                thread::sleep(backoff(*attempt));
+                return true;
+            }
+            Some(e) => self.fail(attempts_note(&e, *attempt)),
+        }
+        false
     }
 
     /// Run a command as this step, showing its latest line of output as the step's detail.
@@ -1188,7 +1185,7 @@ impl StepCommand<'_, '_> {
         for reader in readers.into_iter().filter(JoinHandle::is_finished) {
             let _ = reader.join();
         }
-        let output = lock_lines(&lines).join("\n");
+        let output = lock(&lines).join("\n");
         let kind = match outcome {
             Ok(status) if status.success() => return Ok(output),
             Ok(status) => RunErrorKind::Exit(status),
@@ -1196,10 +1193,6 @@ impl StepCommand<'_, '_> {
         };
         Err(RunError { program, output, kind })
     }
-}
-
-fn lock_lines(lines: &Mutex<Vec<String>>) -> MutexGuard<'_, Vec<String>> {
-    lines.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Collect a command's output line by line, showing the latest as the step's detail. Lines
@@ -1215,7 +1208,7 @@ fn read_lines(mut pipe: Box<dyn Read + Send>, lines: &Mutex<Vec<String>>, step: 
             return;
         }
         step.detail(crate::text::truncate(line.trim(), 60));
-        lock_lines(lines).push(line);
+        lock(lines).push(line);
     };
     loop {
         let n = match pipe.read(&mut buf) {
