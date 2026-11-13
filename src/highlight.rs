@@ -314,12 +314,37 @@ mod tests {
         assert_eq!(Lang::from_path("Makefile"), None);
     }
 
+    #[test]
+    fn languages_come_from_names() {
+        let names = ["JSON", "zsh", "py", "tsx", "rs", "toml", "yml"];
+        let langs: Vec<_> = names.iter().map(|n| Lang::from_name(n)).collect();
+        assert_eq!(
+            langs,
+            [
+                Lang::Json,
+                Lang::Shell,
+                Lang::Python,
+                Lang::JavaScript,
+                Lang::Rust,
+                Lang::Toml,
+                Lang::Yaml
+            ]
+            .map(Some)
+        );
+        assert_eq!(Lang::from_name("cobol"), None);
+    }
+
     fn coloured(src: &str, lang: Lang) -> String {
         crate::style::with_color_mode(crate::ColorMode::TrueColor, || line(src, lang, false))
     }
 
     fn painted(color: crate::Rgb, s: &str) -> String {
         crate::style::with_color_mode(crate::ColorMode::TrueColor, || paint(color, s))
+    }
+
+    #[test]
+    fn toml_sections_are_headings() {
+        assert_eq!(coloured("[server]", Lang::Toml), painted(ROSE, "[server]"));
     }
 
     #[test]
@@ -334,5 +359,20 @@ mod tests {
         assert!(out.contains(&painted(ROSE, "tee")), "{out:?}");
         let out = coloured("make&&ls", Lang::Shell);
         assert!(out.contains(&painted(ROSE, "ls")), "{out:?}");
+    }
+
+    #[test]
+    fn shell_variables_stand_out() {
+        let out = coloured("echo ${HOME} $USER", Lang::Shell);
+        assert!(
+            out.contains(&painted(BLUSH, "${HOME}")) && out.contains(&painted(BLUSH, "$USER")),
+            "{out:?}"
+        );
+        assert!(coloured("echo ${HOME", Lang::Shell).ends_with(&painted(BLUSH, "${HOME")));
+    }
+
+    #[test]
+    fn an_unclosed_string_runs_to_the_end() {
+        assert_eq!(coloured(r#""open"#, Lang::Json), painted(SAGE, r#""open"#));
     }
 }
