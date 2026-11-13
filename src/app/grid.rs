@@ -124,6 +124,9 @@ pub struct Grid<'a> {
     sorted: Option<(usize, bool)>,
     body: Body,
     empty: String,
+    fill: Option<usize>,
+    /// Spaces added after one column's header, to widen it: (column, spaces).
+    grow: Option<(usize, usize)>,
 }
 
 impl<'a> Grid<'a> {
@@ -140,7 +143,17 @@ impl<'a> Grid<'a> {
             sorted: None,
             body: Body::Rows,
             empty: "nothing here yet".into(),
+            fill: None,
+            grow: None,
         }
+    }
+
+    /// Give `column` whatever width the grid has to spare, so the grid fills its area
+    /// instead of leaving a gap at the right. Longer cells there are cut only when the
+    /// area is too narrow.
+    pub fn fill(mut self, column: usize) -> Self {
+        self.fill = Some(column);
+        self
     }
 
     /// Add a row of cells. Styled cells ([`badge`](crate::badge)s, coloured dots) are fine.
@@ -231,6 +244,11 @@ impl<'a> Grid<'a> {
                 h.push_str(if desc { " ▼" } else { " ▲" });
             }
         }
+        if let Some((col, spaces)) = self.grow {
+            if let Some(h) = headers.get_mut(col) {
+                h.push_str(&" ".repeat(spaces));
+            }
+        }
         headers
     }
 
@@ -277,11 +295,46 @@ fn band(focused: bool) -> Rgb {
 
 const STRIPE: Rgb = Rgb(38, 32, 36);
 
+impl<'a> Grid<'a> {
+    /// This grid with its [`fill`](Grid::fill) column widened to fill `area`, if it has one
+    /// and there's room to spare.
+    fn filled(&self, area: Rect) -> Option<Grid<'a>> {
+        let column = self.fill?;
+        let headers = self.headers();
+        let widths = self.widths(&headers);
+        let width = *widths.get(column)?;
+        let inner = widths.iter().sum::<usize>() + 3 * widths.len().saturating_sub(1);
+        let overflow = matches!(self.body, Body::Rows) && self.rows.len() > area.height.saturating_sub(2);
+        let room = area.width.saturating_sub(2 + overflow as usize);
+        let spare = room.checked_sub(inner).filter(|&s| s > 0)?;
+        let mut grid = self.clone();
+        grid.limits.push((column, width + spare));
+        grid.grow = Some((column, width + spare - text::width(&headers[column])));
+        Some(grid)
+    }
+}
+
 impl Widget for Grid<'_> {
     fn render(&self, area: Rect, frame: &mut Frame) {
         if area.is_empty() {
             return;
         }
+        if let Some(grid) = self.filled(area) {
+            return grid.draw(area, frame);
+        }
+        self.draw(area, frame);
+    }
+
+    /// Every column in full, and every row.
+    fn size(&self) -> Option<(usize, usize)> {
+        let widths = self.widths(&self.headers());
+        let inner = widths.iter().sum::<usize>() + 3 * widths.len().saturating_sub(1);
+        Some((inner + 2, self.rows.len().max(1) + 2))
+    }
+}
+
+impl Grid<'_> {
+    fn draw(&self, area: Rect, frame: &mut Frame) {
         let headers = self.headers();
         let lines = self.table(&headers).lines().into_lines();
         // every line starts with the table's two-column margin, which the gutter replaces
@@ -378,13 +431,6 @@ impl Widget for Grid<'_> {
             }
         }
     }
-
-    /// Every column in full, and every row.
-    fn size(&self) -> Option<(usize, usize)> {
-        let widths = self.widths(&self.headers());
-        let inner = widths.iter().sum::<usize>() + 3 * widths.len().saturating_sub(1);
-        Some((inner + 2, self.rows.len().max(1) + 2))
-    }
 }
 
 /// Placeholder rows while the real ones load: a bar per column, catching a light that
@@ -442,6 +488,23 @@ mod tests {
         assert_eq!(grid.widths(&grid.headers()), [4, 4]);
         assert_eq!(grid.size(), Some((13, 3)));
         assert_eq!(drawn(14, 3, grid), "  a      bb ▲\n  ┈┈┈┈┈┈┈┈┈┈┈\n  lon…   x");
+    }
+
+    #[test]
+    fn a_fill_column_takes_the_spare_width() {
+        let grid = || {
+            Grid::new(["name", "n"])
+                .row(["a-long-name", "1"])
+                .max_width(0, 6)
+                .fill(0)
+        };
+        // room to spare: the name column grows, so nothing's cut and the rule spans the area
+        assert_eq!(
+            drawn(24, 3, grid()),
+            "  name                 n\n  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n  a-long-name          1"
+        );
+        // no room: as without fill
+        assert_eq!(drawn(12, 3, grid()), "  name     n\n  ┈┈┈┈┈┈┈┈┈┈\n  a-lon…   1");
     }
 
     #[test]
