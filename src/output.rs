@@ -323,7 +323,64 @@ pub(crate) fn quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Target, on_terminal, parse_target, quote};
+    use super::*;
+
+    #[test]
+    fn output_comes_from_the_environment() {
+        assert_eq!(parse_output(None), Output::Pretty);
+        assert_eq!(parse_output(Some("json")), Output::Json);
+        assert_eq!(parse_output(Some("quiet")), Output::Quiet);
+        assert_eq!(parse_output(Some("loud")), Output::Pretty);
+    }
+
+    #[test]
+    fn json_events_carry_every_kind_of_value() {
+        let items = ["a".to_string(), "b\"c".to_string()];
+        let out = capture(|| {
+            emit(
+                "thing",
+                &[
+                    ("name", Val::Str("x")),
+                    ("secs", Val::Num(1.23456)),
+                    ("ratio", Val::Num(f64::NAN)),
+                    ("items", Val::List(&items)),
+                ],
+            )
+        });
+        assert!(out.contains(r#"{"event":"thing","name":"x","secs":1.235,"ratio":null,"items":["a","b\"c"]}"#));
+    }
+
+    #[test]
+    fn lines_end_in_a_newline() {
+        assert!(capture(|| line("hello")).contains("hello\n"));
+    }
+
+    #[test]
+    fn writes_go_to_the_stream_when_nothing_captures() {
+        let _one = CAPTURING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        write("");
+        let _ = is_terminal();
+        assert_eq!(fd(), if target() == Target::Stdout { 1 } else { 2 });
+        #[cfg(unix)]
+        assert_eq!(fd_now(), fd());
+    }
+
+    #[test]
+    fn a_capture_gives_back_a_panic() {
+        let caught = std::panic::catch_unwind(|| capture(|| panic!("inside")));
+        assert!(caught.is_err());
+        assert!(capture(|| write("after")).contains("after"));
+    }
+
+    #[test]
+    fn the_shape_and_the_terminal_can_be_pretended() {
+        with_output(Output::Quiet, || {
+            assert!(quiet() && !json());
+            with_output(Output::Json, || assert!(json()));
+        });
+        with_terminal(true, || assert!(is_terminal()));
+        with_terminal(false, || assert!(!is_terminal()));
+    }
 
     #[test]
     fn target_comes_from_the_environment() {
@@ -344,7 +401,13 @@ mod tests {
         assert!(on_terminal(Target::Stdout, yes, no));
         assert!(!on_terminal(Target::Stderr, yes, no));
         // the other stream is never asked about
-        assert!(on_terminal(Target::Stderr, &|| panic!("asked about stdout"), yes));
+        let asked = std::cell::Cell::new(0);
+        let ask = || {
+            asked.set(asked.get() + 1);
+            true
+        };
+        assert!(on_terminal(Target::Stderr, &ask, &ask));
+        assert_eq!(asked.get(), 1);
     }
 
     #[test]
@@ -352,5 +415,6 @@ mod tests {
         assert_eq!(quote("a \"b\"\n\\"), r#""a \"b\"\n\\""#);
         assert_eq!(quote("\x1b[31mred\x1b[39m"), "\"red\"");
         assert_eq!(quote("\x01"), "\"\\u0001\"");
+        assert_eq!(quote("a\r\tb"), r#""a\r\tb""#);
     }
 }
