@@ -280,19 +280,20 @@ mod tests {
 
     #[test]
     fn colouring_never_changes_the_text() {
-        crate::set_color_mode(crate::ColorMode::TrueColor);
-        for (src, lang) in [
-            (r#"let x: Vec<&'a str> = vec!["a\"b", 'c']; // hi"#, Lang::Rust),
-            (r#"port = "80" # web"#, Lang::Toml),
-            (r#"{"a": [1, true, null]}"#, Lang::Json),
-            ("- name: ${HOME}/x", Lang::Yaml),
-            (r#"cargo build --release | tee "$LOG" # go"#, Lang::Shell),
-            ("def f(x): return None", Lang::Python),
-            ("const a = `x${y}`;", Lang::JavaScript),
-        ] {
-            assert_eq!(strip_ansi(&line(src, lang, false)), src, "{lang:?}");
-            assert_eq!(strip_ansi(&line(src, lang, true)), src, "{lang:?}");
-        }
+        crate::style::with_color_mode(crate::ColorMode::TrueColor, || {
+            for (src, lang) in [
+                (r#"let x: Vec<&'a str> = vec!["a\"b", 'c']; // hi"#, Lang::Rust),
+                (r#"port = "80" # web"#, Lang::Toml),
+                (r#"{"a": [1, true, null]}"#, Lang::Json),
+                ("- name: ${HOME}/x", Lang::Yaml),
+                (r#"cargo build --release | tee "$LOG" # go"#, Lang::Shell),
+                ("def f(x): return None", Lang::Python),
+                ("const a = `x${y}`;", Lang::JavaScript),
+            ] {
+                assert_eq!(strip_ansi(&line(src, lang, false)), src, "{lang:?}");
+                assert_eq!(strip_ansi(&line(src, lang, true)), src, "{lang:?}");
+            }
+        });
     }
 
     #[test]
