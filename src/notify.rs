@@ -13,18 +13,22 @@ enum Kind {
     Bell,
 }
 
-fn kind() -> Kind {
-    let program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-    let term = std::env::var("TERM").unwrap_or_default();
+/// What the terminal understands, going by the environment variables `var` looks up.
+fn kind(var: impl Fn(&str) -> Option<String>) -> Kind {
+    let program = var("TERM_PROGRAM").unwrap_or_default();
+    let term = var("TERM").unwrap_or_default();
     match program.as_str() {
         "iTerm.app" | "WezTerm" | "ghostty" => Kind::Osc9,
         "Apple_Terminal" => Kind::AppleScript,
-        _ if term.contains("kitty") || std::env::var_os("KITTY_WINDOW_ID").is_some() => Kind::Kitty,
-        _ if std::env::var_os("WT_SESSION").is_some() => Kind::Osc9,
+        _ if term.contains("kitty") || var("KITTY_WINDOW_ID").is_some() => Kind::Kitty,
+        _ if var("WT_SESSION").is_some() => Kind::Osc9,
         _ if term.starts_with("foot") || term.contains("rxvt") => Kind::Osc777,
         _ => Kind::Bell,
     }
 }
+
+/// Notification Center's messenger; something harmless in tests, which mustn't pop anything up.
+const OSASCRIPT: &str = if cfg!(test) { "true" } else { "osascript" };
 
 /// Text that can't break out of an escape sequence or a script string.
 fn clean(s: &str) -> String {
@@ -48,15 +52,20 @@ pub fn notify(title: &str, body: &str) {
     if !crate::output::is_terminal() {
         return;
     }
+    let kind = kind(|name| std::env::var(name).ok());
+    send(kind, title, body, std::env::var_os("TMUX").is_some());
+}
+
+fn send(kind: Kind, title: &str, body: &str, tmux: bool) {
     let (title, body) = (clean(title), clean(body));
-    let seq = match kind() {
+    let seq = match kind {
         Kind::Osc9 => format!("\x1b]9;{title}: {body}\x07"),
         Kind::Kitty => format!("\x1b]99;;{title}: {body}\x1b\\"),
         Kind::Osc777 => format!("\x1b]777;notify;{title};{body}\x07"),
         Kind::Bell => "\x07".into(),
         Kind::AppleScript => {
             let script = format!("display notification \"{body}\" with title \"{title}\"");
-            let _ = std::process::Command::new("osascript")
+            let _ = std::process::Command::new(OSASCRIPT)
                 .args(["-e", &script])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -65,7 +74,7 @@ pub fn notify(title: &str, body: &str) {
         }
     };
     // inside tmux, escapes only reach the outer terminal wrapped in a passthrough
-    let seq = if std::env::var_os("TMUX").is_some() {
+    let seq = if tmux {
         format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b"))
     } else {
         seq
