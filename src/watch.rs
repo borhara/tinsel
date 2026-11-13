@@ -108,29 +108,29 @@ pub(crate) struct Watch {
     pub(crate) focus: Arc<Focus>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
-    saved: String,
+    cbreak: Option<term::Cbreak>,
 }
 
 impl Watch {
     /// Start listening for focus changes, if someone's typing at a terminal we're drawing on
     /// and focus awareness hasn't been turned off.
     pub(crate) fn start() -> Option<Watch> {
-        if !enabled() || !io::stdin().is_terminal() || !output::is_terminal() {
+        if !enabled() || !term::answers_queries() || !io::stdin().is_terminal() || !output::is_terminal() {
             return None;
         }
         term::remember_terminal();
-        let saved = term::enter_cbreak().ok()?;
+        let cbreak = term::Cbreak::enter().ok()?;
         output::write("\x1b[?1004h");
 
         let focus = Arc::new(Focus::default());
         let stop = Arc::new(AtomicBool::new(false));
         let (f, s) = (focus.clone(), stop.clone());
-        let thread = thread::spawn(move || listen(&mut io::stdin().lock(), &f, &s));
+        let thread = thread::spawn(move || listen(&mut term::TimedStdin, &f, &s));
         Some(Watch {
             focus,
             stop,
             thread: Some(thread),
-            saved,
+            cbreak: Some(cbreak),
         })
     }
 
@@ -140,7 +140,7 @@ impl Watch {
         self.stop.store(true, Ordering::Relaxed);
         let _ = thread.join();
         output::write("\x1b[?1004l");
-        let _ = term::stty(&[&self.saved]);
+        self.cbreak = None;
         term::forget_terminal();
         let typed = std::mem::take(&mut *self.focus.typed.lock().unwrap_or_else(PoisonError::into_inner));
         term::push_back_input(&typed);
@@ -158,7 +158,7 @@ fn listen(stdin: &mut impl Read, focus: &Focus, stop: &AtomicBool) {
     let mut pending: Vec<u8> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
         let mut buf = [0u8; 64];
-        // returns after at most 0.1s with nothing (stty time 1), so `stop` is checked often
+        // returns after at most 0.1s with nothing, so `stop` is checked often
         let n = stdin.read(&mut buf).unwrap_or(0);
         for &b in &buf[..n] {
             pending.push(b);

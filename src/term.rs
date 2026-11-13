@@ -2,7 +2,6 @@
 //! back on Ctrl-C. Calls libc directly and shells out to `stty`, to stay dependency-free.
 
 use std::io::{self, IsTerminal, Read, Write};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The width tinsel lays things out in: the terminal's, capped so lines stay readable.
@@ -41,7 +40,9 @@ pub(crate) fn interactive() -> bool {
 
 /// Run `stty` against the terminal on stdin. `stty` is used rather than termios structs
 /// because their layout differs between operating systems.
+#[cfg(not(windows))]
 pub(crate) fn stty(args: &[&str]) -> io::Result<String> {
+    use std::process::{Command, Stdio};
     let out = Command::new("stty")
         .args(args)
         .stdin(Stdio::inherit())
@@ -53,12 +54,66 @@ pub(crate) fn stty(args: &[&str]) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Character-at-a-time input with no echo, reads timing out every 0.1s. Returns the
-/// settings to hand back to [`stty`] afterwards.
-pub(crate) fn enter_cbreak() -> io::Result<String> {
-    let saved = stty(&["-g"])?;
-    stty(&["-icanon", "-echo", "min", "0", "time", "1"])?;
-    Ok(saved)
+/// Character-at-a-time input with no echo, read with [`read_some`], for listening to the
+/// terminal while something's drawn. Unlike [`RawMode`], Ctrl-C still interrupts. Undone
+/// when dropped.
+pub(crate) struct Cbreak {
+    #[cfg(not(windows))]
+    saved: String,
+    #[cfg(windows)]
+    saved: win::Saved,
+}
+
+impl Cbreak {
+    pub(crate) fn enter() -> io::Result<Cbreak> {
+        #[cfg(not(windows))]
+        {
+            let saved = stty(&["-g"])?;
+            stty(&["-icanon", "-echo", "min", "0", "time", "1"])?;
+            Ok(Cbreak { saved })
+        }
+        #[cfg(windows)]
+        {
+            Ok(Cbreak {
+                saved: win::enter(false)?,
+            })
+        }
+    }
+}
+
+impl Drop for Cbreak {
+    fn drop(&mut self) {
+        #[cfg(not(windows))]
+        let _ = stty(&[&self.saved]);
+        #[cfg(windows)]
+        win::leave_raw(&self.saved);
+    }
+}
+
+/// Whatever's been typed, up to `buf`'s length, waiting at most 0.1s for it: 0 if nothing
+/// came. For use in [`Cbreak`] or [`RawMode`].
+pub(crate) fn read_some(buf: &mut [u8]) -> io::Result<usize> {
+    #[cfg(windows)]
+    if !win::key_waiting(100) {
+        return Ok(0);
+    }
+    io::stdin().lock().read(buf)
+}
+
+/// Stdin read through [`read_some`], so reads give up after 0.1s everywhere.
+pub(crate) struct TimedStdin;
+
+impl Read for TimedStdin {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        read_some(buf)
+    }
+}
+
+/// Whether the terminal answers questions and reports focus (OSC 11, mode 1004). On Unix,
+/// most do, and the rest are waited for briefly. On Windows only Windows Terminal does, and
+/// the console it replaced would make every program wait for answers that never come.
+pub(crate) fn answers_queries() -> bool {
+    !cfg!(windows) || std::env::var_os("WT_SESSION").is_some()
 }
 
 /// Single keypresses for prompts: no echo, no line buffering, Ctrl-C delivered as a byte (so
@@ -82,7 +137,7 @@ impl RawMode {
         #[cfg(windows)]
         {
             Ok(RawMode {
-                saved: win::enter_raw()?,
+                saved: win::enter(true)?,
             })
         }
     }
@@ -99,37 +154,32 @@ impl Drop for RawMode {
 
 /// One byte from the keyboard while in [`RawMode`], or `None` if nothing came within 0.1s.
 pub(crate) fn read_byte() -> io::Result<Option<u8>> {
-    #[cfg(windows)]
-    if !win::key_waiting(100) {
-        return Ok(None);
-    }
     let mut b = [0u8; 1];
-    Ok((io::stdin().lock().read(&mut b)? == 1).then_some(b[0]))
+    Ok((read_some(&mut b)? == 1).then_some(b[0]))
 }
 
 /// Ask the terminal for its background colour (OSC 11). Most modern terminals answer within
 /// a few milliseconds; ones that don't are given 150ms.
 pub(crate) fn query_background() -> Option<(u8, u8, u8)> {
-    if !interactive() {
+    if !interactive() || !answers_queries() {
         return None;
     }
-    let saved = enter_cbreak().ok()?;
+    let cbreak = Cbreak::enter().ok()?;
     let mut out = io::stdout();
     let _ = out.write_all(b"\x1b]11;?\x1b\\");
     let _ = out.flush();
     let deadline = Instant::now() + Duration::from_millis(150);
     let mut reply = Vec::new();
-    let mut stdin = io::stdin().lock();
     while Instant::now() < deadline {
         let mut b = [0u8; 64];
-        let n = stdin.read(&mut b).unwrap_or(0);
+        let n = read_some(&mut b).unwrap_or(0);
         reply.extend_from_slice(&b[..n]);
         // the reply ends with BEL or ST (ESC \)
         if reply.ends_with(b"\x07") || reply.ends_with(b"\x1b\\") {
             break;
         }
     }
-    let _ = stty(&[&saved]);
+    drop(cbreak);
     parse_osc_color(&String::from_utf8_lossy(&reply))
 }
 
@@ -244,6 +294,7 @@ mod win {
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
     const WAIT_OBJECT_0: u32 = 0;
     const KEY_EVENT: u16 = 1;
+    const CTRL_BREAK_EVENT: u32 = 1;
     const UTF8: u32 = 65001;
 
     #[repr(C)]
@@ -291,6 +342,9 @@ mod win {
         fn PeekConsoleInputW(h: Handle, buf: *mut InputRecord, len: u32, read: *mut u32) -> i32;
         fn ReadConsoleInputW(h: Handle, buf: *mut InputRecord, len: u32, read: *mut u32) -> i32;
         fn GetConsoleScreenBufferInfo(h: Handle, info: *mut ScreenBufferInfo) -> i32;
+        fn WriteConsoleInputW(h: Handle, buf: *const InputRecord, len: u32, written: *mut u32) -> i32;
+        fn WriteFile(h: Handle, buf: *const u8, len: u32, written: *mut u32, overlapped: *mut c_void) -> i32;
+        fn SetConsoleCtrlHandler(handler: Option<unsafe extern "system" fn(u32) -> i32>, add: i32) -> i32;
     }
 
     pub(super) struct Saved {
@@ -308,7 +362,13 @@ mod win {
         Ok(m)
     }
 
-    pub(super) fn enter_raw() -> io::Result<Saved> {
+    /// Keys a character at a time, unechoed, as escape sequences. `raw` also turns Ctrl-C
+    /// into a key rather than an interruption.
+    pub(super) fn enter(raw: bool) -> io::Result<Saved> {
+        let mut off = ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
+        if raw {
+            off |= ENABLE_PROCESSED_INPUT;
+        }
         // SAFETY: these calls only read and set console flags on standard handles.
         unsafe {
             let (input, error) = (GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE));
@@ -317,8 +377,7 @@ mod win {
                 error: mode(error).unwrap_or(0),
                 code_page: GetConsoleCP(),
             };
-            let raw = (saved.input & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
-                | ENABLE_VIRTUAL_TERMINAL_INPUT;
+            let raw = (saved.input & !off) | ENABLE_VIRTUAL_TERMINAL_INPUT;
             if SetConsoleMode(input, raw) == 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -374,6 +433,81 @@ mod win {
         (ok && w > 0).then_some((w, h))
     }
 
+    /// The console's input mode, to put back after a Ctrl-C.
+    pub(super) fn input_mode() -> Option<u32> {
+        // SAFETY: as above.
+        mode(unsafe { GetStdHandle(STD_INPUT_HANDLE) }).ok()
+    }
+
+    pub(super) fn set_input_mode(m: u32) {
+        // SAFETY: as above, with a mode read earlier.
+        unsafe { SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), m) };
+    }
+
+    /// Write straight to stdout (`fd` 1) or stderr (2), past std's lock on them, which a
+    /// thread drawing a frame may be holding when Ctrl-C comes.
+    pub(super) fn write_raw(fd: i32, bytes: &[u8]) {
+        let which = if fd == 2 { STD_ERROR_HANDLE } else { STD_OUTPUT_HANDLE };
+        let mut n = 0;
+        // SAFETY: WriteFile reads `bytes.len()` bytes from the pointer and writes one u32.
+        unsafe {
+            WriteFile(
+                GetStdHandle(which),
+                bytes.as_ptr(),
+                bytes.len() as u32,
+                &mut n,
+                std::ptr::null_mut(),
+            )
+        };
+    }
+
+    /// Called on a thread of its own when Ctrl-C or Ctrl-Break is pressed. Anything else
+    /// (the window closing, logging off) is left to the next handler.
+    pub(super) unsafe extern "system" fn on_ctrl(kind: u32) -> i32 {
+        if kind > CTRL_BREAK_EVENT {
+            return 0;
+        }
+        super::interrupted()
+    }
+
+    /// Start or stop handling Ctrl-C. Handlers stack, so each start is undone by one stop.
+    pub(super) fn handle_ctrl_c(on: bool) -> bool {
+        // SAFETY: on_ctrl has the signature the console calls handlers with.
+        unsafe { SetConsoleCtrlHandler(Some(on_ctrl), i32::from(on)) != 0 }
+    }
+
+    /// Type `text` into the console's input, as key presses. Escape sequences are left out:
+    /// the shell reads keys, not sequences, and would take their Esc as a press of Esc.
+    pub(super) fn push_back(text: &str) {
+        let text = crate::text::strip_ansi(text);
+        let records: Vec<InputRecord> = text
+            .chars()
+            .filter(|&c| c == '\r' || !c.is_control())
+            .collect::<String>()
+            .encode_utf16()
+            .map(|ch| InputRecord {
+                kind: KEY_EVENT,
+                key_down: 1,
+                repeat: 1,
+                ch,
+                ..InputRecord::default()
+            })
+            .collect();
+        if records.is_empty() {
+            return;
+        }
+        let mut n = 0;
+        // SAFETY: WriteConsoleInputW reads `records.len()` records and writes one u32.
+        unsafe {
+            WriteConsoleInputW(
+                GetStdHandle(STD_INPUT_HANDLE),
+                records.as_ptr(),
+                records.len() as u32,
+                &mut n,
+            )
+        };
+    }
+
     pub(super) fn enable_escapes() {
         for which in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
             // SAFETY: as above.
@@ -409,7 +543,12 @@ fn push_back_to(fd: i32, bytes: &[u8]) {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(windows)]
+pub(crate) fn push_back_input(bytes: &[u8]) {
+    win::push_back(&String::from_utf8_lossy(bytes));
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 pub(crate) fn push_back_input(_: &[u8]) {}
 
 // MARK: - Ctrl-C
@@ -477,7 +616,6 @@ pub(crate) fn remember_terminal() {
     HAVE_SAVED.store(ok, std::sync::atomic::Ordering::SeqCst);
 }
 
-#[cfg(unix)]
 pub(crate) fn forget_terminal() {
     HAVE_SAVED.store(false, std::sync::atomic::Ordering::SeqCst);
 }
@@ -489,7 +627,7 @@ pub(crate) fn restore_saved_terminal() {
         // SAFETY: SAVED_TERMIOS holds exactly what tcgetattr wrote.
         unsafe { tcsetattr(0, TCSANOW, (&raw const SAVED_TERMIOS).cast()) };
     }
-    crate::output::write("\x1b[?1004l\x1b[?25h\x1b[?7h");
+    crate::output::write(std::str::from_utf8(RESTORE).unwrap_or_default());
 }
 
 #[cfg(unix)]
@@ -501,8 +639,12 @@ const TCSANOW: i32 = 0;
 
 #[cfg(unix)]
 static mut SAVED_TERMIOS: [u8; 256] = [0; 256];
-#[cfg(unix)]
 static HAVE_SAVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The console's input mode, saved for Ctrl-C to put back.
+#[cfg(windows)]
+static SAVED_MODE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// What Ctrl-C writes on its way out: focus reports off, the cursor back, line wrapping on.
+const RESTORE: &[u8] = b"\x1b[?1004l\x1b[?25h\x1b[?7h";
 
 #[cfg(unix)]
 unsafe extern "C" {
@@ -515,8 +657,6 @@ unsafe extern "C" {
 
 #[cfg(unix)]
 extern "C" fn on_interrupt(_: i32) {
-    // stop focus reports, show the cursor, turn line wrapping back on
-    let msg = b"\x1b[?1004l\x1b[?25h\x1b[?7h\n";
     // SAFETY: write, tcsetattr and _exit are all async-signal-safe, and SAVED_TERMIOS is only
     // written before HAVE_SAVED is set.
     unsafe {
@@ -524,7 +664,8 @@ extern "C" fn on_interrupt(_: i32) {
             tcsetattr(0, TCSANOW, (&raw const SAVED_TERMIOS).cast());
         }
         let fd = crate::output::fd_now();
-        write(fd, msg.as_ptr().cast(), msg.len());
+        write(fd, RESTORE.as_ptr().cast(), RESTORE.len());
+        write(fd, b"\n".as_ptr().cast(), 1);
         let line = CTRL_C_LINE.load(std::sync::atomic::Ordering::SeqCst);
         if !line.is_null() {
             write(fd, (*line).as_ptr().cast(), (*line).len());
@@ -533,23 +674,72 @@ extern "C" fn on_interrupt(_: i32) {
     }
 }
 
-#[cfg(not(unix))]
+/// On Windows Ctrl-C is a call to a handler on a thread of its own, not a signal, so the
+/// handler can do as it likes. Returns something only so [`restore_interrupt`] knows to undo it.
+#[cfg(windows)]
+pub(crate) fn guard_interrupt() -> Option<usize> {
+    if LEAVE_CTRL_C.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
+    win::handle_ctrl_c(true).then_some(0)
+}
+
+#[cfg(windows)]
+pub(crate) fn restore_interrupt(prev: Option<usize>) {
+    if prev.is_some() {
+        win::handle_ctrl_c(false);
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn remember_terminal() {
+    if let Some(mode) = win::input_mode() {
+        SAVED_MODE.store(mode, std::sync::atomic::Ordering::SeqCst);
+        HAVE_SAVED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn restore_saved_terminal() {
+    if HAVE_SAVED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        win::set_input_mode(SAVED_MODE.load(std::sync::atomic::Ordering::SeqCst));
+    }
+    crate::output::write(std::str::from_utf8(RESTORE).unwrap_or_default());
+}
+
+/// Ctrl-C on Windows: the console put back as it was, the cursor shown, the program's line
+/// said, and out with 130, as on Unix.
+#[cfg(windows)]
+fn interrupted() -> ! {
+    use std::sync::atomic::Ordering::SeqCst;
+    if HAVE_SAVED.swap(false, SeqCst) {
+        win::set_input_mode(SAVED_MODE.load(SeqCst));
+    }
+    let fd = crate::output::fd_now();
+    win::write_raw(fd, RESTORE);
+    win::write_raw(fd, b"\n");
+    let line = CTRL_C_LINE.load(SeqCst);
+    if !line.is_null() {
+        // SAFETY: lines are leaked when set and never freed, so this one is still there
+        win::write_raw(fd, unsafe { &*line });
+    }
+    std::process::exit(130)
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn guard_interrupt() -> Option<usize> {
     None
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn restore_interrupt(_: Option<usize>) {}
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn remember_terminal() {}
 
-#[cfg(not(unix))]
-pub(crate) fn forget_terminal() {}
-
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn restore_saved_terminal() {
-    crate::output::write("\x1b[?25h\x1b[?7h");
+    crate::output::write(std::str::from_utf8(RESTORE).unwrap_or_default());
 }
 
 #[cfg(test)]
@@ -564,6 +754,7 @@ mod tests {
         assert_eq!(parse_osc_color("garbage"), None);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn stty_says_when_it_couldnt() {
         assert!(stty(&["--no-such-setting"]).is_err());
@@ -575,7 +766,6 @@ mod tests {
         assert_eq!(crate::output::with_terminal(false, query_background), None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_terminal_is_put_back_as_it_was() {
         // remembered first, so on a real terminal it's put back exactly as it is

@@ -238,7 +238,6 @@ pub(crate) fn fd() -> i32 {
 }
 
 /// [`fd`] as already decided, deciding nothing: safe in a signal handler.
-#[cfg(unix)]
 pub(crate) fn fd_now() -> i32 {
     if TARGET.load(Ordering::Relaxed) == 2 { 2 } else { 1 }
 }
