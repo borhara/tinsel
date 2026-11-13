@@ -476,7 +476,8 @@ impl Line {
     /// A muted, aligned key followed by a value - the row shape cards are built from.
     pub fn kv(key: &str, value: &str, color: Rgb) -> Self {
         Line::new()
-            .push(&format!("{key:<10}"), palette::MUTED)
+            // a column of 10 for the keys, and always a space after a longer one
+            .push(&format!("{key:<9} "), palette::MUTED)
             .push(value, color)
     }
 
