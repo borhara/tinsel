@@ -121,6 +121,7 @@ pub struct Grid<'a> {
     cursor: Option<&'a Cursor>,
     focused: bool,
     striped: bool,
+    blank: bool,
     sorted: Option<(usize, bool)>,
     body: Body,
     empty: String,
@@ -140,6 +141,7 @@ impl<'a> Grid<'a> {
             cursor: None,
             focused: true,
             striped: false,
+            blank: false,
             sorted: None,
             body: Body::Rows,
             empty: "nothing here yet".into(),
@@ -190,6 +192,13 @@ impl<'a> Grid<'a> {
     /// Tint every other row faintly, to help the eye along wide rows.
     pub fn striped(mut self) -> Self {
         self.striped = true;
+        self
+    }
+
+    /// Leave empty cells blank, instead of marking each with a muted `·`
+    /// (see [`Table::blank_cells`]).
+    pub fn blank_cells(mut self) -> Self {
+        self.blank = true;
         self
     }
 
@@ -262,6 +271,9 @@ impl<'a> Grid<'a> {
         }
         for &(col, cols) in &self.limits {
             table = table.max_width(col, cols);
+        }
+        if self.blank {
+            table = table.blank_cells();
         }
         table
     }
@@ -505,6 +517,19 @@ mod tests {
         );
         // no room: as without fill
         assert_eq!(drawn(12, 3, grid()), "  name     n\n  ┈┈┈┈┈┈┈┈┈┈\n  a-lon…   1");
+    }
+
+    #[test]
+    fn empty_cells_can_be_blank() {
+        let grid = || Grid::new(["name", "owner"]).row(["api", ""]).row(["web", "ops"]);
+        assert_eq!(
+            drawn(16, 4, grid()),
+            "  name   owner\n  ┈┈┈┈┈┈┈┈┈┈┈┈\n  api    ·\n  web    ops"
+        );
+        assert_eq!(
+            drawn(16, 4, grid().blank_cells()),
+            "  name   owner\n  ┈┈┈┈┈┈┈┈┈┈┈┈\n  api\n  web    ops"
+        );
     }
 
     #[test]
