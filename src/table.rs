@@ -569,4 +569,106 @@ mod tests {
         assert_eq!(parse_number("-3"), Some(-3.0));
         assert_eq!(parse_number("n/a"), None);
     }
+
+    #[test]
+    fn sorts_numbers_by_value_with_non_numbers_last() {
+        set_color_mode(ColorMode::None);
+        let names = |t: Table| -> Vec<String> {
+            t.lines()
+                .plain()
+                .lines()
+                .skip(2)
+                .map(|l| l.split_whitespace().next().unwrap().to_string())
+                .collect()
+        };
+        let table = || {
+            Table::new(["name", "size"])
+                .row(["a", "2 MB"])
+                .row(["b", "n/a"])
+                .row(["c", "900 KB"])
+                .row(["d", "-"])
+                .row(["e", "1 GiB"])
+        };
+        let table = || table().align(1, super::Align::Right);
+        assert_eq!(names(table().sort_by(1)), ["c", "a", "e", "b", "d"]);
+        assert_eq!(names(table().sort_by_desc(1)), ["e", "a", "c", "b", "d"]);
+        assert_eq!(names(table().sort_by_desc(0)), ["e", "d", "c", "b", "a"]);
+    }
+
+    #[test]
+    fn understands_every_unit() {
+        let cases = [
+            ("1 G", 1e9),
+            ("1TB", 1e12),
+            ("1 KiB", 1024.0),
+            ("1MiB", 1024.0 * 1024.0),
+            ("1 GiB", 1024f64.powi(3)),
+            ("1 TiB", 1024f64.powi(4)),
+            ("1ns", 1e-9),
+            ("1µs", 1e-6),
+            ("1 us", 1e-6),
+            ("2h", 7200.0),
+            ("1d", 86400.0),
+            ("3 apples", 3.0),
+        ];
+        for (cell, want) in cases {
+            assert_eq!(parse_number(cell), Some(want), "{cell}");
+        }
+    }
+
+    #[test]
+    fn titles_stripes_highlights_and_wrapped_grids() {
+        set_color_mode(ColorMode::None);
+        let table = Table::new(["name", "notes"])
+            .row(["api", "short"])
+            .row(["web", "a note long enough that it has to wrap onto another line"])
+            .row(["db", "x"])
+            .wrap(1, 20)
+            .title("services")
+            .striped()
+            .highlight(0)
+            .highlight(99);
+        let plain = table.lines().plain();
+        assert!(
+            plain.starts_with("  ✦ services\n") && plain.contains("✦ api"),
+            "{plain}"
+        );
+        let grid = table.clone().border(Border::Square).lines().plain();
+        assert!(grid.starts_with("  ✦ services\n  ┌") && grid.contains("├┄"), "{grid}");
+        let striped = crate::style::with_color_mode(ColorMode::TrueColor, || table.lines());
+        assert!(striped.lines().iter().filter(|l| l.contains("\x1b[48;")).count() >= 2);
+        assert_eq!(table.to_string(), table.lines().to_string());
+        assert!(crate::output::capture(|| table.print()).contains("services"));
+    }
+
+    #[test]
+    fn rounded_tables_box_plain_rows() {
+        set_color_mode(ColorMode::None);
+        let boxed = Table::new(["a"]).row(["1"]).border(Border::Rounded).lines().plain();
+        assert!(boxed.contains("│") && boxed.contains("1"), "{boxed}");
+    }
+
+    #[test]
+    fn boxed_and_square_tables_with_titles_stripes_and_footers() {
+        set_color_mode(ColorMode::None);
+        let table = || {
+            Table::new(["name", "n"])
+                .row(["a", "1"])
+                .row(["b", "2"])
+                .footer(["total", "3"])
+                .title("counts")
+                .striped()
+        };
+        let rounded = table().border(Border::Rounded).lines().plain();
+        assert!(
+            rounded.contains("╭─ ✦ counts") && rounded.contains("total"),
+            "{rounded}"
+        );
+        let square = table().border(Border::Square).lines().plain();
+        assert!(square.contains("total"), "{square}");
+        let soft = table().lines().plain();
+        assert!(soft.contains("total"), "{soft}");
+        let painted = crate::style::with_color_mode(ColorMode::TrueColor, || table().border(Border::Rounded).lines());
+        assert!(painted.lines().iter().any(|l| l.contains("\x1b[48;")));
+    }
 }
