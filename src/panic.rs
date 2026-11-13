@@ -31,9 +31,7 @@ pub fn install_panic_hook() {
 fn hook(info: &PanicHookInfo<'_>) {
     let interrupted = crate::live::abandon_all() | crate::region::abandon_all();
     // with panic = "abort", no destructors run, so nothing else will put the terminal back
-    if cfg!(panic = "abort") {
-        crate::term::restore_saved_terminal();
-    }
+    cfg!(panic = "abort").then(crate::term::restore_saved_terminal);
 
     let message = info
         .payload()
@@ -47,10 +45,10 @@ fn hook(info: &PanicHookInfo<'_>) {
         Some("main") | None => format!("{program} panicked"),
         Some(name) => format!("{program} panicked in thread '{name}'"),
     };
-    let mut report = Report::new(title).cause(message);
-    if let Some(at) = info.location() {
-        report = report.cause(format!("at {}:{}:{}", at.file(), at.line(), at.column()));
-    }
+    let at = info
+        .location()
+        .map(|at| format!("at {}:{}:{}", at.file(), at.line(), at.column()));
+    let mut report = at.into_iter().fold(Report::new(title).cause(message), Report::cause);
 
     let backtrace = std::backtrace::Backtrace::capture();
     let captured = backtrace.status() == std::backtrace::BacktraceStatus::Captured;
