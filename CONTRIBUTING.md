@@ -36,8 +36,8 @@ their own file under `tests/` (see `tests/styled.rs`). For `Live`, use `Live::he
 
 Prompts read keys through a `Ui`, so their tests type a script of keys with `Ui::script` (or
 the public `prompt::script`) and check what was drawn last (see the tests in `src/prompt.rs`).
-The live redraw can't be unit-tested in a pipe. Try both in a real terminal, and if you can, on macOS, Linux and
-Windows. CI checks that all three build.
+The live redraw can't be unit-tested in a pipe. Try both in a real terminal, and if you can,
+on macOS, Linux and Windows. CI checks that all three build.
 
 ## Recording the demo
 
@@ -59,4 +59,6 @@ scripts/screenshots.sh
 
 ## Changes
 
-Add a line to `CHANGELOG.md` under **Unreleased** for anything a user would notice.
+Don't edit `CHANGELOG.md`: release-plz writes it from commit messages when it prepares a
+release. Write each commit as a one-line conventional commit (`feat(app): …`, `fix(table): …`,
+`docs: …`) that says what a user would notice; `feat` and `fix` commits are what end up in it.
