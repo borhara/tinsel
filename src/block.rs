@@ -187,3 +187,58 @@ impl IntoIterator for Block {
         self.lines.into_iter()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::output::{Output, capture, with_output, with_terminal};
+
+    fn two() -> Block {
+        Block::from(vec!["b-one".to_string(), "b-two".to_string()])
+    }
+
+    #[test]
+    fn prints_as_lines_or_one_event() {
+        assert!(capture(|| two().print()).contains("b-one\nb-two\n"));
+        two().eprint();
+        let json = capture(|| with_output(Output::Json, || two().print()));
+        assert!(
+            json.contains(r#"{"event":"block","lines":["b-one","b-two"]}"#),
+            "{json}"
+        );
+        let json = capture(|| with_output(Output::Json, || two().eprint()));
+        assert!(json.contains(r#""lines":["b-one","b-two"]"#), "{json}");
+    }
+
+    #[test]
+    fn short_blocks_and_pipes_arent_paged() {
+        assert!(capture(|| two().page()).contains("b-one\n"));
+        assert!(capture(|| with_terminal(true, || two().page())).contains("b-one\n"));
+        let json = capture(|| with_output(Output::Json, || two().page()));
+        assert!(json.contains(r#""event":"block""#));
+    }
+
+    #[test]
+    fn blocks_are_built_and_taken_apart() {
+        let mut b = Block::new();
+        assert!(b.is_empty());
+        b.push("x");
+        b.extend(two());
+        assert_eq!(b.len(), 3);
+        assert_eq!(b.clone().into_lines(), ["x", "b-one", "b-two"]);
+        let back: Block = b.clone().into_iter().collect();
+        assert_eq!(back, b);
+    }
+
+    #[test]
+    fn tall_blocks_on_a_terminal_go_through_the_pager() {
+        let tall: Block = (0..crate::term::height() + 1).map(|i| format!("tall-{i}")).collect();
+        // a pager that reads nothing and quits
+        let shown = capture(|| with_terminal(true, || tall.page_with(Some("true".into()), true)));
+        assert!(cfg!(windows) || !shown.contains("tall-0"), "{shown}");
+        // a pager that isn't there: printed after all
+        let missing = Some("/nonexistent/less -S".into());
+        assert!(capture(|| with_terminal(true, || tall.page_with(missing, false))).contains("tall-0\n"));
+    }
+}
