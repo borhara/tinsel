@@ -292,6 +292,42 @@ fn drop_columns(line: &str, mut n: usize) -> String {
     out
 }
 
+/// Cut styled text to at most `cols` columns, ending in "…" when anything was cut. Escape
+/// codes are kept whole, and styling is reset after the "…" so it doesn't run on.
+fn clip(s: &str, cols: usize) -> String {
+    if text::width(s) <= cols {
+        return s.to_string();
+    }
+    if !s.contains('\x1b') {
+        return text::truncate(s, cols);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut used = 0;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            out.push(c);
+            for c in chars.by_ref() {
+                out.push(c);
+                if c != '[' && ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+            continue;
+        }
+        let w = text::char_width(c);
+        if used + w + 1 > cols {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    if cols > 0 {
+        out.push('…');
+    }
+    out + "\x1b[0m"
+}
+
 macro_rules! via_lines {
     ($($ty:ty),*) => {$(
         impl Widget for $ty {
@@ -326,6 +362,11 @@ impl Widget for Card {
 /// A box with a rounded border and a title, holding any other widget. A focused panel's
 /// border shimmers, so it's clear where keys will go.
 ///
+/// Along the top border go the title, a [`count`](Panel::count) beside it and a
+/// [`status`](Panel::status) at the right; along the bottom, a [`footer`](Panel::footer).
+/// When the panel is too narrow for them all, the status is cut short and then left off,
+/// then the count goes, and last the title is cut short. The border itself is never broken.
+///
 /// ```
 /// use tinsel::app::{Frame, Panel};
 ///
@@ -340,6 +381,7 @@ impl Widget for Card {
 pub struct Panel<'a> {
     title: String,
     count: String,
+    status: String,
     footer: String,
     body: Option<Box<dyn Widget + 'a>>,
     focused: bool,
@@ -347,11 +389,25 @@ pub struct Panel<'a> {
 }
 
 impl<'a> Panel<'a> {
-    /// A panel with this title (which can be empty).
+    /// A panel with this title (which can be empty). Plain text is drawn in the panel's own
+    /// quiet colour (pink when focused); styled text keeps its own colours, so a title can
+    /// carry a coloured mark or a [`Line`] of several colours.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Panel};
+    /// use tinsel::{Line, palette};
+    ///
+    /// tinsel::set_color_mode(tinsel::ColorMode::None);
+    /// let title = Line::new().push("● ", palette::RED).push("api", palette::TEXT);
+    /// let mut frame = Frame::new(14, 2);
+    /// frame.render(frame.area(), Panel::new(title.to_string()));
+    /// assert_eq!(frame.snapshot().plain(), "╭─ ● api ────╮\n╰────────────╯");
+    /// ```
     pub fn new(title: impl Into<String>) -> Self {
         Panel {
             title: title.into(),
             count: String::new(),
+            status: String::new(),
             footer: String::new(),
             body: None,
             focused: false,
@@ -378,6 +434,27 @@ impl<'a> Panel<'a> {
     /// ```
     pub fn count(mut self, count: impl std::fmt::Display) -> Self {
         self.count = count.to_string();
+        self
+    }
+
+    /// A little text on the top border, at the right: where the panel's data comes from,
+    /// when it was read. Styled text keeps its own colours; plain text is muted. When there
+    /// isn't room beside the title it's cut short, and left off once fewer than six columns
+    /// of it would show.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Panel};
+    ///
+    /// tinsel::set_color_mode(tinsel::ColorMode::None);
+    /// let mut frame = Frame::new(36, 2);
+    /// frame.render(frame.area(), Panel::new("services").status("staging · read now"));
+    /// assert_eq!(
+    ///     frame.snapshot().plain(),
+    ///     "╭─ services ── staging · read now ─╮\n╰──────────────────────────────────╯"
+    /// );
+    /// ```
+    pub fn status(mut self, text: impl Into<String>) -> Self {
+        self.status = text.into();
         self
     }
 
@@ -444,25 +521,56 @@ impl Widget for Panel<'_> {
         };
         let pill_w = text::width(&pill);
         let room = w.saturating_sub(6 + title.width());
-        // short of room, the count goes before any of the title does
+        // short of room, the count goes before any of the title does, and with no room at
+        // all the title goes too
         let (name, pill) = if text::width(&self.title) + pill_w <= room {
             (self.title.clone(), pill)
+        } else if w >= 5 + title.width() {
+            (clip(&self.title, room.max(1)), String::new())
         } else {
-            (text::truncate(&self.title, room), String::new())
+            (String::new(), String::new())
         };
-        let title = if self.title.is_empty() {
+        // a title with colours of its own is drawn as it comes
+        let styled = self.title.contains('\x1b');
+        let title = if name.is_empty() {
             Line::new()
         } else if self.focused {
-            title.raw(&bold(&paint(PETAL, &name))).raw(&pill).push(" ", LINE)
+            let name = if styled {
+                bold(&name)
+            } else {
+                bold(&paint(PETAL, &name))
+            };
+            title.raw(&name).raw(&pill).push(" ", LINE)
+        } else if styled {
+            title.raw(&name).raw(&pill).push(" ", LINE)
         } else {
             title.push(&name, SOFT).raw(&pill).push(" ", LINE)
         };
-        let mut top = Line::new()
-            .push("╭", color(0))
-            .push("─", color(1))
-            .append(title.clone());
-        for x in top.width()..w - 1 {
-            top = top.push("─", color(x));
+        let mut top = Line::new().push("╭", color(0));
+        if w > 2 {
+            top = top.push("─", color(1)).append(title.clone());
+        }
+        // the status, with a dash either side of it and a space inside those
+        let spare = (w - 1).saturating_sub(top.width() + 4);
+        let status = match text::width(&self.status) {
+            0 => String::new(),
+            n if n <= spare => self.status.clone(),
+            _ if spare >= 6 => clip(&self.status, spare),
+            _ => String::new(),
+        };
+        let status_at = (w - 1).saturating_sub(text::width(&status) + 3);
+        while top.width() < w - 1 {
+            let x = top.width();
+            if !status.is_empty() && x == status_at {
+                let status = if status.contains('\x1b') {
+                    status.clone()
+                } else {
+                    paint(MUTED, &status)
+                };
+                top = top.push(" ", LINE).raw(&status).push(" ", LINE);
+            } else {
+                top = top.push("─", color(x));
+            }
         }
         frame.print(area, 0, &top.push("╮", color(w - 1)).to_string());
 
@@ -509,7 +617,12 @@ impl Widget for Panel<'_> {
         } else {
             text::width(&self.count) + 3
         };
-        let title = text::width(&self.title) + count + if self.focused { 9 } else { 7 };
+        let status = if self.status.is_empty() {
+            0
+        } else {
+            text::width(&self.status) + 3
+        };
+        let title = text::width(&self.title) + count + status + if self.focused { 9 } else { 7 };
         let (px, py) = self.padding;
         Some(((w + 2 + 2 * px).max(title), h + 2 + 2 * py))
     }
@@ -1122,6 +1235,40 @@ mod tests {
         assert_eq!(drawn(20, 1, &footer), "q quit   ? help   ok");
         assert_eq!(footer.size(), Some((20, 1)));
         assert_eq!(drawn(0, 0, &footer), "");
+    }
+
+    #[test]
+    fn statuses_sit_top_right_and_give_way_first() {
+        let top = |w: usize, panel: Panel| drawn(w, 2, panel).lines().next().unwrap().to_string();
+        let panel = || Panel::new("services").count(12).status("staging · read now");
+        assert_eq!(top(40, panel()), "╭─ services 12 ─── staging · read now ─╮");
+        // short of room the status is cut, then left off, then the count goes, and then the
+        // title is cut, until there's no room for it at all
+        assert_eq!(top(30, panel()), "╭─ services 12 ─ staging ·… ─╮");
+        assert_eq!(top(24, panel()), "╭─ services 12 ────────╮");
+        assert_eq!(top(14, panel()), "╭─ servic… ──╮");
+        assert_eq!(top(9, panel()), "╭─ s… ──╮");
+        assert_eq!(top(8, panel()), "╭─ … ──╮");
+        assert_eq!(top(6, panel()), "╭─ … ╮");
+        assert_eq!(top(5, panel()), "╭───╮");
+        assert_eq!(top(20, Panel::new("").status("live")), "╭─────────── live ─╮");
+        // whatever the width, the border stays whole
+        for w in 2..48 {
+            for panel in [panel(), panel().focused(true)] {
+                let line = top(w, panel);
+                assert_eq!(text::width(&line), w, "{line}");
+                assert!(line.starts_with('╭') && line.ends_with('╮'), "{line}");
+            }
+        }
+        assert_eq!(Panel::new("ab").status("ok").size(), Some((14, 2)));
+    }
+
+    #[test]
+    fn styled_text_is_clipped_without_breaking_its_codes() {
+        assert_eq!(clip("plain text", 6), "plain…");
+        assert_eq!(clip("\x1b[31mred\x1b[39m", 5), "\x1b[31mred\x1b[39m");
+        assert_eq!(clip("\x1b[31mredder\x1b[39m", 4), "\x1b[31mred…\x1b[0m");
+        assert_eq!(text::strip_ansi(&clip("\x1b[1m日本語", 4)), "日…");
     }
 
     #[test]
