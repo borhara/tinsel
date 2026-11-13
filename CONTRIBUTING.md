@@ -47,6 +47,16 @@ Windows. CI checks that all three build.
 cargo build --release && vhs demo.tape
 ```
 
+## Redrawing the README's pictures
+
+`docs/dashboard.png` and `docs/services.png` are drawn by tinsel itself: the `dashboard` and
+`services` examples write one frame as a web page with `--html COLSxROWS`, and headless
+Chrome turns each page into a PNG:
+
+```bash
+scripts/screenshots.sh
+```
+
 ## Changes
 
 Add a line to `CHANGELOG.md` under **Unreleased** for anything a user would notice.

@@ -11,6 +11,6 @@ repository = "https://github.com/borhara/tinsel"
 documentation = "https://docs.rs/tinsel"
 keywords = ["cli", "terminal", "spinner", "progress", "prompt"]
 categories = ["command-line-interface"]
-exclude = ["/.github", "demo.tape", "demo.gif", "release-plz.toml"]
+exclude = ["/.github", "/docs", "/scripts", "demo.tape", "demo.gif", "release-plz.toml"]
 
 [dependencies]
