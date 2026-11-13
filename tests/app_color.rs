@@ -226,3 +226,23 @@ fn tabs_take_their_own_colours_and_badges() {
     assert!(row[pill..].contains('✔'), "{row:?}");
     assert!(tinsel::text::strip_ansi(&row).ends_with("deploy ✔ "), "{row:?}");
 }
+
+#[test]
+fn a_footer_short_of_room_keeps_its_colours() {
+    colour();
+    let fg = |c: tinsel::Rgb| format!("38;2;{};{};{}", c.0, c.1, c.2);
+    let footer = tinsel::app::Footer::new()
+        .keys(&[("q", "quit"), ("?", "help")])
+        .status(tinsel::paint(palette::SAGE, "● connected"));
+    let row = |w: usize| {
+        let mut f = Frame::new(w, 1);
+        f.render(f.area(), &footer);
+        f.snapshot().lines()[0].clone()
+    };
+    let wide = row(40);
+    assert!(wide.contains(&fg(palette::BLUSH)) && wide.contains(&fg(palette::SAGE)));
+    // cut short, the status keeps its own colour and the keys are gone
+    let narrow = row(6);
+    assert_eq!(tinsel::text::strip_ansi(&narrow), "● con…");
+    assert!(narrow.contains(&fg(palette::SAGE)) && !narrow.contains(&fg(palette::BLUSH)));
+}

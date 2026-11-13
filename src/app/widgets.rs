@@ -1063,8 +1063,17 @@ pub fn hints(keys: &[(&str, &str)]) -> Line {
 }
 
 /// The line along the bottom of an app: key hints on the left, in groups, and a status on
-/// the right (when it last refreshed, a spinner while something loads). When there isn't
-/// room for everything, the status stays and the last groups of keys go first.
+/// the right (when it last refreshed, a spinner while something loads).
+///
+/// When there isn't room for everything, it's fitted like this, so nothing is ever cut off
+/// partway through a hint:
+///
+/// - The status always stays. Only if it's wider than the whole line is it cut short, with
+///   "…", and then there are no keys.
+/// - The keys share what's left, less a two-column gap before the status. Groups are kept
+///   in the order they were added, so put the most important first: whole groups go from
+///   the end, and the last group that partly fits keeps as many of its first hints as fit.
+///   Nothing after a hint that didn't fit is shown, so later groups never jump ahead.
 ///
 /// ```
 /// use tinsel::app::{Footer, Frame};
@@ -1074,13 +1083,19 @@ pub fn hints(keys: &[(&str, &str)]) -> Line {
 ///     .keys(&[("↑↓", "move"), ("/", "filter")])
 ///     .keys(&[("?", "help"), ("q", "quit")])
 ///     .status("refreshed 12s ago");
-/// let mut frame = Frame::new(60, 1);
-/// frame.render(frame.area(), &footer);
-/// assert_eq!(frame.snapshot().plain(), "↑↓ move · / filter   ? help · q quit       refreshed 12s ago");
+/// let draw = |width| {
+///     let mut frame = Frame::new(width, 1);
+///     frame.render(frame.area(), &footer);
+///     frame.snapshot().plain()
+/// };
+/// assert_eq!(draw(60), "↑↓ move · / filter   ? help · q quit       refreshed 12s ago");
+/// assert_eq!(draw(46), "↑↓ move · / filter   ? help  refreshed 12s ago");
+/// assert_eq!(draw(30), "↑↓ move      refreshed 12s ago");
+/// assert_eq!(draw(12), "refreshed 1…");
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct Footer {
-    groups: Vec<Line>,
+    groups: Vec<Vec<(String, String)>>,
     status: String,
 }
 
@@ -1090,9 +1105,11 @@ impl Footer {
         Footer::default()
     }
 
-    /// A group of keys and what they do, set a little apart from the others.
+    /// A group of keys and what they do, set a little apart from the others. Groups added
+    /// first stay longest when the footer is short of room.
     pub fn keys(mut self, keys: &[(&str, &str)]) -> Self {
-        self.groups.push(hints(keys));
+        self.groups
+            .push(keys.iter().map(|(k, w)| (k.to_string(), w.to_string())).collect());
         self
     }
 
@@ -1101,6 +1118,30 @@ impl Footer {
         self.status = status.into();
         self
     }
+
+    /// The keys that fit in `room` columns, as a line.
+    fn fit(&self, room: usize) -> Line {
+        let mut line = Line::new();
+        for group in &self.groups {
+            for (i, (key, what)) in group.iter().enumerate() {
+                // three spaces between groups, " · " between hints in one
+                let gap = if line.width() == 0 { 0 } else { 3 };
+                let hint = text::width(key) + 1 + text::width(what);
+                if line.width() + gap + hint > room {
+                    return line;
+                }
+                line = if gap == 0 {
+                    line
+                } else if i == 0 {
+                    line.space(gap)
+                } else {
+                    line.push(" · ", TRACK)
+                };
+                line = line.push(key, BLUSH).space(1).push(what, MUTED);
+            }
+        }
+        line
+    }
 }
 
 impl Widget for Footer {
@@ -1108,28 +1149,21 @@ impl Widget for Footer {
         if area.is_empty() {
             return;
         }
-        let status_w = text::width(&self.status).min(area.width);
-        let status = paint(MUTED, &self.status);
+        let status = clip(&self.status, area.width);
+        let status_w = text::width(&status);
         frame.print(
             Rect::new(area.x + area.width - status_w, area.y, status_w, 1),
             0,
-            &status,
+            &paint(MUTED, &status),
         );
         let room = area.width.saturating_sub(status_w + 2 * (status_w > 0) as usize);
-        let mut line = Line::new();
-        for group in &self.groups {
-            let gap = if line.width() > 0 { 3 } else { 0 };
-            if line.width() + gap + group.width() > room {
-                break;
-            }
-            line = line.space(gap).append(group.clone());
-        }
-        frame.print(area, 0, &line.to_string());
+        frame.print(area, 0, &self.fit(room).to_string());
     }
 
     fn size(&self) -> Option<(usize, usize)> {
-        let keys: usize = self.groups.iter().map(|g| g.width() + 3).sum();
-        Some((keys + text::width(&self.status), 1))
+        let keys = self.fit(usize::MAX).width();
+        let gap = if keys > 0 && !self.status.is_empty() { 2 } else { 0 };
+        Some((keys + gap + text::width(&self.status), 1))
     }
 }
 
@@ -1299,7 +1333,8 @@ mod tests {
         let footer = Footer::new().keys(&[("q", "quit")]).keys(&[("?", "help")]).status("ok");
         assert_eq!(drawn(16, 1, &footer), "q quit        ok");
         assert_eq!(drawn(20, 1, &footer), "q quit   ? help   ok");
-        assert_eq!(footer.size(), Some((20, 1)));
+        assert_eq!(footer.size(), Some((19, 1)));
+        assert_eq!(drawn(19, 1, &footer), "q quit   ? help  ok");
         assert_eq!(drawn(0, 0, &footer), "");
     }
 
@@ -1335,6 +1370,45 @@ mod tests {
         assert_eq!(clip("\x1b[31mred\x1b[39m", 5), "\x1b[31mred\x1b[39m");
         assert_eq!(clip("\x1b[31mredder\x1b[39m", 4), "\x1b[31mred…\x1b[0m");
         assert_eq!(text::strip_ansi(&clip("\x1b[1m日本語", 4)), "日…");
+    }
+
+    #[test]
+    fn footers_drop_whole_hints_and_keep_the_status() {
+        let footer = Footer::new()
+            .keys(&[("↑↓", "move"), ("enter", "open"), ("/", "filter")])
+            .keys(&[("r", "refresh")])
+            .status("staging · 3s ago");
+        // what's at the left, and that the status is whole at the right
+        let keys = |w: usize| {
+            let shown = drawn(w, 1, &footer);
+            assert!(shown.ends_with("staging · 3s ago"), "{w}: {shown:?}");
+            assert!(text::width(&shown) <= w);
+            shown[..shown.len() - "staging · 3s ago".len()].trim_end().to_string()
+        };
+        assert_eq!(keys(61), "↑↓ move · enter open · / filter   r refresh");
+        // the second group goes, then the first loses hints from its end
+        assert_eq!(keys(60), "↑↓ move · enter open · / filter");
+        assert_eq!(keys(49), "↑↓ move · enter open · / filter");
+        assert_eq!(keys(48), "↑↓ move · enter open");
+        assert_eq!(keys(38), "↑↓ move · enter open");
+        assert_eq!(keys(37), "↑↓ move");
+        assert_eq!(keys(25), "↑↓ move");
+        assert_eq!(keys(24), "");
+        assert_eq!(keys(16), "");
+        assert_eq!(drawn(10, 1, &footer), "staging ·…");
+        // a later group never jumps ahead of one that didn't fit
+        let footer = Footer::new()
+            .keys(&[("enter", "open the thing")])
+            .keys(&[("q", "quit")]);
+        assert_eq!(drawn(12, 1, &footer), "");
+        for w in 0..80 {
+            let shown = drawn(w, 1, Footer::new().keys(&[("a", "bb"), ("c", "dd")]).status("ok"));
+            assert!(text::width(&shown) <= w);
+            assert!(shown.ends_with("ok") || w < 2, "{w}: {shown:?}");
+            let keys = shown.trim_end_matches(['o', 'k', '…']).trim_end();
+            assert!(["", "a bb", "a bb · c dd"].contains(&keys), "{w}: {shown:?}");
+        }
+        assert_eq!(Footer::new().keys(&[("q", "quit")]).size(), Some((6, 1)));
     }
 
     #[test]
