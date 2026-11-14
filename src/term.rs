@@ -199,6 +199,11 @@ unsafe extern "C" {
     fn ioctl(fd: i32, request: std::ffi::c_ulong, ...) -> i32;
 }
 
+/// The terminal's columns and rows, if it could be asked: for [`doctor`](crate::doctor).
+pub(crate) fn measured_size() -> Option<(usize, usize)> {
+    ioctl_size()
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn ioctl_size() -> Option<(usize, usize)> {
     #[repr(C)]

@@ -48,7 +48,7 @@ pub fn output() -> Output {
     }
 }
 
-fn parse_output(env: Option<&str>) -> Output {
+pub(crate) fn parse_output(env: Option<&str>) -> Output {
     match env {
         Some("json") => Output::Json,
         Some("quiet") => Output::Quiet,
@@ -249,7 +249,7 @@ fn target_code(target: Target) -> u8 {
     }
 }
 
-fn parse_target(env: Option<&str>) -> Target {
+pub(crate) fn parse_target(env: Option<&str>) -> Target {
     match env.map(str::trim) {
         Some(v) if v.eq_ignore_ascii_case("stderr") => Target::Stderr,
         _ => Target::Stdout,

@@ -127,6 +127,33 @@ pub(crate) fn with_theme<T>(theme: Theme, f: impl FnOnce() -> T) -> T {
     out
 }
 
+/// Why the colour mode is what it is, for [`doctor`](crate::doctor).
+pub(crate) fn color_why() -> String {
+    if SCOPED_MODE.get().is_some() {
+        return "chosen for this closure, with with_color_mode".into();
+    }
+    color_mode();
+    if !DETECTED.load(Ordering::Relaxed) {
+        return "set in code".into();
+    }
+    let stream = match crate::output::target() {
+        crate::Target::Stdout => "stdout",
+        crate::Target::Stderr => "stderr",
+    };
+    let colorterm = std::env::var("COLORTERM").ok();
+    if !std::env::var_os("NO_COLOR").unwrap_or_default().is_empty() {
+        "NO_COLOR is set".into()
+    } else if !crate::output::is_terminal() {
+        format!("{stream} isn't a terminal")
+    } else {
+        match colorterm.as_deref() {
+            Some(v @ ("truecolor" | "24bit")) => format!("COLORTERM={v}"),
+            Some(v) => format!("COLORTERM={v} doesn't promise truecolor"),
+            None => "COLORTERM isn't set, so 256 colours to be safe".into(),
+        }
+    }
+}
+
 /// Decide the colour mode again next time, unless it was chosen with [`set_color_mode`].
 pub(crate) fn forget_detected() {
     if DETECTED.swap(false, Ordering::Relaxed) {
@@ -193,8 +220,8 @@ pub fn theme() -> Theme {
         1 => Theme::Dark,
         2 => Theme::Light,
         _ => {
-            let theme = detect_theme();
-            set_theme(theme);
+            let (theme, why) = detect_theme();
+            store_theme(theme, why);
             theme
         }
     }
@@ -202,31 +229,66 @@ pub fn theme() -> Theme {
 
 /// Choose the theme yourself, for a `--theme` flag or to preview the other one.
 pub fn set_theme(theme: Theme) {
+    store_theme(theme, "set in code".into());
+}
+
+/// How the theme in use was decided, for [`doctor`](crate::doctor).
+static THEME_WHY: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+fn store_theme(theme: Theme, why: String) {
+    *THEME_WHY.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = why;
     THEME.store(if theme == Theme::Light { 2 } else { 1 }, Ordering::Relaxed);
 }
 
-fn detect_theme() -> Theme {
+/// Why the theme is what it is.
+pub(crate) fn theme_why() -> String {
+    theme();
+    THEME_WHY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+fn detect_theme() -> (Theme, String) {
     let (name, colorfgbg) = (std::env::var("TINSEL_THEME").ok(), std::env::var("COLORFGBG").ok());
-    pick_theme(name.as_deref(), colorfgbg.as_deref(), crate::term::query_background)
+    pick_theme_why(name.as_deref(), colorfgbg.as_deref(), crate::term::query_background)
 }
 
 /// The theme from `TINSEL_THEME`, then `COLORFGBG`, then the terminal's background colour.
+#[cfg(test)]
 fn pick_theme(name: Option<&str>, colorfgbg: Option<&str>, background: fn() -> Option<(u8, u8, u8)>) -> Theme {
+    pick_theme_why(name, colorfgbg, background).0
+}
+
+/// [`pick_theme`], saying how it was decided.
+fn pick_theme_why(
+    name: Option<&str>,
+    colorfgbg: Option<&str>,
+    background: fn() -> Option<(u8, u8, u8)>,
+) -> (Theme, String) {
     match name {
-        Some("light") => return Theme::Light,
-        Some("dark") => return Theme::Dark,
+        Some(n @ "light") => return (Theme::Light, format!("TINSEL_THEME={n}")),
+        Some(n @ "dark") => return (Theme::Dark, format!("TINSEL_THEME={n}")),
         _ => {}
     }
     // "fg;bg" in the 16-colour palette: 7 and 9-15 are light backgrounds
     if let Some(bg) = colorfgbg.and_then(|v| v.rsplit(';').next()?.parse::<u8>().ok()) {
-        return if bg == 7 || bg > 8 { Theme::Light } else { Theme::Dark };
+        let theme = if bg == 7 || bg > 8 { Theme::Light } else { Theme::Dark };
+        return (theme, format!("COLORFGBG={}", colorfgbg.unwrap_or_default()));
     }
     if color_mode() == ColorMode::None {
-        return Theme::Dark;
+        return (
+            Theme::Dark,
+            "the default: with colour off, the terminal wasn't asked".into(),
+        );
     }
     match background() {
-        Some((r, g, b)) if luminance(Rgb(r, g, b)) > 0.5 => Theme::Light,
-        _ => Theme::Dark,
+        Some((r, g, b)) if luminance(Rgb(r, g, b)) > 0.5 => (Theme::Light, "the terminal's background is light".into()),
+        Some(_) => (Theme::Dark, "the terminal's background is dark".into()),
+        None => (
+            Theme::Dark,
+            "the default: the terminal didn't say its background".into(),
+        ),
     }
 }
 
@@ -363,6 +425,25 @@ const PINK_HUE: f32 = 338.0;
 
 // the accent's hue in degrees as f32 bits; 0 = not decided yet
 static ACCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The accent in use, by name if it has one, for [`doctor`](crate::doctor).
+pub(crate) fn accent_name() -> String {
+    hue_name(accent_hue())
+}
+
+/// An accent's name, said as [`accent_name`] says it.
+pub(crate) fn accent_label(accent: Accent) -> String {
+    hue_name(accent.hue())
+}
+
+fn hue_name(hue: f32) -> String {
+    let named = [Accent::Pink, Accent::Violet, Accent::Blue, Accent::Teal, Accent::Orange];
+    let names = ["pink", "violet", "blue", "teal", "orange"];
+    match named.iter().position(|a| (a.hue() - hue).abs() < 0.01) {
+        Some(i) => names[i].into(),
+        None => format!("a hue of {}°", hue.round()),
+    }
+}
 
 /// The accent in use: from `TINSEL_ACCENT` if set, otherwise [`Accent::Pink`], unless
 /// [`set_accent`] has chosen one.
