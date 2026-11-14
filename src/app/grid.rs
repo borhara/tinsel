@@ -170,8 +170,11 @@ impl<'a> Grid<'a> {
     }
 
     /// Add a row of cells. Styled cells ([`badge`](crate::badge)s, coloured dots) are fine.
+    /// As with [`Table::row`], debug builds stop at a row with more cells than headers.
     pub fn row<S: Into<String>>(mut self, cells: impl IntoIterator<Item = S>) -> Self {
-        self.rows.push(cells.into_iter().map(Into::into).collect());
+        let cells: Vec<String> = cells.into_iter().map(Into::into).collect();
+        crate::table::check_row("Grid", &self.headers, cells.len(), self.rows.len());
+        self.rows.push(cells);
         self
     }
 
@@ -758,7 +761,7 @@ mod tests {
 
     #[test]
     fn a_fill_column_without_a_header_still_fills() {
-        let grid = Grid::new(["name"]).row(["api", "extra"]).fill(1);
+        let grid = Grid::new(["name", ""]).row(["api", "extra"]).fill(1);
         assert_eq!(drawn(20, 3, grid), "  name\n  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n  api    extra");
     }
 

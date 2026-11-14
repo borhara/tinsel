@@ -78,9 +78,13 @@ impl Table {
     }
 
     /// Add a row of cells. Cells can be plain or styled (a [`badge`](crate::badge), say).
+    /// A row can have fewer cells than there are headers (the rest show `·`), but not more:
+    /// debug builds stop there and say so.
     pub fn row<S: Into<String>>(mut self, cells: impl IntoIterator<Item = S>) -> Self {
+        let cells: Vec<String> = cells.into_iter().map(Into::into).collect();
+        check_row("Table", &self.headers, cells.len(), self.rows.len());
         self.rows.push(Row {
-            cells: cells.into_iter().map(Into::into).collect(),
+            cells,
             highlight: false,
         });
         self
@@ -534,10 +538,40 @@ impl fmt::Display for Table {
     }
 }
 
+/// In debug builds, stop at a row with more cells than the table has headers: the extras
+/// would be drawn under no header, which is never what was meant. Release builds draw them.
+pub(crate) fn check_row(kind: &str, headers: &[String], cells: usize, row: usize) {
+    debug_assert!(
+        headers.is_empty() || cells <= headers.len(),
+        "{kind} row {row} has {cells} cells, but the {kind} has {} headers ({}): add a header for each \
+         extra cell, or leave the cell out",
+        headers.len(),
+        headers.join(", ")
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Border, Table, parse_number};
     use crate::style::{ColorMode, set_color_mode};
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Table row 1 has 3 cells, but the Table has 2 headers (app, size)")]
+    fn a_row_wider_than_the_headers_is_stopped_in_debug_builds() {
+        let _ = Table::new(["app", "size"])
+            .row(["core", "34 MB"])
+            .row(["web", "12 MB", "extra"]);
+    }
+
+    #[test]
+    fn short_rows_and_headerless_tables_are_fine() {
+        set_color_mode(ColorMode::None);
+        let short = Table::new(["a", "b"]).row(["1"]).lines().plain();
+        assert!(short.ends_with("1   ·"), "{short}");
+        let none: [&str; 0] = [];
+        let _ = Table::new(none).row(["any", "number", "of", "cells"]);
+    }
 
     #[test]
     fn empty_cells_get_a_dot_unless_blank() {
