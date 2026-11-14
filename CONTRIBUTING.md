@@ -29,10 +29,10 @@ cargo run -- showcase --theme light            # and on a light background
 cargo run -- prompts                           # the interactive questions
 ```
 
-Tests compare plain text: call `tinsel::set_color_mode(ColorMode::None)` and assert on
-`.plain()`. The colour mode is process-wide, so tests that need real escape codes go in
-their own file under `tests/` (see `tests/styled.rs`). For `Live`, use `Live::headless` and
-`advance` its clock, then compare `snapshot()`s (see `tests/live.rs`).
+Tests compare plain text: assert on `.plain()`, or on what `tinsel::capture` caught.
+Tests that need real escape codes wrap themselves in `tinsel::with_color_mode`, which sets
+the mode for that thread alone (see `tests/capture.rs`). For `Live`, use `Live::headless`
+and `advance` its clock, then compare `snapshot()`s (see `tests/live.rs`).
 
 Prompts read keys through a `Ui`, so their tests type a script of keys with `Ui::script` (or
 the public `prompt::script`) and check what was drawn last (see the tests in `src/prompt.rs`).

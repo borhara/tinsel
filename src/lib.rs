@@ -76,6 +76,11 @@
 //!
 //! [`Live::headless`] gives you a display on a clock you move yourself, so you can check
 //! exactly what a run looks like at each point with [`Live::snapshot`].
+//!
+//! To test your own program's output, [`capture`] returns everything a closure prints
+//! through tinsel, as it would come out into a pipe, and [`with_color_mode`] picks a colour
+//! mode for one closure on one thread, so a test that checks colour codes doesn't change
+//! them for the tests running beside it.
 
 #![warn(missing_docs)]
 
@@ -120,13 +125,13 @@ pub use live::{Live, RunError, Step, StepCommand};
 pub use markdown::markdown;
 pub use message::{Callout, Report, Tone, callout, counter, error, hint, info, rule, success, title, warn};
 pub use notify::notify;
-pub use output::{Output, Target, output, set_output, set_target, target};
+pub use output::{Output, Target, capture, output, set_output, set_target, target};
 pub use panic::install_panic_hook;
 pub use region::Region;
 pub use spin::{Progress, ProgressIterator, WithProgress, spin, try_spin};
 pub use style::{
     Accent, ColorMode, Line, RAMP, Rgb, Theme, blink, bold, color_mode, dim, gradient, italic, mix, paint, paint_bg,
-    palette, sample, set_accent, set_color_mode, set_theme, theme, underline,
+    palette, sample, set_accent, set_color_mode, set_theme, theme, underline, with_color_mode,
 };
 pub use table::{Align, Border, Table};
 pub use term::{CtrlC, content_width, set_ctrl_c, width};
