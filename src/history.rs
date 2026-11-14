@@ -209,6 +209,16 @@ pub(crate) fn key(parent: &str, label: &str) -> String {
 }
 
 /// Where histories are kept, or `None` if there's nowhere or they're turned off.
+/// Whether step times are remembered, and where or why not, for [`doctor`](crate::doctor).
+pub(crate) fn why() -> (bool, String) {
+    match (ENABLED.load(Ordering::Relaxed), cache_dir()) {
+        (2, _) => (false, "set in code".into()),
+        (0, None) if std::env::var_os("TINSEL_NO_HISTORY").is_some() => (false, "TINSEL_NO_HISTORY is set".into()),
+        (_, None) => (false, "there's no HOME or XDG_CACHE_HOME to keep it in".into()),
+        (_, Some(dir)) => (true, format!("in {}", dir.display())),
+    }
+}
+
 fn cache_dir() -> Option<PathBuf> {
     let on = match ENABLED.load(Ordering::Relaxed) {
         1 => true,

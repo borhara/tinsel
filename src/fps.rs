@@ -40,7 +40,7 @@ pub fn fps() -> u32 {
     }
 }
 
-fn parse_fps(env: Option<&str>) -> u32 {
+pub(crate) fn parse_fps(env: Option<&str>) -> u32 {
     env.and_then(|v| v.trim().parse::<u32>().ok())
         .map_or(DEFAULT_FPS, |f| f.clamp(1, 240))
 }
