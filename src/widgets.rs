@@ -193,8 +193,14 @@ pub fn live_bar(fraction: f32, width: usize, t: f32) -> Line {
     shiny_bar(fraction, width, Some(t))
 }
 
+/// `f` kept between 0 and 1, with NaN (a 0/0 somewhere upstream) as 0, so it never shows
+/// as `NaN%`.
+pub(crate) fn fraction(f: f32) -> f32 {
+    if f.is_nan() { 0.0 } else { f.clamp(0.0, 1.0) }
+}
+
 fn shiny_bar(fraction: f32, width: usize, t: Option<f32>) -> Line {
-    let halves = (fraction.clamp(0.0, 1.0) * width as f32 * 2.0).round() as usize;
+    let halves = (self::fraction(fraction) * width as f32 * 2.0).round() as usize;
     let filled = halves.div_ceil(2) as f32;
     let glint = t.map(|t| (t * 16.0).rem_euclid(filled + 10.0) - 5.0);
     (0..width).fold(Line::new(), |line, i| {

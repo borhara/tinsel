@@ -1093,7 +1093,7 @@ impl Loading {
     /// How far along it is, from 0 to 1, shown as a bar and a percentage, with `text`
     /// beside it: `"6 / 12"`, `"17 MB"`.
     pub fn progress(mut self, fraction: f32, text: impl Into<String>) -> Self {
-        self.progress = Some((fraction.clamp(0.0, 1.0), text.into()));
+        self.progress = Some((crate::widgets::fraction(fraction), text.into()));
         self
     }
 

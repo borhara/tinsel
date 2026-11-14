@@ -786,10 +786,11 @@ impl Step {
     }
 
     /// Show a progress bar under the active step; `text` sits beside the percentage. A step
-    /// that reports its own progress doesn't show an estimate.
+    /// that reports its own progress doesn't show an estimate. The fraction is kept between 0
+    /// and 1, and NaN (from dividing by a total of 0, say) counts as 0.
     pub fn progress(&self, fraction: f32, text: impl Into<String>) {
         let text = text.into();
-        self.with(|s| s.progress = Some((fraction.clamp(0.0, 1.0), text)));
+        self.with(|s| s.progress = Some((crate::widgets::fraction(fraction), text)));
     }
 
     /// Print a line above the display, labelled with this step: see [`Live::log`].
@@ -2096,6 +2097,17 @@ mod tests {
         let shown = live.snapshot().plain();
         assert!(shown.contains(" 50%  17 / 34 MB") && shown.contains("left"), "{shown}");
         assert!(shown.contains("2.0s"), "{shown}");
+    }
+
+    #[test]
+    fn progress_that_isnt_a_number_counts_as_none() {
+        plain();
+        let live = Live::headless("p", "x");
+        let step = live.step("upload");
+        step.start();
+        step.progress(f32::NAN, "0 / 0");
+        let shown = live.snapshot().plain();
+        assert!(shown.contains("  0%  0 / 0") && !shown.contains("NaN"), "{shown}");
     }
 
     #[cfg(unix)]
