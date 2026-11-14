@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/borhara/tinsel/compare/v0.3.1...v0.4.0) - 2026-11-14
+
+### Added
+
+- debug builds stop at a table or grid row with more cells than headers
+- doctor says what tinsel decided about the terminal and why, and flags settings it can't use
+- capture what your own code prints, and with_color_mode for one closure on one thread
+- Ctrl-C, focus and background detection on Windows, as on Unix
+- *(app)* Loading, a spinner with a shimmering label and a live bar once there's progress
+- *(app)* TextArea, a box for several lines that wraps, scrolls and keeps pasted line breaks
+- *(app)* ScrollView and Scroll, for logs and long text, following the end as it grows
+- *(app)* [**breaking**] pastes arrive whole as Event::Paste, so a pasted newline isn't Enter
+
+### Fixed
+
+- NaN reads as missing in charts and as no progress in bars, never as NaN%
+
+### Other
+
+- CI runs the tests on every platform, not just the build
+- run the piped, settings, panic and Ctrl-C scenarios on Windows too
+
 ## [0.3.1](https://github.com/borhara/tinsel/compare/v0.3.0...v0.3.1) - 2026-11-13
 
 ### Fixed
