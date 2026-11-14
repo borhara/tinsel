@@ -40,6 +40,7 @@ fn help() -> Help {
     .command("demo [--fail]", "just the deploy, or one that fails part way")
     .command("prompts", "the interactive questions")
     .command("timings [APP]", "what Live has learned about how long steps take")
+    .command("doctor", "what tinsel decided about this terminal, and why")
     .command("help", "this")
     .flag("--spinner <NAME>", "sparkle, dots, comet, wave, arc, orbit or pulse")
     .flag("--theme <light|dark>", "preview the other theme")
@@ -211,6 +212,11 @@ fn main() {
         Some("timings") => {
             println!();
             tinsel::timings(operand).print();
+            println!();
+        }
+        Some("doctor") => {
+            println!();
+            tinsel::doctor().print();
             println!();
         }
         Some(other) => usage_error(&format!("there's no command called {other}")),

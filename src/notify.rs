@@ -56,6 +56,17 @@ pub fn notify(title: &str, body: &str) {
     send(kind, title, body, std::env::var_os("TMUX").is_some());
 }
 
+/// How notifications would be sent here, for [`doctor`](crate::doctor).
+pub(crate) fn how() -> &'static str {
+    match kind(|name| std::env::var(name).ok()) {
+        Kind::Osc9 => "OSC 9",
+        Kind::Kitty => "kitty's OSC 99",
+        Kind::Osc777 => "OSC 777",
+        Kind::AppleScript => "Notification Center",
+        Kind::Bell => "the bell",
+    }
+}
+
 fn send(kind: Kind, title: &str, body: &str, tmux: bool) {
     let (title, body) = (clean(title), clean(body));
     let seq = match kind {

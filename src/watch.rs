@@ -96,6 +96,26 @@ pub fn set_focus(on: bool) {
     ENABLED.store(if on { 1 } else { 2 }, Ordering::Relaxed);
 }
 
+/// Whether a display would watch for focus, and why, for [`doctor`](crate::doctor).
+pub(crate) fn why() -> (bool, String) {
+    match ENABLED.load(Ordering::Relaxed) {
+        1 => return (true, "set in code".into()),
+        2 => return (false, "set in code".into()),
+        _ => {}
+    }
+    if std::env::var_os("TINSEL_NO_FOCUS").is_some() {
+        (false, "TINSEL_NO_FOCUS is set".into())
+    } else if !term::answers_queries() {
+        (false, "only Windows Terminal reports focus on Windows".into())
+    } else if !io::stdin().is_terminal() {
+        (false, "stdin isn't a terminal".into())
+    } else if !output::is_terminal() {
+        (false, "not drawing on a terminal".into())
+    } else {
+        (true, "used if the terminal reports it".into())
+    }
+}
+
 fn enabled() -> bool {
     match ENABLED.load(Ordering::Relaxed) {
         1 => true,

@@ -421,6 +421,11 @@ terminal for its background colour. Override with `tinsel::set_theme`.
 degrees) or `tinsel::set_accent` says otherwise. Every pink moves, including the faint tint
 in the greys; red, amber and sage keep their meaning.
 
+**When it decides wrong**, `tinsel doctor` says what it decided and why (`colour off: stdout
+isn't a terminal`, `theme light: COLORFGBG=0;15`) and warns about any setting it can't use,
+like a misspelt `TINSEL_THEMES` or `TINSEL_OUTPUT=jsn`. `tinsel::doctor()` gives you the same
+report, to print from a `--debug-terminal` flag of your own.
+
 ## Platform notes
 
 Everything works on macOS, Linux and Windows. Prompts read single keypresses with `stty` on

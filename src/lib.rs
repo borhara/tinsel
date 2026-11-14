@@ -87,6 +87,7 @@
 pub mod app;
 mod block;
 mod chart;
+mod doctor;
 pub mod format;
 mod fps;
 mod help;
@@ -115,6 +116,7 @@ mod widgets;
 
 pub use block::Block;
 pub use chart::{bars, heatmap, histogram, meter, sparkline};
+pub use doctor::doctor;
 pub use fps::{DEFAULT_FPS, fps, set_fps};
 pub use help::Help;
 pub use highlight::Lang;
