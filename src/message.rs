@@ -56,7 +56,7 @@ impl Tone {
             return;
         }
         match self {
-            Tone::Error => eprintln!("{}", self.line(msg)),
+            Tone::Error => output::err_line(&self.line(msg)),
             _ => output::line(&self.line(msg)),
         }
     }
@@ -343,7 +343,7 @@ mod tests {
         for want in ["  ●  built\n", "  ›  cached\n", "  ▲  slow\n", "  →  try again\n"] {
             assert!(out.contains(want), "{want:?} in {out:?}");
         }
-        assert!(!out.contains("broke"), "errors go to stderr");
+        assert!(out.contains("broke\n"), "errors go to stderr, and are caught too");
 
         let quiet = capture(|| {
             with_output(Output::Quiet, || {

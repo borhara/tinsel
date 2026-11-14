@@ -59,8 +59,12 @@ fn parse_output(env: Option<&str>) -> Output {
 #[cfg(test)]
 thread_local! {
     static TEST_OUTPUT: std::cell::Cell<Option<Output>> = const { std::cell::Cell::new(None) };
-    static TEST_TERMINAL: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
     static TEST_TARGET: std::cell::Cell<Option<Target>> = const { std::cell::Cell::new(None) };
+}
+
+thread_local! {
+    /// Whether to act as if the stream drawn on is a terminal, on this thread, whatever it is.
+    static TERMINAL: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// Run `f` with an output shape on this thread alone, so a unit test that wants JSON doesn't
@@ -76,50 +80,92 @@ pub(crate) fn with_output<T>(out: Output, f: impl FnOnce() -> T) -> T {
 /// Run `f` as if the stream tinsel draws on were a terminal (or not), on this thread alone.
 #[cfg(test)]
 pub(crate) fn with_terminal<T>(terminal: bool, f: impl FnOnce() -> T) -> T {
-    let before = TEST_TERMINAL.replace(Some(terminal));
+    let before = TERMINAL.replace(Some(terminal));
     let result = f();
-    TEST_TERMINAL.set(before);
+    TERMINAL.set(before);
     result
 }
 
-/// What [`with_terminal`] is pretending, if anything.
-#[cfg(test)]
+/// What this thread is acting as, terminal or not, if anything: see [`capture`].
 pub(crate) fn pretended_terminal() -> Option<bool> {
-    TEST_TERMINAL.get()
+    TERMINAL.get()
 }
 
 /// What was written while capturing, from any thread. One capture at a time.
-#[cfg(test)]
 static CAPTURED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-#[cfg(test)]
 static CAPTURING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Whether anything's capturing, so writes needn't take the lock to find out.
+static CAPTURE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(test)]
 fn captured() -> std::sync::MutexGuard<'static, Option<String>> {
     CAPTURED.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Run `f`, returning what it wrote to the stream tinsel draws on instead of writing it.
-/// Writes from other threads in the meantime are caught too, so look for what you expect
-/// rather than comparing the whole thing. Unless `f` says otherwise, it's drawn for people on
-/// stdout, whatever `TINSEL_OUTPUT` and `TINSEL_TARGET` say for the tests as a whole.
-#[cfg(test)]
-pub(crate) fn capture(f: impl FnOnce()) -> String {
+/// Keep `s` if something's capturing, and say whether it was kept.
+fn kept(s: &str) -> bool {
+    if !CAPTURE_ON.load(Ordering::SeqCst) {
+        return false;
+    }
+    match captured().as_mut() {
+        Some(buf) => {
+            buf.push_str(s);
+            true
+        }
+        None => false,
+    }
+}
+
+/// What `f` prints through tinsel, instead of printing it: for testing your own program's
+/// output, not just tinsel's pieces. Messages, steps, spinners, printed blocks and errors
+/// are all caught, stdout and stderr together, in the order they were printed.
+///
+/// It's printed as it would be into a pipe: no animation, a [`Live`](crate::Live) display
+/// as plain `[ok] Build (1.2s)` lines, and no colour, unless `f` runs inside
+/// [`with_color_mode`](crate::with_color_mode). [`Output::Json`] and [`Output::Quiet`] still
+/// apply, so a `--json` flag can be tested too.
+///
+/// Prints from every thread are caught, so steps finished on worker threads are too. That
+/// also means one capture runs at a time, and anything another test prints through tinsel
+/// meanwhile lands in it as well: capture in every test that prints, or look for what you
+/// expect rather than comparing the whole thing.
+///
+/// ```
+/// fn deploy() {
+///     tinsel::success("deployed");
+///     tinsel::Table::new(["app", "size"]).row(["core", "34 MB"]).print();
+/// }
+///
+/// let printed = tinsel::capture(deploy);
+/// assert_eq!(printed, "  ●  deployed\n  app     size\n  ┈┈┈┈┈┈┈┈┈┈┈┈\n  core   34 MB\n");
+/// ```
+pub fn capture(f: impl FnOnce()) -> String {
     let mut f = Some(f);
     capture_while(&mut || f.take().into_iter().for_each(|f| f()))
 }
 
 /// [`capture`], for any closure.
-#[cfg(test)]
 fn capture_while(f: &mut dyn FnMut()) -> String {
     let _one = CAPTURING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     *captured() = Some(String::new());
+    CAPTURE_ON.store(true, Ordering::SeqCst);
+    // tinsel's own tests ignore TINSEL_OUTPUT and TINSEL_TARGET unless a test chooses
+    #[cfg(test)]
     let before = (TEST_OUTPUT.get(), TEST_TARGET.get());
-    TEST_OUTPUT.set(before.0.or(Some(Output::Pretty)));
-    TEST_TARGET.set(before.1.or(Some(Target::Stdout)));
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-    TEST_OUTPUT.set(before.0);
-    TEST_TARGET.set(before.1);
+    #[cfg(test)]
+    {
+        TEST_OUTPUT.set(before.0.or(Some(Output::Pretty)));
+        TEST_TARGET.set(before.1.or(Some(Target::Stdout)));
+    }
+    let terminal = TERMINAL.get();
+    TERMINAL.set(terminal.or(Some(false)));
+    let result = crate::style::plain_unless_chosen(|| std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)));
+    TERMINAL.set(terminal);
+    #[cfg(test)]
+    {
+        TEST_OUTPUT.set(before.0);
+        TEST_TARGET.set(before.1);
+    }
+    CAPTURE_ON.store(false, Ordering::SeqCst);
     let out = captured().take().unwrap_or_default();
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
@@ -220,7 +266,6 @@ fn on_terminal(target: Target, stdout: &dyn Fn() -> bool, stderr: &dyn Fn() -> b
 
 /// Whether the stream tinsel draws on is a terminal.
 pub(crate) fn is_terminal() -> bool {
-    #[cfg(test)]
     if let Some(terminal) = pretended_terminal() {
         return terminal;
     }
@@ -252,13 +297,20 @@ pub(crate) fn writer() -> Box<dyn Write> {
 
 /// Write to the stream tinsel draws on, and flush.
 pub(crate) fn write(s: &str) {
-    #[cfg(test)]
-    if let Some(buf) = captured().as_mut() {
-        return buf.push_str(s);
+    if kept(s) {
+        return;
     }
     let mut out = writer();
     let _ = out.write_all(s.as_bytes());
     let _ = out.flush();
+}
+
+/// Write a line to stderr, for errors, which go there whatever the target.
+pub(crate) fn err_line(s: &str) {
+    if kept(&format!("{s}\n")) {
+        return;
+    }
+    eprintln!("{s}");
 }
 
 /// Write a line to the stream tinsel draws on.

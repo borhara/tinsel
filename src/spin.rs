@@ -138,7 +138,7 @@ impl<'a> Spinning<'a> {
         let Some(mut ticker) = self.ticker else {
             let took = format::duration(took);
             match error {
-                Some(e) => eprintln!("  [FAIL] {label} ({took}) - {e}"),
+                Some(e) => crate::output::err_line(&format!("  [FAIL] {label} ({took}) - {e}")),
                 None if !output::quiet() => output::line(&format!("  [ok] {label} ({took})")),
                 None => {}
             }
@@ -444,7 +444,10 @@ mod tests {
                 let _ = try_spin("p-fail", || Err::<(), _>("nope"));
             })
         });
-        assert!(out.contains("  [ok] p-ok (") && !out.contains("p-fail"), "{out:?}");
+        assert!(
+            out.contains("  [ok] p-ok (") && out.contains("  [FAIL] p-fail (") && out.contains("nope"),
+            "{out:?}"
+        );
         let quiet = capture(|| with_output(Output::Quiet, || spin("q-ok", || ())));
         assert!(!quiet.contains("q-ok"));
         let json = capture(|| {

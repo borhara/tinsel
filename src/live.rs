@@ -861,7 +861,7 @@ impl Step {
         step.note = on.into();
         match mode {
             Mode::Plain => output::line(&plain_line(step, None)),
-            Mode::Quiet => eprintln!("{}", plain_line(step, None)),
+            Mode::Quiet => output::err_line(&plain_line(step, None)),
             Mode::Json => emit_step(&s, self.idx, None),
             _ => {}
         }
@@ -991,7 +991,7 @@ impl Step {
         let secs = started.map(|b| (now - b).as_secs_f64());
         match mode {
             Mode::Plain => output::line(&plain_line(&s.steps[self.idx], secs)),
-            Mode::Quiet if state == State::Fail => eprintln!("{}", plain_line(&s.steps[self.idx], secs)),
+            Mode::Quiet if state == State::Fail => output::err_line(&plain_line(&s.steps[self.idx], secs)),
             Mode::Json => emit_step(&s, self.idx, secs),
             _ => {}
         }

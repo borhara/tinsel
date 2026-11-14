@@ -75,7 +75,7 @@ impl Block {
             return self.emit();
         }
         for line in &self.lines {
-            eprintln!("{line}");
+            crate::output::err_line(line);
         }
     }
 }

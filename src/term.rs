@@ -31,7 +31,6 @@ fn measured_or(measured: Option<usize>, var: &str, default: usize) -> usize {
 
 /// Whether both ends are a terminal: something to draw on, and someone typing.
 pub(crate) fn interactive() -> bool {
-    #[cfg(test)]
     if let Some(terminal) = crate::output::pretended_terminal() {
         return terminal;
     }
