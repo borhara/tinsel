@@ -60,8 +60,7 @@ static DETECTED: AtomicBool = AtomicBool::new(false);
 /// [`Target`](crate::Target)) is a terminal, and
 /// `COLORTERM`, unless [`set_color_mode`] has chosen one.
 pub fn color_mode() -> ColorMode {
-    #[cfg(test)]
-    if let Some(mode) = TEST_MODE.get() {
+    if let Some(mode) = SCOPED_MODE.get() {
         return mode;
     }
     match MODE.load(Ordering::Relaxed) {
@@ -77,20 +76,46 @@ pub fn color_mode() -> ColorMode {
     }
 }
 
+thread_local! {
+    static SCOPED_MODE: std::cell::Cell<Option<ColorMode>> = const { std::cell::Cell::new(None) };
+}
+
 #[cfg(test)]
 thread_local! {
-    static TEST_MODE: std::cell::Cell<Option<ColorMode>> = const { std::cell::Cell::new(None) };
     static TEST_THEME: std::cell::Cell<Option<Theme>> = const { std::cell::Cell::new(None) };
 }
 
-/// Run `f` in a colour mode on this thread alone, so a unit test that wants colour doesn't
-/// turn it on for the tests running beside it.
-#[cfg(test)]
-pub(crate) fn with_color_mode<T>(mode: ColorMode, f: impl FnOnce() -> T) -> T {
-    let before = TEST_MODE.replace(Some(mode));
-    let out = f();
-    TEST_MODE.set(before);
-    out
+/// Run `f` in a colour mode on this thread alone, leaving the rest of the program as it
+/// was. Tests run side by side on threads of one process, so this is how a test that wants
+/// real colour codes gets them without turning colour on, or off, for the tests beside it.
+/// Anything drawn on other threads meanwhile uses the program's mode.
+///
+/// ```
+/// use tinsel::{ColorMode, palette, paint, with_color_mode};
+///
+/// let lit = with_color_mode(ColorMode::TrueColor, || paint(palette::ROSE, "hi"));
+/// assert!(lit.starts_with("\x1b[38;2;"));
+/// assert_eq!(with_color_mode(ColorMode::None, || paint(palette::ROSE, "hi")), "hi");
+/// ```
+pub fn with_color_mode<T>(mode: ColorMode, f: impl FnOnce() -> T) -> T {
+    let before = SCOPED_MODE.replace(Some(mode));
+    // put back even if `f` panics, since tests catch panics and carry on
+    struct Restore(Option<ColorMode>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED_MODE.set(self.0);
+        }
+    }
+    let _restore = Restore(before);
+    f()
+}
+
+/// Run `f` without colour on this thread, unless [`with_color_mode`] already chose a mode.
+pub(crate) fn plain_unless_chosen<T>(f: impl FnOnce() -> T) -> T {
+    match SCOPED_MODE.get() {
+        Some(_) => f(),
+        None => with_color_mode(ColorMode::None, f),
+    }
 }
 
 /// Run `f` in a theme on this thread alone.

@@ -353,19 +353,29 @@ Full reference with examples for every item: **[docs.rs/tinsel](https://docs.rs/
 
 ## Testing what you print
 
-Force plain output, then assert on exact text:
+Catch everything your own code prints through tinsel, as it would come out into a pipe:
+messages, steps, spinners, tables and errors, in order, without colour:
+
+```rust
+#[test]
+fn deploy_says_where_it_went() {
+    let printed = tinsel::capture(|| my_cli::deploy("production"));
+    assert!(printed.contains("●  deployed to production"));
+}
+```
+
+One piece on its own needs no capturing: `.plain()` gives any block's text.
 
 ```rust
 #[test]
 fn status_table() {
-    tinsel::set_color_mode(tinsel::ColorMode::None);
     let table = tinsel::Table::new(["app", "size"]).row(["core", "34 MB"]);
     assert_eq!(table.lines().plain().lines().last(), Some("  core   34 MB"));
 }
 ```
 
-The colour mode is process-wide, so keep tests that need real colour codes in their own
-file under `tests/` (Cargo runs each file as a separate process).
+For the colour codes themselves, `tinsel::with_color_mode(ColorMode::TrueColor, || …)`
+turns colour on for that closure, on that thread alone, so tests beside it aren't affected.
 
 A `Live` display can run headless, on a clock that only moves when you say:
 
