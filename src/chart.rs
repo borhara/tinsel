@@ -8,7 +8,13 @@ use crate::widgets::bar;
 
 const LEVELS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
-/// Values as a row of rising blocks, taller ones brighter: `▁▂▄▇▅▃`.
+/// Values as a row of rising blocks, taller ones brighter: `▁▂▄▇▅▃`. A value that isn't a
+/// number (NaN, for a reading that's missing) leaves a gap.
+///
+/// ```
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// assert_eq!(tinsel::sparkline(&[1.0, f64::NAN, 3.0]), "▁ █");
+/// ```
 pub fn sparkline(values: &[f64]) -> String {
     let (lo, hi) = values
         .iter()
@@ -17,19 +23,25 @@ pub fn sparkline(values: &[f64]) -> String {
     values
         .iter()
         .map(|&v| {
+            if v.is_nan() {
+                return " ".to_string();
+            }
             let t = ((v - lo) / span) as f32;
             paint(sample(&RAMP, t), LEVELS[((t * 7.0).round() as usize).min(7)])
         })
         .collect()
 }
 
-/// A horizontal bar per label, scaled to the largest value, with the value at the end.
+/// A horizontal bar per label, scaled to the largest value, with the value at the end. A
+/// value that isn't a number gets an empty bar and `–`.
 pub fn bars(rows: &[(&str, f64)], width: usize) -> Block {
     let label_w = rows.iter().map(|(l, _)| text::width(l)).max().unwrap_or(0);
     let max = rows.iter().map(|(_, v)| *v).fold(0.0, f64::max).max(f64::EPSILON);
     rows.iter()
         .map(|(label, v)| {
-            let value = if v.fract() == 0.0 {
+            let value = if v.is_nan() {
+                "–".to_string()
+            } else if v.fract() == 0.0 {
                 format!("{v:.0}")
             } else {
                 format!("{v:.1}")
@@ -37,7 +49,7 @@ pub fn bars(rows: &[(&str, f64)], width: usize) -> Block {
             format!(
                 "  {}  {}  {}",
                 paint(TEXT, &text::pad(label, label_w)),
-                bar((v / max) as f32, width),
+                bar(crate::widgets::fraction((v / max) as f32), width),
                 paint(SOFT, &value)
             )
         })
@@ -45,8 +57,9 @@ pub fn bars(rows: &[(&str, f64)], width: usize) -> Block {
 }
 
 /// A labelled gauge that warms from rose to amber to red as it fills: disk, memory, quotas.
+/// A value that isn't a number leaves it empty, with `–` for the percentage.
 pub fn meter(label: &str, value: f64, max: f64, width: usize) -> String {
-    let f = (value / max.max(f64::EPSILON)).clamp(0.0, 1.0);
+    let f = crate::widgets::fraction((value / max.max(f64::EPSILON)) as f32) as f64;
     let color = if f < 0.6 {
         ROSE
     } else if f < 0.85 {
@@ -60,7 +73,14 @@ pub fn meter(label: &str, value: f64, max: f64, width: usize) -> String {
         paint(TEXT, label),
         paint(color, &"━".repeat(filled)),
         paint(crate::style::palette::TRACK, &"━".repeat(width - filled)),
-        paint(if f < 0.6 { MUTED } else { color }, &format!("{:>3.0}%", f * 100.0))
+        paint(
+            if f < 0.6 { MUTED } else { color },
+            &if value.is_nan() {
+                "   –".to_string()
+            } else {
+                format!("{:>3.0}%", f * 100.0)
+            }
+        )
     )
 }
 
@@ -171,6 +191,16 @@ fn number(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_values_read_as_missing() {
+        crate::set_color_mode(crate::ColorMode::None);
+        assert!(meter("cpu", f64::NAN, 100.0, 4).ends_with("━━━━     –"));
+        assert!(meter("cpu", 50.0, 100.0, 4).ends_with(" 50%"));
+        let shown = bars(&[("a", 2.0), ("b", f64::NAN)], 4).plain();
+        assert!(shown.ends_with("b  ━━━━  –"), "{shown}");
+        assert_eq!(text::strip_ansi(&sparkline(&[f64::NAN])), " ");
+    }
 
     fn plain() {
         crate::set_color_mode(crate::ColorMode::None);
