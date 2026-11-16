@@ -98,7 +98,7 @@ fn a_card_can_carry_a_title_and_footer_in_its_border_and_fit_its_rows() {
 }
 
 #[test]
-fn a_row_too_wide_for_its_card_wraps_under_its_value_and_keeps_the_border_in_line() {
+fn a_row_too_wide_for_its_card_wraps_under_its_value_and_keeps_the_border_and_margin_in_line() {
     plain();
     let card = Card::success("deployed to dev")
         .kv("changed", "0 to add, 1 to change, 0 to destroy")
@@ -114,11 +114,12 @@ fn a_row_too_wide_for_its_card_wraps_under_its_value_and_keeps_the_border_in_lin
             "  ╭──────────────────────────────────╮",
             "  │  ● deployed to dev               │",
             "  │                                  │",
-            "  │  changed   0 to add, 1 to change,│",
-            "  │            0 to destroy          │",
-            "  │  dashboard https://example.com/cl│",
-            "  │            oudwatch/home#dashboar│",
-            "  │            ds:name=infiltra-dev  │",
+            "  │  changed   0 to add, 1 to        │",
+            "  │            change, 0 to destroy  │",
+            "  │  dashboard https://example.com/  │",
+            "  │            cloudwatch/home#dash  │",
+            "  │            boards:name=infiltra  │",
+            "  │            -dev                  │",
             "  ╰──────────────────────────────────╯",
         ]
         .join("\n")
