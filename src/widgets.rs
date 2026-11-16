@@ -440,7 +440,8 @@ impl Card {
 
         let mut out = Block::new();
         out.push(edge(border, inner, ('╭', '╮'), self.title.as_ref(), true));
-        for row in rows {
+        // a row wider than the box wraps inside it rather than pushing the right border out
+        for row in rows.into_iter().flat_map(|row| row.wrap(inner.saturating_sub(2))) {
             let pad = inner.saturating_sub(2 + row.width());
             out.push(format!("{side}  {row}{}{side}", " ".repeat(pad)));
         }
