@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/borhara/tinsel/compare/v0.4.0...v0.4.1) - 2026-11-16
+
+### Fixed
+
+- a card row too wide for its box wraps inside it, under its value, instead of pushing the right border out
+
 ## [0.4.0](https://github.com/borhara/tinsel/compare/v0.3.1...v0.4.0) - 2026-11-14
 
 ### Added
