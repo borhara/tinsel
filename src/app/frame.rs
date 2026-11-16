@@ -256,6 +256,31 @@ pub struct Frame {
     height: usize,
     cells: Vec<Cell>,
     time: f32,
+    cursor: Option<(usize, usize, CursorShape)>,
+}
+
+/// How the terminal's own cursor looks, when a frame shows it with
+/// [`set_cursor`](Frame::set_cursor).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CursorShape {
+    /// A solid block over the cell, for moving around.
+    #[default]
+    Block,
+    /// A thin bar before the cell, for typing.
+    Bar,
+    /// A line under the cell, for replacing what's there.
+    Underline,
+}
+
+impl CursorShape {
+    /// The DECSCUSR code for this shape, steady rather than blinking.
+    pub(crate) fn code(self) -> u8 {
+        match self {
+            CursorShape::Block => 2,
+            CursorShape::Underline => 4,
+            CursorShape::Bar => 6,
+        }
+    }
 }
 
 impl Frame {
@@ -267,6 +292,7 @@ impl Frame {
             height,
             cells: vec![EMPTY; width * height],
             time: 0.0,
+            cursor: None,
         }
     }
 
@@ -336,6 +362,28 @@ impl Frame {
         for (row, line) in block.lines().iter().take(area.height).enumerate() {
             self.print(area, row, line);
         }
+    }
+
+    /// Show the terminal's cursor at column `x` of row `y`, counted from 0 at the top left, in
+    /// the given shape. Frames hide it unless this is called, or if the place is off the screen.
+    ///
+    /// ```
+    /// use tinsel::app::{CursorShape, Frame};
+    ///
+    /// let mut frame = Frame::new(10, 2);
+    /// frame.set_cursor(3, 1, CursorShape::Bar);
+    /// assert_eq!(frame.cursor(), Some((3, 1, CursorShape::Bar)));
+    /// frame.set_cursor(10, 1, CursorShape::Bar);
+    /// assert_eq!(frame.cursor(), None);
+    /// ```
+    pub fn set_cursor(&mut self, x: usize, y: usize, shape: CursorShape) {
+        self.cursor = (x < self.width && y < self.height).then_some((x, y, shape));
+    }
+
+    /// Where the terminal's cursor shows, and how, if [`set_cursor`](Frame::set_cursor) put
+    /// it on the screen.
+    pub fn cursor(&self) -> Option<(usize, usize, CursorShape)> {
+        self.cursor
     }
 
     /// Blank out part of the screen, so whatever's drawn there next sits on nothing.
@@ -644,11 +692,47 @@ impl Frame {
         }
         out
     }
+
+    /// Escapes to send before and after drawing, given where the last frame left the cursor.
+    /// Drawing moves the cursor, so it's hidden while drawing and put back after.
+    pub(crate) fn cursor_escape(
+        &self,
+        shown: Option<(usize, usize, CursorShape)>,
+        drew: bool,
+    ) -> (&'static str, String) {
+        let hide = if shown.is_some() && (drew || self.cursor.is_none()) {
+            "\x1b[?25l"
+        } else {
+            ""
+        };
+        let Some((x, y, shape)) = self.cursor.filter(|now| drew || shown != Some(*now)) else {
+            return (hide, String::new());
+        };
+        let shape = if shown.map(|s| s.2) == Some(shape) {
+            String::new()
+        } else {
+            format!("\x1b[{} q", shape.code())
+        };
+        (hide, format!("\x1b[{};{}H{shape}\x1b[?25h", y + 1, x + 1))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cursor_is_put_back_after_drawing_and_left_alone_otherwise() {
+        let mut f = Frame::new(4, 2);
+        assert_eq!(f.cursor_escape(None, true), ("", String::new()));
+        f.set_cursor(1, 1, CursorShape::Underline);
+        assert_eq!(f.cursor_escape(None, false), ("", "\x1b[2;2H\x1b[4 q\x1b[?25h".into()));
+        let here = f.cursor();
+        assert_eq!(f.cursor_escape(here, false), ("", String::new()));
+        assert_eq!(f.cursor_escape(here, true), ("\x1b[?25l", "\x1b[2;2H\x1b[?25h".into()));
+        f.set_cursor(9, 9, CursorShape::Block);
+        assert_eq!(f.cursor_escape(here, false), ("\x1b[?25l", String::new()));
+    }
 
     #[test]
     fn reads_styles_back_from_escape_codes() {
