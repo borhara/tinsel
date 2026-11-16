@@ -286,6 +286,11 @@ fn wave(fraction: f32, width: usize, t: Option<f32>) -> Line {
 
 /// A rounded box with a thin border, for summing up a run: a headline, then details.
 ///
+/// Printed, a card is as wide as what's inside it (never wider than the terminal), so a
+/// one-line result gets a snug box; [`fill`](Card::fill) stretches it across the content
+/// width instead, and [`width`](Card::width) sets one. Drawn as a widget in an app, it fills
+/// the area it's given unless it was given a width of its own or [`fit`](Card::fit).
+///
 /// ```
 /// use tinsel::Card;
 ///
@@ -303,7 +308,15 @@ pub struct Card {
     title: Option<Line>,
     footer: Option<Line>,
     border: Option<Rgb>,
-    fit: bool,
+    sizing: Option<Sizing>,
+}
+
+/// How wide a card is when no width is set: chosen with [`Card::fit`] or [`Card::fill`], or
+/// left to where it's drawn (fitted when printed, filling its area in an app).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sizing {
+    Fit,
+    Fill,
 }
 
 impl Card {
@@ -356,7 +369,7 @@ impl Card {
         self.line(Line::kv(key, value, color))
     }
 
-    /// Columns wide, border included (default: the content width).
+    /// Columns wide, border included (default: as wide as what's inside, when printed).
     pub fn width(mut self, cols: usize) -> Self {
         self.width = Some(cols);
         self
@@ -398,9 +411,23 @@ impl Card {
         self
     }
 
-    /// Only as wide as what's inside, rather than the whole content width.
+    /// Only as wide as what's inside. Printed cards are already; this is for a card drawn in
+    /// an app, which otherwise fills the area it's given.
     pub fn fit(mut self) -> Self {
-        self.fit = true;
+        self.sizing = Some(Sizing::Fit);
+        self
+    }
+
+    /// As wide as the content width when printed, however little is inside: for a card that
+    /// should line up with the full-width output around it.
+    ///
+    /// ```
+    /// use tinsel::Card;
+    ///
+    /// Card::success("deployed").kv("url", "https://my-app.example.com").fill().print();
+    /// ```
+    pub fn fill(mut self) -> Self {
+        self.sizing = Some(Sizing::Fill);
         self
     }
 
@@ -414,9 +441,10 @@ impl Card {
     /// The card as lines, with a blank line above so it sits apart from what came before.
     pub fn lines(&self) -> Block {
         let full = content_width().saturating_sub(2);
-        let width = self
-            .width
-            .unwrap_or(if self.fit { self.natural_width().min(full) } else { full });
+        let width = self.width.unwrap_or(match self.sizing {
+            Some(Sizing::Fill) => full,
+            _ => self.natural_width().min(full),
+        });
         let mut out = Block::new();
         out.push("");
         out.extend(self.boxed(width).into_iter().map(|l| format!("  {l}")).collect());
@@ -449,9 +477,11 @@ impl Card {
         out
     }
 
-    /// The width set with [`width`](Card::width), if any.
+    /// The width set with [`width`](Card::width) or [`fit`](Card::fit), if any: what an app
+    /// draws it at, where a card with neither fills its area.
     pub(crate) fn fixed_width(&self) -> Option<usize> {
-        self.width.or(self.fit.then(|| self.natural_width()))
+        self.width
+            .or((self.sizing == Some(Sizing::Fit)).then(|| self.natural_width()))
     }
 
     /// Print the card.
@@ -558,5 +588,19 @@ mod tests {
     fn a_fitted_card_is_as_wide_as_it_needs() {
         let card = Card::new().kv("key", "value").fit();
         assert!(card.fixed_width().is_some_and(|w| w < 30));
+    }
+
+    #[test]
+    fn a_printed_card_fits_what_is_inside_unless_told_to_fill() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let snug = Card::success("lint passed").aside("in 4s");
+        let top = |card: &Card| card.lines().plain().lines().nth(1).map(crate::text::width);
+        // "● lint passed in 4s" and two spaces either side, inside the border
+        assert_eq!(top(&snug), Some(2 + 25));
+        let wide = snug.clone().fill();
+        assert_eq!(top(&wide), Some(2 + crate::term::content_width() - 2));
+        // and in an app, a card given neither a width nor fit still fills its area
+        assert_eq!(snug.fixed_width(), None);
+        assert_eq!(wide.fixed_width(), None);
     }
 }
