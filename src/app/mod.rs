@@ -55,6 +55,11 @@
 //! dashboard shows. Work done on other threads can wake the app the moment it's ready with
 //! a [`Waker`], so it needn't tick quickly just to notice.
 //!
+//! # Typing
+//!
+//! The terminal's cursor is hidden while an app runs. A frame that wants it, to show where
+//! typing goes, puts it somewhere with [`Frame::set_cursor`], in a [`CursorShape`].
+//!
 //! # Leaving for a moment
 //!
 //! [`suspend`] hands the terminal back while something else uses it (a sign-in command, an
@@ -83,7 +88,7 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 pub use field::Input;
-pub use frame::Frame;
+pub use frame::{CursorShape, Frame};
 pub use grid::{Cursor, Grid};
 pub use input::{Key, Mouse, MouseKind};
 pub use keys::Keys;
@@ -209,10 +214,12 @@ fn drive(
     let mut size = screen();
     let mut shown: Option<Frame> = None;
     let mut titled: Option<String> = None;
+    let mut cursor: Option<(usize, usize, CursorShape)> = None;
     loop {
         if REDRAW.with(|r| r.replace(false)) {
             shown = None;
             titled = None;
+            cursor = None;
         }
         let title = app.title();
         if title.is_some() && title != titled {
@@ -236,10 +243,12 @@ fn drive(
         let mut frame = Frame::new(size.0, size.1).at(start.elapsed().as_secs_f32());
         app.view(&mut frame);
         let diff = frame.diff(shown.as_ref());
-        if !diff.is_empty() {
-            write!(out, "\x1b[?2026h{diff}\x1b[?2026l")?;
+        let (hide, place) = frame.cursor_escape(cursor, !diff.is_empty());
+        if !diff.is_empty() || !hide.is_empty() || !place.is_empty() {
+            write!(out, "\x1b[?2026h{hide}{diff}{place}\x1b[?2026l")?;
             out.flush()?;
         }
+        cursor = frame.cursor();
         shown = Some(frame);
 
         let wait = next_tick.saturating_duration_since(Instant::now());
@@ -454,7 +463,7 @@ static ON_SCREEN: AtomicBool = AtomicBool::new(false);
 // the window title is saved on entering (22t) and put back on leaving (23t)
 // and pastes arrive bracketed (2004), so they can be told apart from typing
 const ENTER: &str = "\x1b[22;0t\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?2004h\x1b[2J";
-const LEAVE: &str = "\x1b[0m\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t";
+const LEAVE: &str = "\x1b[0m\x1b[0 q\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t";
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
 
 /// The alternate screen, raw keys and a hidden cursor, for as long as it lives.
@@ -818,6 +827,46 @@ mod tests {
         let mut screen = || if std::mem::take(&mut first) { (5, 5) } else { (9, 9) };
         drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
         assert_eq!(app.seen, [Event::Resize(9, 9)]);
+    }
+
+    #[test]
+    fn the_cursor_shows_where_the_frame_puts_it_and_hides_when_it_doesnt() {
+        struct Typing(usize);
+        impl App for Typing {
+            fn view(&self, frame: &mut Frame) {
+                frame.print(frame.area(), 0, &"x".repeat(self.0));
+                if self.0 < 3 {
+                    frame.set_cursor(
+                        self.0,
+                        0,
+                        if self.0 == 0 {
+                            CursorShape::Block
+                        } else {
+                            CursorShape::Bar
+                        },
+                    );
+                }
+            }
+            fn event(&mut self, event: &Event) -> Flow {
+                self.0 += usize::from(*event == Event::Tick);
+                if self.0 == 4 { Flow::Quit } else { Flow::Continue }
+            }
+            fn fps(&self) -> u32 {
+                240
+            }
+        }
+        let rx = keys(&[]);
+        let mut out = Vec::new();
+        drive(&mut Typing(0), &rx, &mut out, &mut || (10, 1)).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        // shown in its shape, moved without the shape again, then hidden
+        assert!(out.contains("\x1b[1;1H\x1b[2 q\x1b[?25h"), "{out:?}");
+        assert!(out.contains("\x1b[1;2H\x1b[6 q\x1b[?25h"), "{out:?}");
+        assert!(out.contains("\x1b[1;3H\x1b[?25h"), "{out:?}");
+        assert!(
+            out.ends_with("\x1b[?25l\x1b[1;1H\x1b[0mxxx\x1b[K\x1b[?2026l"),
+            "{out:?}"
+        );
     }
 
     #[test]
