@@ -45,6 +45,20 @@ impl Lang {
         Lang::from_name(path.rsplit_once('.')?.1)
     }
 
+    /// One line of source coloured as this language: keywords, strings, numbers, comments,
+    /// and keys in config files. Each line is coloured on its own, so a string or comment that
+    /// spans lines is only coloured on its first. Without colour it comes back as it was.
+    ///
+    /// ```
+    /// use tinsel::Lang;
+    ///
+    /// let line = Lang::Rust.highlight("let x = 1; // one");
+    /// assert_eq!(tinsel::text::strip_ansi(&line), "let x = 1; // one");
+    /// ```
+    pub fn highlight(self, line: &str) -> String {
+        crate::highlight::line(line, self, false)
+    }
+
     fn comment(self) -> Option<&'static str> {
         match self {
             Lang::Rust | Lang::JavaScript => Some("//"),
