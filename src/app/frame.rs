@@ -257,6 +257,7 @@ pub struct Frame {
     cells: Vec<Cell>,
     time: f32,
     cursor: Option<(usize, usize, CursorShape)>,
+    cursor_color: Option<Rgb>,
 }
 
 /// How the terminal's own cursor looks, when a frame shows it with
@@ -293,6 +294,7 @@ impl Frame {
             cells: vec![EMPTY; width * height],
             time: 0.0,
             cursor: None,
+            cursor_color: None,
         }
     }
 
@@ -389,6 +391,21 @@ impl Frame {
     /// Blank out part of the screen, so whatever's drawn there next sits on nothing.
     pub fn clear(&mut self, area: Rect) {
         self.fill(area, EMPTY);
+    }
+
+    /// Colour the terminal's cursor, where the terminal allows it. It goes back to the
+    /// terminal's own when the app ends.
+    ///
+    /// ```
+    /// use tinsel::Rgb;
+    /// use tinsel::app::{CursorShape, Frame};
+    ///
+    /// let mut frame = Frame::new(4, 1);
+    /// frame.set_cursor(0, 0, CursorShape::Bar);
+    /// frame.set_cursor_color(Rgb(140, 200, 160));
+    /// ```
+    pub fn set_cursor_color(&mut self, rgb: Rgb) {
+        self.cursor_color = Some(crate::style::shown(rgb));
     }
 
     /// Paint the cells behind part of the screen, keeping whatever's written there.
@@ -693,6 +710,18 @@ impl Frame {
         out
     }
 
+    /// The escape that colours the cursor, if this frame wants a colour other than `shown`.
+    pub(crate) fn cursor_color_escape(&self, shown: Option<Rgb>) -> String {
+        match self.cursor_color {
+            Some(c) if Some(c) != shown => format!("\x1b]12;#{:02x}{:02x}{:02x}\x07", c.0, c.1, c.2),
+            _ => String::new(),
+        }
+    }
+
+    pub(crate) fn cursor_color(&self) -> Option<Rgb> {
+        self.cursor_color
+    }
+
     /// Escapes to send before and after drawing, given where the last frame left the cursor.
     /// Drawing moves the cursor, so it's hidden while drawing and put back after.
     pub(crate) fn cursor_escape(
@@ -732,6 +761,16 @@ mod tests {
         assert_eq!(f.cursor_escape(here, true), ("\x1b[?25l", "\x1b[2;2H\x1b[?25h".into()));
         f.set_cursor(9, 9, CursorShape::Block);
         assert_eq!(f.cursor_escape(here, false), ("\x1b[?25l", String::new()));
+    }
+
+    #[test]
+    fn the_cursor_colour_is_sent_when_it_changes() {
+        let mut f = Frame::new(2, 1);
+        assert_eq!(f.cursor_color_escape(None), "");
+        f.set_cursor_color(Rgb(1, 2, 3));
+        let shown = f.cursor_color();
+        assert!(f.cursor_color_escape(None).starts_with("\x1b]12;#"));
+        assert_eq!(f.cursor_color_escape(shown), "");
     }
 
     #[test]
