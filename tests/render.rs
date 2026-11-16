@@ -98,6 +98,54 @@ fn a_card_can_carry_a_title_and_footer_in_its_border_and_fit_its_rows() {
 }
 
 #[test]
+fn a_row_too_wide_for_its_card_wraps_under_its_value_and_keeps_the_border_in_line() {
+    plain();
+    let card = Card::success("deployed to dev")
+        .kv("changed", "0 to add, 1 to change, 0 to destroy")
+        .kv(
+            "dashboard",
+            "https://example.com/cloudwatch/home#dashboards:name=infiltra-dev",
+        )
+        .width(36);
+    assert_eq!(
+        card.lines().plain(),
+        [
+            "",
+            "  ╭──────────────────────────────────╮",
+            "  │  ● deployed to dev               │",
+            "  │                                  │",
+            "  │  changed   0 to add, 1 to change,│",
+            "  │            0 to destroy          │",
+            "  │  dashboard https://example.com/cl│",
+            "  │            oudwatch/home#dashboar│",
+            "  │            ds:name=infiltra-dev  │",
+            "  ╰──────────────────────────────────╯",
+        ]
+        .join("\n")
+    );
+}
+
+#[test]
+fn a_wrapped_line_carries_its_colour_and_link_onto_the_next_piece() {
+    let pieces = tinsel::with_color_mode(ColorMode::TrueColor, || {
+        tinsel::Line::new()
+            .raw(&tinsel::link("abcdefghij", "https://x.y"))
+            .wrap(4)
+    });
+    let texts: Vec<String> = pieces.iter().map(|p| p.to_string()).collect();
+    assert_eq!(
+        texts.iter().map(|t| text::strip_ansi(t)).collect::<Vec<_>>(),
+        ["abcd", "efgh", "ij"]
+    );
+    for t in &texts[1..] {
+        assert!(t.contains("\x1b]8;;https://x.y"), "{t:?}");
+        assert!(t.contains("\x1b[4m"), "{t:?}");
+    }
+    // every piece but the last closes its link and colours, so the card's padding stays plain
+    assert!(texts[0].ends_with("\x1b]8;;\x1b\\\x1b[0m"), "{:?}", texts[0]);
+}
+
+#[test]
 fn headline_only_card_has_no_trailing_blank() {
     plain();
     assert_eq!(Card::failure("broke").width(20).lines().len(), 4);

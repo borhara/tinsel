@@ -582,6 +582,8 @@ pub fn gradient(s: &str, stops: &[Rgb], shift: f32) -> String {
 pub struct Line {
     text: String,
     width: usize,
+    // how far [`wrap`](Line::wrap) indents the pieces after the first: a kv line's key column
+    hang: usize,
 }
 
 impl Line {
@@ -620,16 +622,153 @@ impl Line {
 
     /// A muted, aligned key followed by a value - the row shape cards are built from.
     pub fn kv(key: &str, value: &str, color: Rgb) -> Self {
-        Line::new()
-            // a column of 10 for the keys, and always a space after a longer one
-            .push(&format!("{key:<9} "), palette::MUTED)
-            .push(value, color)
+        // a column of 10 for the keys, and always a space after a longer one
+        let key = Line::new().push(&format!("{key:<9} "), palette::MUTED);
+        let hang = key.width;
+        Line {
+            hang,
+            ..key.push(value, color)
+        }
     }
 
     /// How many columns the line takes up on screen.
     pub fn width(&self) -> usize {
         self.width
     }
+
+    /// The line cut into pieces no wider than `cols`, its colours and links carried across
+    /// each cut. It breaks at a space where it can and mid-word where it must (a long URL), and
+    /// a [`kv`](Line::kv) line hangs the pieces after the first under its value.
+    ///
+    /// ```
+    /// use tinsel::{Line, palette};
+    ///
+    /// let line = Line::kv("url", "https://example.com/a/rather/long/path", palette::TEXT);
+    /// assert!(line.wrap(30).iter().all(|piece| piece.width() <= 30));
+    /// ```
+    pub fn wrap(&self, cols: usize) -> Vec<Line> {
+        let cols = cols.max(1);
+        if self.width <= cols {
+            return vec![self.clone()];
+        }
+        let hang = if self.hang < cols { self.hang } else { 0 };
+        let plain: Vec<char> = crate::text::strip_ansi(&self.text).chars().collect();
+        let ranges = wrap_ranges(&plain, cols, hang);
+
+        // Walk the styled text, copying each visible character into the piece whose range holds
+        // it and dropping the spaces a break swallowed. Every colour code seen so far is kept, so
+        // a new piece can replay them and start in the state the last one stopped in; each piece
+        // but the last is closed with a reset (and an open link ended) so its padding stays plain.
+        let mut pieces = Vec::new();
+        let mut piece = Line::new();
+        let (mut colours, mut link) = (String::new(), None::<String>);
+        let (mut k, mut v) = (0, 0);
+        let mut chars = self.text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                let mut code = String::from(c);
+                match chars.next() {
+                    Some('[') => {
+                        code.push('[');
+                        for c in chars.by_ref() {
+                            code.push(c);
+                            if ('@'..='~').contains(&c) {
+                                break;
+                            }
+                        }
+                        if code.ends_with('m') {
+                            colours += &code;
+                        }
+                    }
+                    Some(']') => {
+                        code.push(']');
+                        while let Some(c) = chars.next() {
+                            code.push(c);
+                            if c == '\x07' {
+                                break;
+                            }
+                            if c == '\x1b' && chars.peek() == Some(&'\\') {
+                                code.push(chars.next().unwrap_or('\\'));
+                                break;
+                            }
+                        }
+                        if code.starts_with("\x1b]8;") {
+                            // a link's own end is `ESC ]8;;` with nothing after it
+                            let ended = code.trim_end_matches(['\x07', '\\', '\x1b']).ends_with(";;");
+                            link = (!ended).then(|| code.clone());
+                        }
+                    }
+                    Some(other) => code.push(other),
+                    None => {}
+                }
+                piece.text += &code;
+                continue;
+            }
+            while k + 1 < ranges.len() && v >= ranges[k].1 {
+                if link.is_some() {
+                    piece.text += "\x1b]8;;\x1b\\";
+                }
+                if !colours.is_empty() {
+                    piece.text += "\x1b[0m";
+                }
+                pieces.push(std::mem::take(&mut piece));
+                piece = Line::new().space(hang);
+                piece.text += &colours;
+                piece.text += link.as_deref().unwrap_or("");
+                k += 1;
+            }
+            if (ranges[k].0..ranges[k].1).contains(&v) {
+                piece.text.push(c);
+                piece.width += crate::text::char_width(c);
+            }
+            v += 1;
+        }
+        pieces.push(piece);
+        pieces
+    }
+}
+
+/// Where [`Line::wrap`] cuts plain text: `[start, end)` character ranges, the first `cols` wide
+/// and the rest `cols - hang`. A cut goes at the last space that fits (never one inside the
+/// first `hang` columns, which hold a kv line's key), or mid-word when there isn't one, and the
+/// spaces either side of it belong to neither piece.
+fn wrap_ranges(plain: &[char], cols: usize, hang: usize) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let (mut start, mut used, mut room) = (0, 0, cols);
+    let mut i = 0;
+    while i < plain.len() {
+        let w = crate::text::char_width(plain[i]);
+        // a character wider than the whole room still goes somewhere
+        if used + w <= room || used == 0 {
+            used += w;
+            i += 1;
+            continue;
+        }
+        let floor = if ranges.is_empty() { hang } else { 0 };
+        let (mut col, mut space) = (0, None);
+        for (j, &c) in plain.iter().enumerate().take(i).skip(start) {
+            if c == ' ' && col >= floor && j > start {
+                space = Some(j);
+            }
+            col += crate::text::char_width(c);
+        }
+        // the character that didn't fit may be the space itself
+        let end = if plain[i] == ' ' { i } else { space.unwrap_or(i) };
+        let mut end_trim = end;
+        while end_trim > start && plain[end_trim - 1] == ' ' {
+            end_trim -= 1;
+        }
+        ranges.push((start, end_trim));
+        start = end;
+        while start < plain.len() && plain[start] == ' ' {
+            start += 1;
+        }
+        (i, used, room) = (start, 0, cols - hang);
+    }
+    if start < plain.len() || ranges.is_empty() {
+        ranges.push((start, plain.len()));
+    }
+    ranges
 }
 
 impl fmt::Display for Line {
