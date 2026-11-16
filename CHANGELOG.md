@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/borhara/tinsel/compare/v0.4.1...v0.5.0) - 2026-11-16
+
+### Added
+
+- *(card)* printed cards fit what is inside by default, with fill for the full width
+
+### Fixed
+
+- *(card)* a wrapped row keeps two clear columns on the right, as on the left, instead of running into the border
+- a question asked under a live display holds it still, so the display stops drawing over it and stops reading the keys typed into it
+
 ## [0.4.1](https://github.com/borhara/tinsel/compare/v0.4.0...v0.4.1) - 2026-11-16
 
 ### Fixed
