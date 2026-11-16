@@ -58,7 +58,8 @@
 //! # Typing
 //!
 //! The terminal's cursor is hidden while an app runs. A frame that wants it, to show where
-//! typing goes, puts it somewhere with [`Frame::set_cursor`], in a [`CursorShape`].
+//! typing goes, puts it somewhere with [`Frame::set_cursor`], in a [`CursorShape`]. An app
+//! that shouldn't end on Ctrl-C says so with [`App::ctrl_c_quits`].
 //!
 //! # Leaving for a moment
 //!
@@ -138,7 +139,8 @@ pub trait App {
     fn view(&self, frame: &mut Frame);
 
     /// Change the app in response to something happening. Ctrl-C comes here too, so the app
-    /// can note that it was stopped, and then always quits, whatever this returns.
+    /// can note that it was stopped, and then quits, whatever this returns, unless
+    /// [`ctrl_c_quits`](App::ctrl_c_quits) says otherwise.
     fn event(&mut self, event: &Event) -> Flow {
         match event {
             Event::Key(Key::Char('q') | Key::Esc) => Flow::Quit,
@@ -156,6 +158,12 @@ pub trait App {
     /// shows. Left alone unless changed; the old title comes back when the app quits.
     fn title(&self) -> Option<String> {
         None
+    }
+
+    /// Whether Ctrl-C ends the app after [`event`](App::event) has seen it. Yes unless
+    /// changed; an app that says no gets it as an ordinary key.
+    fn ctrl_c_quits(&self) -> bool {
+        true
     }
 
     /// Whether to report clicks and the scroll wheel. Off unless changed, since while it's on
@@ -267,7 +275,7 @@ fn drive(
                 WOKEN.store(false, Ordering::SeqCst);
             }
             let quit = app.event(&event) == Flow::Quit;
-            if quit || event == Event::Key(Key::Ctrl('c')) {
+            if quit || (event == Event::Key(Key::Ctrl('c')) && app.ctrl_c_quits()) {
                 return Ok(());
             }
         }
@@ -832,6 +840,29 @@ mod tests {
         let mut screen = || if std::mem::take(&mut first) { (5, 5) } else { (9, 9) };
         drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
         assert_eq!(app.seen, [Event::Resize(9, 9)]);
+    }
+
+    #[test]
+    fn ctrl_c_is_a_key_like_any_other_when_the_app_says_so() {
+        struct Keeps(Vec<Event>);
+        impl App for Keeps {
+            fn view(&self, _: &mut Frame) {}
+            fn event(&mut self, event: &Event) -> Flow {
+                self.0.push(event.clone());
+                if *event == Event::Key(Key::Char('q')) {
+                    Flow::Quit
+                } else {
+                    Flow::Continue
+                }
+            }
+            fn ctrl_c_quits(&self) -> bool {
+                false
+            }
+        }
+        let rx = keys(&[Event::Key(Key::Ctrl('c')), Event::Key(Key::Char('q'))]);
+        let mut app = Keeps(Vec::new());
+        drive(&mut app, &rx, &mut Vec::new(), &mut || (10, 1)).unwrap();
+        assert_eq!(app.0, [Event::Key(Key::Ctrl('c')), Event::Key(Key::Char('q'))]);
     }
 
     #[test]
