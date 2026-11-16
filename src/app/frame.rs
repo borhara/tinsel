@@ -314,8 +314,16 @@ impl Frame {
     }
 
     /// Like [`print`](Frame::print), with the text's first `skip` columns left off: for
-    /// anything scrolled sideways.
-    pub(crate) fn print_from(&mut self, area: Rect, row: usize, text: &str, skip: usize) -> usize {
+    /// anything scrolled sideways. Half of a wide character left showing is a space.
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(6, 1);
+    /// frame.print_from(frame.area(), 0, "a long line", 2);
+    /// assert_eq!(frame.snapshot().plain(), "long l");
+    /// ```
+    pub fn print_from(&mut self, area: Rect, row: usize, text: &str, skip: usize) -> usize {
         let area = area.intersect(self.area());
         if row >= area.height {
             return 0;
