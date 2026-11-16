@@ -150,18 +150,28 @@ impl From<io::Error> for Error {
 /// What every question returns.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Raw keyboard input and a hidden cursor for as long as it lives.
+/// Raw keyboard input and a hidden cursor for as long as it lives, with every [`Live`]
+/// display held still meanwhile so the question has the screen and the keys to itself.
+///
+/// [`Live`]: crate::Live
 struct Raw {
+    // dropped in this order: raw mode off before the displays start watching stdin again
     _mode: RawMode,
+    _paused: crate::live::Paused,
 }
 
 impl Raw {
     fn enter() -> io::Result<Raw> {
         // decide the theme first: finding out may mean asking the terminal, which needs stdin
         crate::style::theme();
+        // before raw mode, so each display's focus watch has handed the terminal back first
+        let paused = crate::live::pause_all();
         let mode = RawMode::enter()?;
         eprint!("\x1b[?25l");
-        Ok(Raw { _mode: mode })
+        Ok(Raw {
+            _mode: mode,
+            _paused: paused,
+        })
     }
 }
 

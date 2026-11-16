@@ -130,6 +130,10 @@ struct Shared {
     /// so [`Live::no_focus`] gets in first.
     watch: Option<Watch>,
     wants_focus: bool,
+    /// Questions open over this display ([`pause_all`]): nothing is drawn while any is.
+    paused: u32,
+    /// The focus watch was stopped for a question: start it again on the next frame.
+    refocus: bool,
 }
 
 impl Shared {
@@ -232,6 +236,54 @@ fn estimated_fraction(elapsed: f64, usual: f64) -> f32 {
 
 /// Displays drawing right now, so a panic can stop them and leave a clean screen.
 static DRAWING: Mutex<Vec<Weak<Mutex<Shared>>>> = Mutex::new(Vec::new());
+
+/// Every drawing display, held still while a question is asked over it (see [`Paused`]).
+///
+/// A display and a question both want the terminal. The display redraws itself in place many
+/// times a second, which paints over the question, and its focus watch reads stdin, which
+/// takes the keys meant for the question; with both going, a typed answer went nowhere and
+/// the terminal was left in whichever mode the last one to let go had set (seen in a deploy
+/// tool asking "type prod to confirm" under its step list). So each display draws one last
+/// frame and leaves it where it is, its watch stops and hands the terminal back, and nothing
+/// is drawn until the question is done. Then it draws on below the answer, and watches again.
+pub(crate) fn pause_all() -> Paused {
+    let drawing: Vec<_> = lock(&DRAWING).iter().filter_map(Weak::upgrade).collect();
+    for shared in &drawing {
+        let watch = {
+            let mut s = lock(shared);
+            if s.paused == 0 {
+                paint_frame(&mut s, false);
+                // left in the scrollback: the next frame starts below the question
+                s.drawn = 0;
+            }
+            s.paused += 1;
+            s.focus = None;
+            s.watch.take()
+        };
+        if let Some(mut watch) = watch {
+            watch.stop();
+        }
+    }
+    Paused { drawing }
+}
+
+/// Displays held still for a question; they carry on when this is dropped.
+pub(crate) struct Paused {
+    drawing: Vec<Arc<Mutex<Shared>>>,
+}
+
+impl Drop for Paused {
+    fn drop(&mut self) {
+        for shared in &self.drawing {
+            let mut s = lock(shared);
+            s.paused -= 1;
+            if s.paused == 0 {
+                s.refocus = true;
+                output::write(HIDE_CURSOR);
+            }
+        }
+    }
+}
 
 /// Stop every display mid-draw: running steps are marked failed, the last frame is drawn,
 /// and nothing is drawn after it. Called by the panic hook before it prints. Returns whether
@@ -340,6 +392,8 @@ impl Live {
                 focus: None,
                 watch: None,
                 wants_focus: false,
+                paused: 0,
+                refocus: false,
             })),
             stop: Arc::new(AtomicBool::new(false)),
             thread: None,
@@ -366,9 +420,14 @@ impl Live {
         self.thread = Some(thread::spawn(move || {
             let mut first = true;
             while !stop.load(Ordering::Relaxed) {
+                // held for a question: look again a frame on, so the answer is followed at once
+                if lock(&shared).paused > 0 {
+                    thread::sleep(crate::fps::frame(lock(&shared).fps));
+                    continue;
+                }
                 draw(&shared, false);
                 let frame = crate::fps::frame(lock(&shared).fps);
-                if std::mem::take(&mut first) {
+                if std::mem::take(&mut first) || std::mem::take(&mut lock(&shared).refocus) {
                     thread::sleep(frame);
                     watch_focus(&shared);
                     continue;
@@ -1374,7 +1433,9 @@ fn draw(shared: &Mutex<Shared>, settled: bool) {
 /// Redraw the display over its last frame: the header the first time, then anything logged
 /// since, then the steps.
 fn paint_frame(s: &mut Shared, settled: bool) {
-    if s.abandoned {
+    // a display finishing while a question is open still draws its last frame: that one is
+    // never redrawn, so skipping it would lose it
+    if s.abandoned || (s.paused > 0 && !settled) {
         return;
     }
     let mut buf = if s.drawn > 0 {
@@ -1805,6 +1866,36 @@ mod tests {
             })
         });
         assert!(!out.contains("q-title") && !out.contains("s-done"), "{out}");
+    }
+
+    #[test]
+    fn a_question_holds_every_display_still_until_it_is_answered() {
+        plain();
+        capture(|| {
+            with_terminal(true, || {
+                let live = Live::new("q-title", "x").no_history().no_focus().fps(240);
+                live.step("q-waiting").wait("waiting for you");
+                std::thread::sleep(Duration::from_millis(30));
+                let paused = pause_all();
+                {
+                    let s = lock(&live.shared);
+                    // its last frame left in place, and nothing reading stdin
+                    assert_eq!((s.paused, s.drawn), (1, 0));
+                    assert!(s.watch.is_none() && s.focus.is_none());
+                }
+                std::thread::sleep(Duration::from_millis(30));
+                assert_eq!(lock(&live.shared).drawn, 0, "drew over the question");
+                drop(paused);
+                std::thread::sleep(Duration::from_millis(30));
+                {
+                    let s = lock(&live.shared);
+                    assert_eq!(s.paused, 0);
+                    assert!(s.drawn > 0, "never drew again after the question");
+                    assert!(!s.refocus, "the watch was never asked to start again");
+                }
+                live.finish();
+            })
+        });
     }
 
     #[test]
