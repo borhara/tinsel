@@ -258,6 +258,7 @@ pub struct Frame {
     time: f32,
     cursor: Option<(usize, usize, CursorShape)>,
     cursor_color: Option<Rgb>,
+    background: Ink,
 }
 
 /// How the terminal's own cursor looks, when a frame shows it with
@@ -295,6 +296,7 @@ impl Frame {
             time: 0.0,
             cursor: None,
             cursor_color: None,
+            background: Ink::Default,
         }
     }
 
@@ -388,9 +390,43 @@ impl Frame {
         self.cursor
     }
 
-    /// Blank out part of the screen, so whatever's drawn there next sits on nothing.
+    /// Blank out part of the screen, so whatever's drawn there next sits on nothing (or on
+    /// the frame's [`background`](Frame::set_background), if it has one).
     pub fn clear(&mut self, area: Rect) {
-        self.fill(area, EMPTY);
+        let mut cell = EMPTY;
+        cell.style.bg = self.background;
+        self.fill(area, cell);
+    }
+
+    /// Paint the whole frame in this colour instead of the terminal's. Tinted cells keep their
+    /// tint, [`clear`](Frame::clear) goes back to it and [`dim`](Frame::dim) fades towards it.
+    /// Call it first in [`App::view`](super::App::view). Without colour it does nothing.
+    ///
+    /// ```
+    /// use tinsel::Rgb;
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(4, 1);
+    /// frame.set_background(Rgb(30, 20, 30));
+    /// assert_eq!(frame.background().is_some(), tinsel::color_mode() != tinsel::ColorMode::None);
+    /// ```
+    pub fn set_background(&mut self, rgb: Rgb) {
+        if crate::style::color_mode() == crate::style::ColorMode::None {
+            return;
+        }
+        let mut style = Style::default();
+        style.apply(&crate::style::sgr(rgb, 48));
+        self.background = style.bg;
+        for cell in &mut self.cells {
+            if cell.style.bg == Ink::Default {
+                cell.style.bg = style.bg;
+            }
+        }
+    }
+
+    /// The colour [`set_background`](Frame::set_background) painted the frame, as drawn.
+    pub fn background(&self) -> Option<Rgb> {
+        self.background.rgb()
     }
 
     /// Colour the terminal's cursor, where the terminal allows it. It goes back to the
@@ -438,15 +474,15 @@ impl Frame {
         if crate::style::color_mode() == crate::style::ColorMode::None {
             return;
         }
-        let back = if crate::style::theme() == crate::style::Theme::Light {
-            255.0
-        } else {
-            0.0
+        let back = match (self.background.rgb(), crate::style::theme()) {
+            (Some(Rgb(r, g, b)), _) => [r as f32, g as f32, b as f32],
+            (None, crate::style::Theme::Light) => [255.0; 3],
+            (None, crate::style::Theme::Dark) => [0.0; 3],
         };
         let fade = |ink: Ink, keep: f32| match ink {
             Ink::Rgb(r, g, b) => {
-                let f = |c: u8| (c as f32 * keep + back * (1.0 - keep)).round() as u8;
-                Ink::Rgb(f(r), f(g), f(b))
+                let f = |c: u8, to: f32| (c as f32 * keep + to * (1.0 - keep)).round() as u8;
+                Ink::Rgb(f(r, back[0]), f(g, back[1]), f(b, back[2]))
             }
             other => other,
         };
@@ -761,6 +797,35 @@ mod tests {
         assert_eq!(f.cursor_escape(here, true), ("\x1b[?25l", "\x1b[2;2H\x1b[?25h".into()));
         f.set_cursor(9, 9, CursorShape::Block);
         assert_eq!(f.cursor_escape(here, false), ("\x1b[?25l", String::new()));
+    }
+
+    #[test]
+    fn a_background_of_its_own_survives_clearing_and_dimming() {
+        crate::with_color_mode(crate::ColorMode::TrueColor, || {
+            let mut f = Frame::new(4, 2);
+            f.tint(Rect::new(0, 0, 1, 1), Rgb(200, 0, 0));
+            f.set_background(Rgb(30, 20, 30));
+            let bg = f.background().unwrap();
+            assert_ne!(f.cells[0].style.bg, f.background, "a tint keeps its colour");
+            assert_eq!(f.cells[1].style.bg, f.background);
+            f.clear(f.area());
+            assert!(
+                f.cells.iter().all(|c| c.style.bg == f.background),
+                "cleared cells take it"
+            );
+            f.print(f.area(), 0, &crate::paint(Rgb(255, 255, 255), "x"));
+            f.dim(f.area());
+            let Ink::Rgb(r, _, _) = f.cells[0].style.fg else {
+                panic!()
+            };
+            assert!(r < 255 && r > bg.0, "text fades towards the background, not black");
+            assert!(f.diff(None).contains("48;2;"), "every cell is sent with it");
+        });
+        crate::with_color_mode(crate::ColorMode::None, || {
+            let mut f = Frame::new(2, 1);
+            f.set_background(Rgb(30, 20, 30));
+            assert_eq!(f.background(), None);
+        });
     }
 
     #[test]
