@@ -297,16 +297,27 @@ fn on_a_terminal() {
 
     // and one that panics: a worker thread first, which it survives, then its own
     t.wait_for("app-ready");
+    // the worker's message is kept until the app leaves the screen, so it's checked below
     t.type_in("w");
-    t.wait_for("worker gave up");
     t.type_in("p");
 
     let (status, seen) = t.finish();
     std::fs::remove_dir_all(&scratch).unwrap();
     assert_passed(status, &seen);
-    for want in ["\x1b]9;", "page-line-28", "panicked", "interrupted by a panic"] {
+    for want in [
+        "\x1b]9;",
+        "page-line-28",
+        "panicked",
+        "interrupted by a panic",
+        "worker gave up",
+    ] {
         assert!(seen.contains(want), "{want:?} in:\n{seen}");
     }
+    let left = seen.rfind("\x1b[?1049l").unwrap();
+    assert!(
+        seen.rfind("worker gave up").unwrap() > left,
+        "printed after the app left the screen:\n{seen}"
+    );
 }
 
 #[cfg(unix)]
