@@ -296,8 +296,10 @@ fn a_drawn_run_remembers_its_timings() {
     let dir = std::env::temp_dir().join(format!("tinsel-live-{}", std::process::id()));
     capture(|| {
         let live = with_terminal(true, || Live::new("h-title", "x").no_focus());
+        let build = live.step("Build");
+        // after the first step, which opens the program's own history
         lock(&live.shared).history = History::open_in(&dir, "app");
-        live.step("Build").done();
+        build.done();
         live.finish();
     });
     assert!(
@@ -306,6 +308,20 @@ fn a_drawn_run_remembers_its_timings() {
             .starts_with("h-title › Build\t")
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn nothing_starts_until_the_first_step_so_every_setting_holds_from_the_start() {
+    let printed = capture(|| {
+        let live = Live::new("deploy", "my-app").remember_as("elsewhere").no_history();
+        assert!(!live.started.is_completed());
+        assert_eq!(live.history, None);
+        live.step("Build").done();
+        assert!(live.started.is_completed());
+    });
+    assert!(printed.starts_with("deploy my-app\n"), "{printed:?}");
+    // finished with no steps, the header still shows
+    assert_eq!(capture(|| Live::new("empty", "x").finish()), "empty x\n");
 }
 
 #[test]
