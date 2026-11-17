@@ -55,9 +55,27 @@
 //! however long an app runs. Whatever animates from a moment is told that moment, rather
 //! than reading the clock itself: [`Modal::opened`], [`Toasts::push`] and
 //! [`Toasts::showing`] all take it, so they can be drawn at any time in tests.
-//! [`Event::Tick`] arrives [`fps`](App::fps) times a second, for polling whatever your
-//! dashboard shows. Work done on other threads can wake the app the moment it's ready with
-//! a [`Waker`], so it needn't tick quickly just to notice.
+//!
+//! # Drawing only when needed
+//!
+//! An app is drawn when something happens: a key, a click, a paste, a resize, a [`Waker`]
+//! waking it, or the terminal gaining or losing focus. Between those it sleeps, and costs
+//! nothing, unless the last frame asked to be drawn again:
+//!
+//! - [`Frame::animate`] while something moves, for the next frame at the app's full
+//!   [`fps`](App::fps);
+//! - [`Frame::animate_at`] for ambient animation (stars twinkling, a light running round a
+//!   border) at a slower rate, which rests while the terminal is in the background and is
+//!   timed by [`Frame::ambient_time`], a clock that rests with it;
+//! - [`Frame::redraw_in`] and [`Frame::redraw_at`] for something that changes at a known
+//!   moment, like a clock on the screen at the turn of the minute.
+//!
+//! Every frame asks afresh, so whatever stops asking stops costing. tinsel's own animated
+//! widgets ([`Panel`] when focused, [`Toasts`], [`Modal::opened`], [`Loading`],
+//! [`Sparkles`], a [`Spinner`](crate::Spinner) and [`Grid`] while it loads) ask for their
+//! own frames. When a frame that was asked for comes due, the app is sent an [`Event::Tick`]
+//! first, for polling whatever a dashboard shows. Work done on other threads can wake the
+//! app the moment it's ready with a [`Waker`], so it needn't poll at all.
 //!
 //! # Typing
 //!
@@ -83,6 +101,7 @@ mod input;
 mod keys;
 mod layout;
 mod overlay;
+mod schedule;
 mod scroll;
 mod textarea;
 mod widgets;
@@ -119,7 +138,9 @@ pub enum Event {
     Paste(String),
     /// The mouse was clicked or scrolled (only if [`App::mouse`] says so).
     Mouse(Mouse),
-    /// Time passed: [`App::fps`] of these arrive a second.
+    /// Time passed: a frame asked for with [`Frame::animate`], [`Frame::animate_at`],
+    /// [`Frame::redraw_in`] or [`Frame::redraw_at`] is due, and is drawn straight after.
+    /// None arrive while nothing asks.
     Tick,
     /// The terminal changed size.
     Resize {
@@ -145,10 +166,12 @@ pub enum Flow {
 }
 
 /// A full-screen app. Only [`view`](App::view) is needed: by default `q` and Esc quit,
-/// it draws at 30 frames a second, and the mouse is left alone.
+/// it's drawn when something happens or a frame asks, and the mouse is left alone.
 pub trait App {
-    /// Draw the app as it is now. Called every frame, so keep it quick, and keep slow work
-    /// (fetching, reading files) in [`event`](App::event) or another thread.
+    /// Draw the app as it is now. Called for every frame, so keep it quick, and keep slow
+    /// work (fetching, reading files) in [`event`](App::event) or another thread. Anything
+    /// that moves asks for the next frame, as [Drawing only when
+    /// needed](self#drawing-only-when-needed) says.
     fn view(&self, frame: &mut Frame);
 
     /// Change the app in response to something happening. Ctrl-C comes here too, so the app
@@ -161,9 +184,9 @@ pub trait App {
         }
     }
 
-    /// How many times a second to draw and send [`Event::Tick`]. 30 unless changed; lower
-    /// it for a dashboard with nothing animated. It's asked again after every frame, so an
-    /// app can raise it while something moves and drop it again when it settles.
+    /// The most frames a second to draw: the rate of [`Frame::animate`], and the most any
+    /// [`Frame::animate_at`] gets. [`tinsel::fps`](crate::fps) unless changed. It's asked
+    /// again after every frame, so an app can change it as it goes.
     fn fps(&self) -> u32 {
         crate::fps()
     }
@@ -249,9 +272,9 @@ fn run_app(app: &mut dyn App) -> io::Result<()> {
 /// What the key reader sends: an event, or why there'll be no more (the terminal closed).
 type Typed = io::Result<Event>;
 
-/// The loop itself: draw, wait for an event or the next tick, and go round again until the app
-/// quits, Ctrl-C is pressed or the events stop. Kept apart from the terminal so it can be
-/// tested with any events, output and screen size.
+/// The loop itself: draw, wait for an event or the frame the last one asked for, and go round
+/// again until the app quits, Ctrl-C is pressed or the events stop. Kept apart from the
+/// terminal so it can be tested with any events, output and screen size.
 fn drive(
     app: &mut dyn App,
     rx: &mpsc::Receiver<Typed>,
@@ -260,7 +283,8 @@ fn drive(
 ) -> io::Result<()> {
     let start = Instant::now();
     let _clock = Clock::start(start);
-    let mut ticked = start;
+    let now = || start.elapsed().as_secs_f64();
+    let mut ambient = schedule::Ambient::default();
     let mut size = screen();
     let mut shown: Option<Frame> = None;
     // the frame before last, whose cells the next frame reuses
@@ -304,7 +328,8 @@ fn drive(
             Some(old) => old.renew(size.0, size.1),
             None => Frame::new(size.0, size.1),
         };
-        let mut frame = blank.at(start.elapsed().as_secs_f64());
+        let drawn = now();
+        let mut frame = blank.at(drawn).ambient_at(ambient.at(drawn));
         app.view(&mut frame);
         let diff = frame.diff(shown.as_ref());
         let (hide, place) = frame.cursor_escape(cursor, !diff.is_empty());
@@ -316,16 +341,25 @@ fn drive(
         cursor = frame.cursor();
         cursor_color = frame.cursor_color().or(cursor_color);
         window_color = frame.window_color().or(window_color);
+        let due = schedule::next_frame(frame.wants(), drawn, app.fps(), ambient.focused());
         spare = shown.replace(frame);
 
-        let tick = Duration::from_secs_f64(1.0 / app.fps().clamp(1, 240) as f64);
-        let next_tick = ticked + tick;
-        let wait = next_tick.saturating_duration_since(Instant::now());
-        let first = match rx.recv_timeout(wait) {
+        // a redraw asked for while drawing comes straight away, but isn't time passing
+        let again = REDRAW.with(std::cell::Cell::get);
+        let received = match (again, due) {
+            (true, _) => rx.try_recv().map_err(|e| e == mpsc::TryRecvError::Disconnected),
+            (false, Some(due)) => {
+                let wait = Duration::from_secs_f64((due - now()).clamp(0.0, 3600.0));
+                rx.recv_timeout(wait)
+                    .map_err(|e| e == mpsc::RecvTimeoutError::Disconnected)
+            }
+            (false, None) => rx.recv().map_err(|_| true),
+        };
+        let first = match received {
             Ok(event) => Some(event),
-            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(false) => None,
             // the reader stopped: stdin is gone, so nothing more can be typed
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+            Err(true) => return Ok(()),
         };
         for event in first.into_iter().chain(rx.try_iter()) {
             // nothing more can be typed, so the app can't be told to quit: it ends here
@@ -337,18 +371,17 @@ fn drive(
             if event == Event::Wake {
                 WOKEN.store(false, Ordering::SeqCst);
             }
+            if let Event::Focus(on) = event {
+                ambient.focus(on, now());
+            }
             let quit = app.event(&event) == Flow::Quit;
             if quit || (event == Event::Key(Key::Ctrl('c')) && app.ctrl_c_quits()) {
                 return Ok(());
             }
         }
-        let now = Instant::now();
-        if now >= next_tick {
-            // after a stall, carry on from now rather than sending a burst of ticks
-            ticked = now.checked_sub(tick).map_or(next_tick, |t| t.max(next_tick));
-            if app.event(&Event::Tick) == Flow::Quit {
-                return Ok(());
-            }
+        // the frame asked for is due: time passed, as far as the app is concerned
+        if !again && due.is_some_and(|due| now() >= due) && app.event(&Event::Tick) == Flow::Quit {
+            return Ok(());
         }
     }
 }
@@ -358,11 +391,11 @@ static WAKE: Mutex<Option<mpsc::Sender<Typed>>> = Mutex::new(None);
 /// Whether an [`Event::Wake`] is on its way and not yet handled, so a burst of wakes sends one.
 static WOKEN: AtomicBool = AtomicBool::new(false);
 
-/// Wakes the running app from another thread, so it can show what changed straight away
-/// instead of at its next [`Event::Tick`]. Make one whenever you like (before [`run`] is
-/// fine), clone it into every thread that needs it, and call [`wake`](Waker::wake) when
-/// there's something new: the app gets an [`Event::Wake`] at once. So a dashboard can tick
-/// once a second and still show a result the moment it arrives.
+/// Wakes the running app from another thread, so it can show what changed straight away,
+/// without polling for it. Make one whenever you like (before [`run`] is fine), clone it
+/// into every thread that needs it, and call [`wake`](Waker::wake) when there's something
+/// new: the app gets an [`Event::Wake`] at once, and is drawn again. So an app can sleep
+/// until a result arrives and show it the moment it does.
 ///
 /// The wake says only that something happened. To hand the result over, send it down your
 /// own channel and read it on `Event::Wake`:
@@ -386,10 +419,6 @@ static WOKEN: AtomicBool = AtomicBool::new(false);
 ///             self.latest = self.results.try_iter().last().unwrap_or_default();
 ///         }
 ///         Flow::Continue
-///     }
-///
-///     fn fps(&self) -> u32 {
-///         1
 ///     }
 /// }
 ///
@@ -922,6 +951,7 @@ mod tests {
     impl App for Recorder {
         fn view(&self, frame: &mut Frame) {
             frame.print(frame.area(), 0, &format!("seen {}", self.seen.len()));
+            frame.animate();
         }
 
         fn event(&mut self, event: &Event) -> Flow {
@@ -978,7 +1008,9 @@ mod tests {
     fn the_title_is_set_once_until_it_changes() {
         struct Titled(usize);
         impl App for Titled {
-            fn view(&self, _: &mut Frame) {}
+            fn view(&self, frame: &mut Frame) {
+                frame.animate();
+            }
             fn event(&mut self, event: &Event) -> Flow {
                 self.0 += usize::from(*event == Event::Tick);
                 if self.0 == 4 { Flow::Quit } else { Flow::Continue }
@@ -1098,6 +1130,7 @@ mod tests {
                         },
                     );
                 }
+                frame.animate();
             }
             fn event(&mut self, event: &Event) -> Flow {
                 self.0 += usize::from(*event == Event::Tick);
@@ -1125,7 +1158,9 @@ mod tests {
     fn the_frame_rate_can_change_while_running() {
         struct Speeds(u32);
         impl App for Speeds {
-            fn view(&self, _: &mut Frame) {}
+            fn view(&self, frame: &mut Frame) {
+                frame.animate();
+            }
             fn event(&mut self, event: &Event) -> Flow {
                 self.0 += u32::from(*event == Event::Tick);
                 if self.0 == 20 { Flow::Quit } else { Flow::Continue }
@@ -1150,6 +1185,7 @@ mod tests {
             fn view(&self, frame: &mut Frame) {
                 frame.print(frame.area(), 0, "same");
                 frame.set_window_color(crate::Rgb(1, 2, 3));
+                frame.animate();
             }
             fn event(&mut self, event: &Event) -> Flow {
                 self.0 += u32::from(*event == Event::Tick);
@@ -1370,6 +1406,7 @@ mod tests {
         impl App for Suspends {
             fn view(&self, frame: &mut Frame) {
                 frame.print(frame.area(), 0, "same");
+                frame.animate();
             }
             fn event(&mut self, event: &Event) -> Flow {
                 if *event == Event::Key(Key::Char('s')) {
@@ -1510,5 +1547,123 @@ mod tests {
         let mut app = Timed(-1.0);
         drive(&mut app, &keys(&[Event::Tick]), &mut Vec::new(), &mut || (1, 1)).unwrap();
         assert!(app.0 >= 0.0);
+    }
+
+    /// Counts its frames and what it's sent, and asks for frames as told.
+    #[derive(Default)]
+    struct Asking {
+        frames: std::cell::Cell<usize>,
+        seen: Vec<Event>,
+        ambient: bool,
+        at: Option<f64>,
+    }
+
+    impl App for Asking {
+        fn view(&self, frame: &mut Frame) {
+            self.frames.set(self.frames.get() + 1);
+            if self.ambient {
+                frame.animate_at(200);
+            }
+            if let Some(at) = self.at {
+                frame.redraw_at(at);
+            }
+        }
+        fn event(&mut self, event: &Event) -> Flow {
+            self.seen.push(event.clone());
+            if *event == Event::Key(Key::Char('q')) {
+                Flow::Quit
+            } else {
+                Flow::Continue
+            }
+        }
+        fn fps(&self) -> u32 {
+            200
+        }
+    }
+
+    /// Events sent from another thread, each after a pause.
+    fn later(script: Vec<(u64, Event)>) -> mpsc::Receiver<Typed> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for (ms, event) in script {
+                std::thread::sleep(Duration::from_millis(ms));
+                let _ = tx.send(Ok(event));
+            }
+            std::thread::sleep(Duration::from_secs(5));
+        });
+        rx
+    }
+
+    #[test]
+    fn an_app_that_asks_for_nothing_is_drawn_only_when_something_happens() {
+        let mut app = Asking::default();
+        let rx = later(vec![
+            (150, Event::Key(Key::Char('x'))),
+            (150, Event::Key(Key::Char('q'))),
+        ]);
+        drive(&mut app, &rx, &mut Vec::new(), &mut || (4, 1)).unwrap();
+        // once to start, once for the x; no ticks in all that time
+        assert_eq!(app.frames.get(), 2);
+        assert!(!app.seen.contains(&Event::Tick), "{:?}", app.seen);
+    }
+
+    #[test]
+    fn ambient_frames_rest_while_the_terminal_is_in_the_background() {
+        let mut app = Asking {
+            ambient: true,
+            ..Asking::default()
+        };
+        let rx = later(vec![(0, Event::Focus(false)), (200, Event::Key(Key::Char('q')))]);
+        drive(&mut app, &rx, &mut Vec::new(), &mut || (4, 1)).unwrap();
+        // drawn to start, perhaps a few times before focus went, and once for losing it
+        assert!(app.frames.get() <= 4, "{}", app.frames.get());
+
+        let mut app = Asking {
+            ambient: true,
+            ..Asking::default()
+        };
+        let rx = later(vec![(200, Event::Key(Key::Char('q')))]);
+        drive(&mut app, &rx, &mut Vec::new(), &mut || (4, 1)).unwrap();
+        assert!(app.frames.get() > 10, "{}", app.frames.get());
+        assert!(app.seen.contains(&Event::Tick));
+    }
+
+    #[test]
+    fn a_moment_asked_for_comes_in_the_background_too() {
+        let mut app = Asking {
+            at: Some(0.1),
+            ..Asking::default()
+        };
+        let rx = later(vec![(0, Event::Focus(false)), (300, Event::Key(Key::Char('q')))]);
+        drive(&mut app, &rx, &mut Vec::new(), &mut || (4, 1)).unwrap();
+        let ticks = app.seen.iter().filter(|e| **e == Event::Tick).count();
+        // asked for again in every frame, but a moment gone is due only until it's been drawn
+        assert!(ticks >= 1, "{:?}", app.seen);
+    }
+
+    #[test]
+    fn the_frame_knows_the_ambient_clock() {
+        struct Clocked(std::cell::Cell<(f64, f64)>);
+        impl App for Clocked {
+            fn view(&self, frame: &mut Frame) {
+                self.0.set((frame.time(), frame.ambient_time()));
+            }
+            fn event(&mut self, event: &Event) -> Flow {
+                if *event == Event::Key(Key::Char('q')) {
+                    Flow::Quit
+                } else {
+                    Flow::Continue
+                }
+            }
+        }
+        let mut app = Clocked(std::cell::Cell::new((0.0, 0.0)));
+        let rx = later(vec![
+            (0, Event::Focus(false)),
+            (150, Event::Key(Key::Char('x'))),
+            (50, Event::Key(Key::Char('q'))),
+        ]);
+        drive(&mut app, &rx, &mut Vec::new(), &mut || (4, 1)).unwrap();
+        let (time, ambient) = app.0.get();
+        assert!(time - ambient >= 0.1, "{time} {ambient}");
     }
 }
