@@ -471,7 +471,23 @@ impl Frame {
     /// assert_eq!(frame.snapshot().plain(), "behind");
     /// ```
     pub fn dim(&mut self, area: Rect) {
-        if crate::style::color_mode() == crate::style::ColorMode::None {
+        self.dim_by(area, 1.0);
+    }
+
+    /// Like [`dim`](Frame::dim), as far as `amount` says: 0 leaves it alone and 1 is the
+    /// same as `dim`. For something that's only a little out of the way, or a fade.
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(10, 1);
+    /// frame.print(frame.area(), 0, "aside");
+    /// frame.dim_by(frame.area(), 0.3);
+    /// assert_eq!(frame.snapshot().plain(), "aside");
+    /// ```
+    pub fn dim_by(&mut self, area: Rect, amount: f32) {
+        let amount = amount.clamp(0.0, 1.0);
+        if crate::style::color_mode() == crate::style::ColorMode::None || amount == 0.0 {
             return;
         }
         let back = match (self.background.rgb(), crate::style::theme()) {
@@ -501,8 +517,8 @@ impl Frame {
                     Ink::Rgb(..) => {}
                 }
                 s.attrs &= !BOLD;
-                s.fg = fade(s.fg, 0.4);
-                s.bg = fade(s.bg, 0.5);
+                s.fg = fade(s.fg, 1.0 - 0.6 * amount);
+                s.bg = fade(s.bg, 1.0 - 0.5 * amount);
             }
         }
     }
@@ -825,6 +841,27 @@ mod tests {
             let mut f = Frame::new(2, 1);
             f.set_background(Rgb(30, 20, 30));
             assert_eq!(f.background(), None);
+        });
+    }
+
+    #[test]
+    fn dimming_by_less_fades_less() {
+        crate::with_color_mode(crate::ColorMode::TrueColor, || {
+            let fg = |amount: f32| {
+                let mut f = Frame::new(1, 1);
+                f.print(f.area(), 0, &crate::paint(Rgb(200, 200, 200), "x"));
+                f.dim_by(f.area(), amount);
+                f.cells[0].style.fg
+            };
+            let mut full = Frame::new(1, 1);
+            full.print(full.area(), 0, &crate::paint(Rgb(200, 200, 200), "x"));
+            full.dim(full.area());
+            assert_eq!(fg(1.0), full.cells[0].style.fg);
+            assert_eq!(fg(0.0), Ink::Rgb(200, 200, 200));
+            let (Ink::Rgb(some, ..), Ink::Rgb(all, ..)) = (fg(0.3), fg(1.0)) else {
+                panic!()
+            };
+            assert!(some < 200 && some > all, "{some} {all}");
         });
     }
 
