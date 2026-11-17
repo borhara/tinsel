@@ -10,6 +10,7 @@
 //! Add `--theme light|dark` or `--accent pink|violet|blue|teal|orange` to any of them to
 //! preview a look, `--bar waveform` to see the waveform progress bar in the deploy, and
 //! `--json` or `--quiet` to see the other output modes, and `--stderr` to draw on stderr.
+//! Flags can come before the command or after it; `tinsel --version` says which tinsel this is.
 //!
 //! Spinner names: sparkle, dots, comet, wave, arc, orbit, pulse.
 
@@ -52,6 +53,7 @@ fn help() -> Help {
     .flag("--json", "every message, step and error as a line of JSON")
     .flag("--quiet", "only what needs attention")
     .flag("--stderr", "draw on stderr, leaving stdout for something else")
+    .flag("--version", "which tinsel this is")
     .example("tinsel showcase table", "just the tables")
     .example(
         "tinsel demo --bar waveform --accent teal",
@@ -70,9 +72,6 @@ fn usage_error(problem: &str) -> ! {
     hint("tinsel help shows what it can do");
     std::process::exit(2);
 }
-
-/// Flags that take a value, so the value isn't mistaken for a section or app name.
-const VALUE_FLAGS: [&str; 4] = ["--spinner", "--theme", "--accent", "--bar"];
 
 type Section = (&'static str, &'static str, fn());
 
@@ -166,76 +165,130 @@ const SECTIONS: &[Section] = &[
     ("json", "API responses and config, indented and coloured", json_section),
 ];
 
+/// The command line, read and checked.
+#[derive(Default)]
+struct Args {
+    command: Option<String>,
+    /// The section for `showcase`, or the app for `timings`.
+    operand: Option<String>,
+    spinner: Spinner,
+    bar: tinsel::BarStyle,
+    fail: bool,
+    help: bool,
+    version: bool,
+}
+
+/// Read the command line. Flags can go anywhere, before the command or after it; anything
+/// tinsel doesn't know is a usage error.
+fn parse(raw: impl IntoIterator<Item = String>) -> Args {
+    let mut args = Args::default();
+    let mut positional = Vec::new();
+    let mut raw = raw.into_iter();
+    while let Some(arg) = raw.next() {
+        // `--flag=value` reads the same as `--flag value`
+        let (flag, inline) = match arg.split_once('=') {
+            Some((flag, value)) if arg.starts_with("--") => (flag.to_string(), Some(value.to_string())),
+            _ => (arg.clone(), None),
+        };
+        let mut value = |what: &str| -> String {
+            inline
+                .clone()
+                .or_else(|| raw.next())
+                .unwrap_or_else(|| usage_error(&format!("{flag} needs {what} after it")))
+        };
+        match flag.as_str() {
+            "--spinner" => {
+                let name = value("a spinner name");
+                args.spinner = Spinner::from_name(&name)
+                    .unwrap_or_else(|| usage_error(&format!("there's no spinner called {name}")));
+            }
+            "--accent" => {
+                let name = value("an accent name");
+                match Accent::from_name(&name) {
+                    Some(accent) => tinsel::set_accent(accent),
+                    None => usage_error(&format!("there's no accent called {name}")),
+                }
+            }
+            "--theme" => match value("light or dark").as_str() {
+                "light" => tinsel::set_theme(tinsel::Theme::Light),
+                "dark" => tinsel::set_theme(tinsel::Theme::Dark),
+                other => usage_error(&format!("the theme is light or dark, not {other}")),
+            },
+            "--bar" => {
+                args.bar = match value("line or waveform").as_str() {
+                    "line" => tinsel::BarStyle::Line,
+                    "waveform" => tinsel::BarStyle::Waveform,
+                    other => usage_error(&format!("the bar is line or waveform, not {other}")),
+                }
+            }
+            _ if inline.is_some() => usage_error(&format!("{flag} doesn't take a value")),
+            "--stderr" => tinsel::set_target(Target::Stderr),
+            "--json" => tinsel::set_output(Output::Json),
+            // --json wins over --quiet whichever comes first
+            "--quiet" if tinsel::output() != Output::Json => tinsel::set_output(Output::Quiet),
+            "--quiet" => {}
+            "--fail" => args.fail = true,
+            "--help" | "-h" => args.help = true,
+            "--version" | "-V" => args.version = true,
+            _ if flag.starts_with('-') && flag != "-" => usage_error(&format!("there's no flag called {flag}")),
+            _ => positional.push(arg),
+        }
+    }
+    let mut positional = positional.into_iter();
+    args.command = positional.next();
+    // `cargo run tinsel help` hands the program its own name first; skip it
+    if args.command.as_deref() == Some("tinsel") {
+        args.command = positional.next();
+    }
+    let takes_operand = matches!(args.command.as_deref(), Some("showcase" | "timings"));
+    args.operand = positional.next();
+    let extra = if takes_operand {
+        positional.next()
+    } else {
+        args.operand.take()
+    };
+    if let Some(extra) = extra {
+        usage_error(&format!("didn't expect {extra} here"));
+    }
+    if args.fail && !matches!(args.command.as_deref(), Some("demo")) {
+        usage_error("--fail only goes with demo");
+    }
+    args
+}
+
 fn main() {
     tinsel::install_panic_hook();
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    // `cargo run tinsel help` hands the program its own name first; skip it
-    if args.first().is_some_and(|a| a == "tinsel") {
-        args.remove(0);
+    let args = parse(std::env::args().skip(1));
+    if args.version {
+        println!("tinsel {}", env!("CARGO_PKG_VERSION"));
+        return;
     }
-    let spinner = spinner_arg(&args);
-    if let Some(name) = flag_value(&args, "--accent") {
-        match Accent::from_name(&name) {
-            Some(accent) => tinsel::set_accent(accent),
-            None => usage_error(&format!("there's no accent called {name}")),
-        }
-    }
-    if args.iter().any(|a| a == "--stderr") {
-        tinsel::set_target(Target::Stderr);
-    }
-    if args.iter().any(|a| a == "--json") {
-        tinsel::set_output(Output::Json);
-    } else if args.iter().any(|a| a == "--quiet") {
-        tinsel::set_output(Output::Quiet);
-    }
-    match flag_value(&args, "--theme").as_deref() {
-        None => {}
-        Some("light") => tinsel::set_theme(tinsel::Theme::Light),
-        Some("dark") => tinsel::set_theme(tinsel::Theme::Dark),
-        Some(other) => usage_error(&format!("the theme is light or dark, not {other}")),
-    }
-    // the first word after the command that isn't a flag or a flag's value
-    let operand = args
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(i, a)| !a.starts_with("--") && !VALUE_FLAGS.contains(&args[i - 1].as_str()))
-        .map(|(_, a)| a.as_str());
-    if args.iter().any(|a| a == "--help" || a == "-h") {
+    if args.help {
         return help().animate();
     }
-    match args.first().map(String::as_str) {
+    let operand = args.operand.as_deref();
+    // JSON is printed bare, one value per line; the blank lines are only for people
+    let gap = || {
+        if tinsel::output() != Output::Json {
+            println!();
+        }
+    };
+    match args.command.as_deref() {
         None | Some("help") => help().animate(),
-        Some("showcase") => showcase(operand, spinner),
-        Some("demo") => demo(args.iter().any(|a| a == "--fail"), spinner),
+        Some("showcase") => showcase(operand, args.spinner, args.bar),
+        Some("demo") => demo(args.fail, args.spinner, args.bar),
         Some("prompts") => prompts(),
         Some("timings") => {
-            println!();
+            gap();
             tinsel::timings(operand).print();
-            println!();
+            gap();
         }
         Some("doctor") => {
-            println!();
+            gap();
             tinsel::doctor().print();
-            println!();
+            gap();
         }
         Some(other) => usage_error(&format!("there's no command called {other}")),
-    }
-}
-
-fn flag_value(args: &[String], flag: &str) -> Option<String> {
-    let i = args.iter().position(|a| a == flag)?;
-    Some(args.get(i + 1).cloned().unwrap_or_default())
-}
-
-fn spinner_arg(args: &[String]) -> Spinner {
-    let Some(i) = args.iter().position(|a| a == "--spinner") else {
-        return Spinner::default();
-    };
-    let name = args.get(i + 1).map_or("", String::as_str);
-    match Spinner::from_name(name) {
-        Some(spinner) => spinner,
-        None => usage_error(&format!("there's no spinner called {name}")),
     }
 }
 
@@ -275,7 +328,7 @@ fn heading(title: &str, blurb: &str) {
     println!();
 }
 
-fn showcase(only: Option<&str>, spinner: Spinner) {
+fn showcase(only: Option<&str>, spinner: Spinner, bar: tinsel::BarStyle) {
     if let Some(name) = only {
         let Some((name, blurb, draw)) = SECTIONS.iter().find(|(n, _, _)| *n == name) else {
             let names: Vec<&str> = SECTIONS.iter().map(|(n, _, _)| *n).collect();
@@ -301,7 +354,7 @@ fn showcase(only: Option<&str>, spinner: Spinner) {
     }
     heading("live", "all of it together");
     sleep(Duration::from_millis(600));
-    demo(false, spinner);
+    demo(false, spinner, bar);
 }
 
 fn palette_section() {
@@ -1001,13 +1054,9 @@ fn run(step: &Step, secs: f32, details: &[&str]) {
     }
 }
 
-fn demo(fail: bool, spinner: Spinner) {
+fn demo(fail: bool, spinner: Spinner, bar: tinsel::BarStyle) {
     // a lower notification threshold than the default 10s, so switching away during the
     // ~10s demo reliably shows one
-    let bar = match flag_value(&std::env::args().collect::<Vec<_>>(), "--bar").as_deref() {
-        Some("waveform") => tinsel::BarStyle::Waveform,
-        _ => tinsel::BarStyle::Line,
-    };
     let live = Live::new("deploy", "my-app → production · eu-west-2")
         .with_spinner(spinner)
         .with_bar(bar)
