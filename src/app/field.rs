@@ -1,6 +1,6 @@
 //! A line of text to type into, inside an app.
 
-use super::{Event, Frame, Key, Rect, Widget};
+use super::{Event, Frame, Key, Mods, NamedKey, Rect, Widget};
 use crate::style::palette::{BERRY, MUTED, ROSE, SOFT, TEXT, TRACK};
 use crate::style::{ColorMode, Rgb, color_mode, italic, mix, paint, paint_bg};
 use crate::text::char_width;
@@ -90,8 +90,8 @@ impl Input {
 
     /// Type, delete or move the cursor, if the box has focus and the event is a key it uses:
     /// characters, Backspace and Delete, ←→, Home and End (or Ctrl-A and Ctrl-E), Ctrl-U
-    /// and Ctrl-K to clear before or after the cursor, and Ctrl-W to delete a word. Pasted
-    /// text goes in at the cursor, on one line: its line breaks and tabs become spaces.
+    /// and Ctrl-K to clear before or after the cursor, Ctrl-W or Alt-Backspace to delete a
+    /// word, and Alt or Ctrl with ←→ to move by words. Pasted text goes in at the cursor, on one line: its line breaks and tabs become spaces.
     /// Returns whether it used the event, so Enter, Esc and Tab are left for the app.
     ///
     /// ```
@@ -205,9 +205,29 @@ impl Widget for Input {
 
 /// The keys an [`Input`] and a [`TextArea`](super::TextArea) edit a line with alike, on
 /// `line` with the cursor `at`: Home and Ctrl-A to the start, End and Ctrl-E to the end,
-/// Ctrl-U and Ctrl-K to cut what's before or after, Ctrl-W to cut the word before. Returns
+/// Ctrl-U and Ctrl-K to cut what's before or after, Ctrl-W or Alt-Backspace to cut the word
+/// before, and Alt or Ctrl with ←→ (or Alt-B and Alt-F) to move a word at a time. Returns
 /// whether `key` was one of them.
 pub(super) fn edit_line(line: &mut Vec<char>, at: &mut usize, key: Key) -> bool {
+    let word_start = |line: &[char], mut i: usize| {
+        while i > 0 && line[i - 1] == ' ' {
+            i -= 1;
+        }
+        while i > 0 && line[i - 1] != ' ' {
+            i -= 1;
+        }
+        i
+    };
+    let word_end = |line: &[char], mut i: usize| {
+        while i < line.len() && line[i] == ' ' {
+            i += 1;
+        }
+        while i < line.len() && line[i] != ' ' {
+            i += 1;
+        }
+        i
+    };
+    let by_word = |m: Mods| m.ctrl() || m.alt();
     match key {
         Key::Home | Key::Ctrl('a') => *at = 0,
         Key::End | Key::Ctrl('e') => *at = line.len(),
@@ -216,17 +236,15 @@ pub(super) fn edit_line(line: &mut Vec<char>, at: &mut usize, key: Key) -> bool 
             *at = 0;
         }
         Key::Ctrl('k') => line.truncate(*at),
-        Key::Ctrl('w') => {
-            let mut start = *at;
-            while start > 0 && line[start - 1] == ' ' {
-                start -= 1;
-            }
-            while start > 0 && line[start - 1] != ' ' {
-                start -= 1;
-            }
+        Key::Ctrl('w') | Key::Mod(Mods::ALT, NamedKey::Backspace) => {
+            let start = word_start(line, *at);
             line.drain(start..*at);
             *at = start;
         }
+        Key::Alt('b') => *at = word_start(line, *at),
+        Key::Mod(m, NamedKey::Left) if by_word(m) => *at = word_start(line, *at),
+        Key::Alt('f') => *at = word_end(line, *at),
+        Key::Mod(m, NamedKey::Right) if by_word(m) => *at = word_end(line, *at),
         _ => return false,
     }
     true
@@ -276,6 +294,14 @@ mod tests {
         input.set_value("abc");
         typed(&mut input, &[Key::Left, Key::Ctrl('u'), Key::Ctrl('e'), Key::Char('!')]);
         assert_eq!(input.value(), "c!");
+        input.set_value("one two  three");
+        let ctrl = |k| Key::Mod(Mods::CTRL, k);
+        typed(&mut input, &[Key::Alt('b'), ctrl(NamedKey::Left), Key::Char('_')]);
+        assert_eq!(input.value(), "one _two  three");
+        typed(&mut input, &[ctrl(NamedKey::Right), Key::Alt('f'), Key::Char('!')]);
+        assert_eq!(input.value(), "one _two  three!");
+        typed(&mut input, &[Key::Mod(Mods::ALT, NamedKey::Backspace)]);
+        assert_eq!(input.value(), "one _two  ");
         assert!(!input.event(&Event::Tick) && !input.event(&Event::Key(Key::Tab)));
         input.clear();
         assert!(input.value().is_empty() && input.is_focused());
