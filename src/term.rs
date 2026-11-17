@@ -275,8 +275,12 @@ fn parse_osc_color(reply: &str) -> Option<(u8, u8, u8)> {
     let rgb = &reply[reply.find("rgb:")? + 4..];
     let mut channels = rgb.split('/').map(|c| {
         let hex: String = c.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
-        let v = u32::from_str_radix(&hex, 16).ok()?;
-        let max = (1u32 << (4 * hex.len() as u32)) - 1;
+        // more than four digits isn't a colour any terminal sends, and would overflow
+        if hex.len() > 4 {
+            return None;
+        }
+        let v = u64::from_str_radix(&hex, 16).ok()?;
+        let max = (1u64 << (4 * hex.len())) - 1;
         Some((v * 255 / max) as u8)
     });
     Some((channels.next()??, channels.next()??, channels.next()??))
@@ -944,6 +948,11 @@ mod tests {
         assert_eq!(parse_osc_color("\x1b]11;rgb:1e1e/2020/2a2a\x1b\\"), Some((30, 32, 42)));
         assert_eq!(parse_osc_color("\x1b]11;rgb:ff/80/00\x07"), Some((255, 128, 0)));
         assert_eq!(parse_osc_color("garbage"), None);
+        assert_eq!(parse_osc_color("\x1b]11;rgb:f/8/0\x07"), Some((255, 136, 0)));
+        // too many digits, or none, is no colour rather than a panic
+        assert_eq!(parse_osc_color("rgb:ffffffff/ffffffff/ffffffff"), None);
+        assert_eq!(parse_osc_color("rgb:fffffff/0/0"), None);
+        assert_eq!(parse_osc_color("rgb://"), None);
     }
 
     #[cfg(not(windows))]
