@@ -149,7 +149,8 @@ pub trait App {
     }
 
     /// How many times a second to draw and send [`Event::Tick`]. 30 unless changed; lower
-    /// it for a dashboard with nothing animated.
+    /// it for a dashboard with nothing animated. It's asked again after every frame, so an
+    /// app can raise it while something moves and drop it again when it settles.
     fn fps(&self) -> u32 {
         crate::fps()
     }
@@ -217,8 +218,7 @@ fn drive(
 ) -> io::Result<()> {
     let start = Instant::now();
     let _clock = Clock::start(start);
-    let tick = Duration::from_secs_f64(1.0 / app.fps().clamp(1, 240) as f64);
-    let mut next_tick = start + tick;
+    let mut ticked = start;
     let mut size = screen();
     let mut shown: Option<Frame> = None;
     let mut titled: Option<String> = None;
@@ -263,6 +263,8 @@ fn drive(
         cursor_color = frame.cursor_color().or(cursor_color);
         shown = Some(frame);
 
+        let tick = Duration::from_secs_f64(1.0 / app.fps().clamp(1, 240) as f64);
+        let next_tick = ticked + tick;
         let wait = next_tick.saturating_duration_since(Instant::now());
         let first = match rx.recv_timeout(wait) {
             Ok(event) => Some(event),
@@ -282,7 +284,7 @@ fn drive(
         let now = Instant::now();
         if now >= next_tick {
             // after a stall, carry on from now rather than sending a burst of ticks
-            next_tick = (next_tick + tick).max(now);
+            ticked = now.checked_sub(tick).map_or(next_tick, |t| t.max(next_tick));
             if app.event(&Event::Tick) == Flow::Quit {
                 return Ok(());
             }
@@ -903,6 +905,28 @@ mod tests {
             out.ends_with("\x1b[?25l\x1b[1;1H\x1b[0mxxx\x1b[K\x1b[?2026l"),
             "{out:?}"
         );
+    }
+
+    #[test]
+    fn the_frame_rate_can_change_while_running() {
+        struct Speeds(u32);
+        impl App for Speeds {
+            fn view(&self, _: &mut Frame) {}
+            fn event(&mut self, event: &Event) -> Flow {
+                self.0 += u32::from(*event == Event::Tick);
+                if self.0 == 20 { Flow::Quit } else { Flow::Continue }
+            }
+            fn fps(&self) -> u32 {
+                if self.0 == 0 { 1 } else { 240 }
+            }
+        }
+        let rx = keys(&[]);
+        let started = Instant::now();
+        drive(&mut Speeds(0), &rx, &mut Vec::new(), &mut || (4, 1)).unwrap();
+        let took = started.elapsed();
+        // one slow tick, then nineteen fast ones
+        assert!(took >= Duration::from_millis(900), "{took:?}");
+        assert!(took < Duration::from_millis(1900), "{took:?}");
     }
 
     #[test]
