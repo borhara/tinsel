@@ -335,6 +335,21 @@ fn focus_is_only_watched_when_wanted() {
 }
 
 #[test]
+fn focus_is_not_watched_while_a_question_holds_the_terminal() {
+    let live = Live::headless("f", "x");
+    {
+        let mut s = lock(&live.shared);
+        s.wants_focus = true;
+        s.paused = 1;
+    }
+    // even on a terminal, the question's keys and terminal mode are left alone
+    with_terminal(true, || watch_focus(&live.shared));
+    let s = lock(&live.shared);
+    assert!(s.watch.is_none() && s.focus.is_none());
+    assert!(s.refocus, "tried again once the question is answered");
+}
+
+#[test]
 fn the_summary_says_how_it_went() {
     let live = Live::headless("s", "x");
     let (a, b) = (live.step("a"), live.step("b"));

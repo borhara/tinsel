@@ -23,6 +23,7 @@ mod tests;
 mod timeline;
 
 pub use self::command::*;
+pub(crate) use self::render::one_row;
 use self::{render::*, timeline::*};
 
 const MAX_WIDTH: usize = 76;
@@ -252,8 +253,12 @@ impl display::Shown for Mutex<Shared> {
         }
     }
 
-    fn log(&self, line: &str) {
-        lock(self).logs.push(line.to_string());
+    fn log(&self, lines: &[&str], patient: bool) -> bool {
+        let Some(mut s) = display::lock_if(self, patient) else {
+            return false;
+        };
+        s.logs.extend(lines.iter().map(|l| l.to_string()));
+        true
     }
 
     /// Running steps are marked failed and the last frame is drawn.
@@ -656,6 +661,12 @@ fn watch_focus(shared: &Mutex<Shared>) {
     // held while the watch starts, so a `no_focus` meanwhile waits and then stops it
     let mut s = lock(shared);
     if !s.wants_focus {
+        return;
+    }
+    // a question took the terminal in the frame before: starting now would read its keys and
+    // save its raw mode as the one to go back to, so try again once it's answered
+    if s.paused > 0 {
+        s.refocus = true;
         return;
     }
     let Some(watch) = Watch::start() else { return };

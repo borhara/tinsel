@@ -93,7 +93,7 @@ pub(super) fn render(s: &Shared, now: Instant, width: usize, settled: bool) -> V
 }
 
 /// Text for a single row: line breaks in it become spaces.
-pub(super) fn one_row(text: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn one_row(text: &str) -> std::borrow::Cow<'_, str> {
     if text.contains(['\n', '\r']) {
         text.replace("\r\n", " ").replace(['\n', '\r'], " ").into()
     } else {
