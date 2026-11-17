@@ -93,14 +93,14 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 pub use field::TextInput;
-pub use frame::{CursorShape, Frame};
+pub use frame::{CursorShape, Frame, TerminalCursor};
 pub use grid::{Grid, GridState};
 pub use input::{Key, Mods, Mouse, MouseKind, NamedKey};
 pub use keys::Keys;
 pub use layout::{Rect, Size};
 pub use overlay::{Modal, Toasts};
 pub use scroll::{Scroll, ScrollView};
-pub use textarea::TextArea;
+pub use textarea::{Position, TextArea};
 pub use widgets::{Footer, List, Loading, Panel, Plot, Sparkles, Stat, Tabs, Widget, big, hints};
 
 use crate::block::Block;
@@ -121,8 +121,13 @@ pub enum Event {
     Mouse(Mouse),
     /// Time passed: [`App::fps`] of these arrive a second.
     Tick,
-    /// The terminal changed size, to this many columns and rows.
-    Resize(usize, usize),
+    /// The terminal changed size.
+    Resize {
+        /// Its width now, in columns.
+        width: usize,
+        /// Its height now, in rows.
+        height: usize,
+    },
     /// A [`Waker`] was woken: something another thread was doing is ready to look at.
     Wake,
     /// The terminal window gained (`true`) or lost (`false`) focus, where the terminal says so:
@@ -214,7 +219,10 @@ fn run_app(app: &mut dyn App) -> io::Result<()> {
             // reads give up every 0.1s, so a resize is passed on that soon, however slow
             // the app ticks
             if term::resized() {
-                let _ = resizes.send(Ok(Event::Resize(term::width(), term::height())));
+                let _ = resizes.send(Ok(Event::Resize {
+                    width: term::width(),
+                    height: term::height(),
+                }));
             }
             n
         };
@@ -253,7 +261,7 @@ fn drive(
     // the frame before last, whose cells the next frame reuses
     let mut spare: Option<Frame> = None;
     let mut titled: Option<String> = None;
-    let mut cursor: Option<(usize, usize, CursorShape)> = None;
+    let mut cursor: Option<TerminalCursor> = None;
     let mut cursor_color: Option<crate::style::Rgb> = None;
     let mut window_color: Option<crate::style::Rgb> = None;
     loop {
@@ -279,7 +287,11 @@ fn drive(
         if now_size != size {
             size = now_size;
             shown = None;
-            if app.event(&Event::Resize(size.0, size.1)) == Flow::Quit {
+            if app.event(&Event::Resize {
+                width: size.0,
+                height: size.1,
+            }) == Flow::Quit
+            {
                 return Ok(());
             }
         }
@@ -314,7 +326,7 @@ fn drive(
             // nothing more can be typed, so the app can't be told to quit: it ends here
             let event = event?;
             // only a nudge: the size is looked at, and the app told, before the next frame
-            if matches!(event, Event::Resize(..)) {
+            if matches!(event, Event::Resize { .. }) {
                 continue;
             }
             if event == Event::Wake {
@@ -991,32 +1003,36 @@ mod tests {
         };
         drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
         assert_eq!(app.seen.iter().filter(|e| **e == Event::Tick).count(), 2);
-        assert!(app.seen.contains(&Event::Resize(30, 4)), "{:?}", app.seen);
+        assert!(
+            app.seen.contains(&Event::Resize { width: 30, height: 4 }),
+            "{:?}",
+            app.seen
+        );
 
         // and a resize the app quits on ends it there
         let mut app = Recorder {
-            quit_on: Some(Event::Resize(9, 9)),
+            quit_on: Some(Event::Resize { width: 9, height: 9 }),
             ..Recorder::default()
         };
         let mut first = true;
         let mut screen = || if std::mem::take(&mut first) { (5, 5) } else { (9, 9) };
         drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
-        assert_eq!(app.seen, [Event::Resize(9, 9)]);
+        assert_eq!(app.seen, [Event::Resize { width: 9, height: 9 }]);
 
         // a resize the reader passes on is seen at once, however slowly the app ticks, and
         // only once, at the size the screen says
         let mut app = Recorder {
-            quit_on: Some(Event::Resize(9, 9)),
+            quit_on: Some(Event::Resize { width: 9, height: 9 }),
             slow: true,
             ..Recorder::default()
         };
-        let rx = keys(&[Event::Resize(1, 1)]);
+        let rx = keys(&[Event::Resize { width: 1, height: 1 }]);
         let mut first = true;
         let mut screen = || if std::mem::take(&mut first) { (5, 5) } else { (9, 9) };
         let started = Instant::now();
         drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
         assert!(started.elapsed() < Duration::from_millis(500));
-        assert_eq!(app.seen, [Event::Resize(9, 9)]);
+        assert_eq!(app.seen, [Event::Resize { width: 9, height: 9 }]);
     }
 
     #[test]
