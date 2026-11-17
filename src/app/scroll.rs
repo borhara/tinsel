@@ -3,7 +3,7 @@
 use std::cell::Cell;
 
 use super::widgets::{scrollbar, wrap};
-use super::{Event, Frame, Key, MouseKind, Rect, Widget};
+use super::{Event, Frame, Key, Rect, Widget};
 use crate::style::paint;
 use crate::style::palette::MUTED;
 
@@ -92,22 +92,14 @@ impl Scroll {
         let (top, rows) = (self.top.get(), self.rows.get());
         let last = self.total.get().saturating_sub(rows);
         let page = rows.saturating_sub(1).max(1);
-        let to = match event {
-            Event::Key(Key::Up | Key::Char('k')) => top.saturating_sub(1),
-            Event::Key(Key::Down | Key::Char('j')) => top + 1,
-            Event::Key(Key::PageUp) => top.saturating_sub(page),
-            Event::Key(Key::PageDown | Key::Char(' ')) => top + page,
-            Event::Key(Key::Home | Key::Char('g')) => 0,
-            Event::Key(Key::End | Key::Char('G')) => last,
-            Event::Mouse(m) if m.kind == MouseKind::ScrollUp => top.saturating_sub(3),
-            Event::Mouse(m) if m.kind == MouseKind::ScrollDown => top + 3,
-            _ => return false,
+        // space pages down too, as in a pager
+        let event = match event {
+            Event::Key(Key::Char(' ')) => &Event::Key(Key::PageDown),
+            event => event,
         };
-        let to = to.min(last);
-        let up = matches!(
-            event,
-            Event::Key(Key::Up | Key::Char('k') | Key::PageUp | Key::Home | Key::Char('g'))
-        ) || matches!(event, Event::Mouse(m) if m.kind == MouseKind::ScrollUp);
+        let Some((to, up)) = super::step(top, last, page, 3, event) else {
+            return false;
+        };
         let was_following = self.following;
         self.top.set(to);
         // any way up stops following, even with nowhere to go, and down to the end starts it again
@@ -221,6 +213,7 @@ impl Widget for ScrollView<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::MouseKind;
 
     fn drawn(view: ScrollView, w: usize, h: usize) -> String {
         crate::set_color_mode(crate::ColorMode::None);
