@@ -406,6 +406,17 @@ impl Drop for Clock {
     }
 }
 
+/// Send the whole screen again with the next frame, colours and cursor included, as after
+/// [`suspend`]: for a terminal that may have lost track of what it shows. Does nothing when no
+/// app is running.
+///
+/// ```
+/// tinsel::app::redraw();
+/// ```
+pub fn redraw() {
+    REDRAW.with(|r| r.set(true));
+}
+
 /// Seconds since the app started, on the same clock as [`Frame::time`], so something that
 /// happens in [`App::event`] can be animated from that moment in [`App::view`] (a
 /// [`Modal`] rising into place). 0 when no app is running, as in tests.
@@ -930,6 +941,35 @@ mod tests {
         // one slow tick, then nineteen fast ones
         assert!(took >= Duration::from_millis(900), "{took:?}");
         assert!(took < Duration::from_millis(1900), "{took:?}");
+    }
+
+    #[test]
+    fn a_redraw_sends_everything_again() {
+        struct Asks(u32);
+        impl App for Asks {
+            fn view(&self, frame: &mut Frame) {
+                frame.print(frame.area(), 0, "same");
+                frame.set_window_color(crate::Rgb(1, 2, 3));
+            }
+            fn event(&mut self, event: &Event) -> Flow {
+                self.0 += u32::from(*event == Event::Tick);
+                if self.0 == 1 {
+                    redraw();
+                }
+                if self.0 == 3 { Flow::Quit } else { Flow::Continue }
+            }
+            fn fps(&self) -> u32 {
+                240
+            }
+        }
+        crate::with_color_mode(crate::ColorMode::TrueColor, || {
+            let rx = keys(&[]);
+            let mut out = Vec::new();
+            drive(&mut Asks(0), &rx, &mut out, &mut || (4, 1)).unwrap();
+            let out = String::from_utf8(out).unwrap();
+            assert_eq!(out.matches("same").count(), 2, "{out:?}");
+            assert_eq!(out.matches("\x1b]11;").count(), 2, "{out:?}");
+        });
     }
 
     #[test]
