@@ -885,13 +885,22 @@ fn complete_path(typed: &str) -> Vec<String> {
 
 /// [`complete_path`], with `~` standing for `home`.
 fn complete_path_in(typed: &str, home: &str) -> Vec<String> {
-    let expanded = match typed.strip_prefix('~') {
-        Some(rest) if !home.is_empty() => format!("{home}{rest}"),
-        _ => typed.to_string(),
+    let separators = ['/', std::path::MAIN_SEPARATOR];
+    // only `~` on its own or before a separator is home; `~bob` is someone else's
+    let home_rest = typed
+        .strip_prefix('~')
+        .filter(|rest| !home.is_empty() && (rest.is_empty() || rest.starts_with(separators)));
+    if home_rest == Some("") {
+        return vec![format!("~{}", std::path::MAIN_SEPARATOR)];
+    }
+    let expanded = match home_rest {
+        Some(rest) => format!("{home}{rest}"),
+        None => typed.to_string(),
     };
-    let split = expanded.rfind(['/', std::path::MAIN_SEPARATOR]).map_or(0, |i| i + 1);
-    let (dir, prefix) = expanded.split_at(split);
-    let typed_dir = &typed[..typed.len() - prefix.len()];
+    // the folder and the name being typed, split in what was typed and in what it stands for
+    let split = |s: &str| s.rfind(separators).map_or(0, |i| i + 1);
+    let (dir, prefix) = expanded.split_at(split(&expanded));
+    let typed_dir = &typed[..split(typed)];
     let Ok(entries) = std::fs::read_dir(if dir.is_empty() { "." } else { dir }) else {
         return Vec::new();
     };
@@ -3125,6 +3134,12 @@ mod tests {
         assert_eq!(complete_path_in(&format!("{typed}."), ""), [format!("{typed}.hidden")]);
         let home = dir.display().to_string();
         assert_eq!(complete_path_in("~/C", &home), ["~/Cargo.toml"]);
+        // `~` alone stands for the home folder, and no home means no `~`
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(complete_path_in("~", &home), [format!("~{sep}")]);
+        assert_eq!(complete_path_in("~", "/h"), [format!("~{sep}")]);
+        assert_eq!(complete_path_in("~nobody-here/x", &home), Vec::<String>::new());
+        assert_eq!(complete_path_in("~", ""), Vec::<String>::new());
         assert_eq!(complete_path_in("/nonexistent/x", &home), Vec::<String>::new());
         assert!(!complete_path("").is_empty(), "the current folder has files");
         let q = Input::new("Path").paths();
