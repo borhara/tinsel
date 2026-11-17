@@ -103,7 +103,7 @@ pub fn doctor() -> Block {
     rows.push((
         "frame rate",
         format!("{fps} a second"),
-        source("TINSEL_FPS", from_env, fps == crate::DEFAULT_FPS),
+        source("TINSEL_FPS", from_env, fps == crate::fps::DEFAULT_FPS),
     ));
 
     let (focus, why) = crate::watch::why();

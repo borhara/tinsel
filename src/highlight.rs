@@ -2,6 +2,8 @@
 //! keys in config files. One line at a time, so a string or comment that spans lines is only
 //! coloured on its first.
 
+pub use crate::layout::IntoLang;
+
 use crate::style::palette::{AMBER, BLUSH, MUTED, ROSE, SAGE, SOFT, TEXT};
 use crate::style::{Rgb, mix, paint};
 

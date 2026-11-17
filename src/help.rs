@@ -40,7 +40,7 @@ struct Group {
 ///
 /// [`animate`](Help::animate) prints it with a short entrance (lines fade in one after
 /// another while the name shimmers) when stdout is a terminal, and plainly otherwise. Either
-/// way, the ✦ beside the name is left [blinking](crate::blink), so it keeps twinkling in
+/// way, the ✦ beside the name is left [blinking](crate::style::blink), so it keeps twinkling in
 /// terminals that support it after your program has exited.
 ///
 /// ```

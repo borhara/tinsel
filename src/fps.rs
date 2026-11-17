@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 /// Frames a second unless [`set_fps`] or `TINSEL_FPS` says otherwise.
-pub const DEFAULT_FPS: u32 = 60;
+pub(crate) const DEFAULT_FPS: u32 = 60;
 
 // 0 = not decided yet
 static FPS: AtomicU32 = AtomicU32::new(0);
