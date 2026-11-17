@@ -283,8 +283,11 @@ impl<'a> Grid<'a> {
     /// header, and a spinner.
     #[must_use]
     pub fn loading(mut self, loading: bool) -> Self {
+        // `false` takes back an earlier `true`, but leaves an error shown
         if loading {
             self.body = Body::Loading;
+        } else if matches!(self.body, Body::Loading) {
+            self.body = Body::Rows;
         }
         self
     }
@@ -924,6 +927,14 @@ mod tests {
         }
         let shown = drawn(10, 5, grid);
         assert!(!shown.contains("far") && shown.contains("r7"), "{shown}");
+    }
+
+    #[test]
+    fn loading_false_takes_back_loading_but_not_an_error() {
+        let grid = Grid::new(["name"]).row(["core"]);
+        assert!(matches!(grid.loading(true).loading(false).body, Body::Rows));
+        let grid = Grid::new(["name"]).error("offline");
+        assert!(matches!(grid.loading(false).body, Body::Error(_)));
     }
 
     #[test]
