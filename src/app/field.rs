@@ -6,13 +6,13 @@ use crate::style::{ColorMode, Rgb, color_mode, italic, mix, paint, paint_bg};
 use crate::text::char_width;
 
 /// A box to type into: a filter, a search, a name. Keep one in your app, pass it every
-/// event while it has focus, and read what's typed with [`value`](Input::value).
+/// event while it has focus, and read what's typed with [`value`](TextInput::value).
 ///
 /// ```
-/// use tinsel::app::{Event, Frame, Input, Key};
+/// use tinsel::app::{Event, Frame, TextInput, Key};
 ///
 /// tinsel::set_color_mode(tinsel::ColorMode::None);
-/// let mut filter = Input::new().prompt("/").placeholder("filter by name");
+/// let mut filter = TextInput::new().prompt("/").placeholder("filter by name");
 /// let mut frame = Frame::new(20, 1);
 /// frame.render(frame.area(), &filter);
 /// assert_eq!(frame.snapshot().plain(), "/ filter by name");
@@ -24,7 +24,7 @@ use crate::text::char_width;
 /// assert_eq!(filter.value(), "api");
 /// ```
 #[derive(Clone, Debug)]
-pub struct Input {
+pub struct TextInput {
     value: Vec<char>,
     at: usize,
     prompt: String,
@@ -32,16 +32,16 @@ pub struct Input {
     focused: bool,
 }
 
-impl Default for Input {
+impl Default for TextInput {
     fn default() -> Self {
-        Input::new()
+        TextInput::new()
     }
 }
 
-impl Input {
+impl TextInput {
     /// An empty box, without focus.
     pub fn new() -> Self {
-        Input {
+        TextInput {
             value: Vec::new(),
             at: 0,
             prompt: "›".into(),
@@ -95,9 +95,9 @@ impl Input {
     /// Returns whether it used the event, so Enter, Esc and Tab are left for the app.
     ///
     /// ```
-    /// use tinsel::app::{Event, Input, Key};
+    /// use tinsel::app::{Event, TextInput, Key};
     ///
-    /// let mut name = Input::new();
+    /// let mut name = TextInput::new();
     /// name.focus(true);
     /// name.set_value("my-ap");
     /// name.event(&Event::Key(Key::Char('p')));
@@ -148,7 +148,7 @@ impl Input {
     }
 }
 
-impl Widget for Input {
+impl Widget for TextInput {
     fn render(&self, area: Rect, frame: &mut Frame) {
         if area.is_empty() {
             return;
@@ -203,7 +203,7 @@ impl Widget for Input {
     }
 }
 
-/// The keys an [`Input`] and a [`TextArea`](super::TextArea) edit a line with alike, on
+/// The keys an [`TextInput`] and a [`TextArea`](super::TextArea) edit a line with alike, on
 /// `line` with the cursor `at`: Home and Ctrl-A to the start, End and Ctrl-E to the end,
 /// Ctrl-U and Ctrl-K to cut what's before or after, Ctrl-W or Alt-Backspace to cut the word
 /// before, and Alt or Ctrl with ←→ (or Alt-B and Alt-F) to move a word at a time. Returns
@@ -262,13 +262,13 @@ pub(super) fn caret(c: char) -> String {
 mod tests {
     use super::*;
 
-    fn typed(input: &mut Input, keys: &[Key]) {
+    fn typed(input: &mut TextInput, keys: &[Key]) {
         for k in keys {
             input.event(&Event::Key(*k));
         }
     }
 
-    fn drawn(input: &Input, w: usize) -> String {
+    fn drawn(input: &TextInput, w: usize) -> String {
         crate::set_color_mode(ColorMode::None);
         let mut f = Frame::new(w, 1);
         f.render(f.area(), input);
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn edits_and_moves() {
-        let mut input = Input::new();
+        let mut input = TextInput::new();
         typed(&mut input, &[Key::Char('x')]);
         assert_eq!(input.value(), "", "no focus, no typing");
         input.focus(true);
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn a_paste_goes_in_at_the_cursor_on_one_line() {
-        let mut input = Input::new();
+        let mut input = TextInput::new();
         let paste = Event::Paste("b\nc\td\x07".into());
         assert!(!input.event(&paste), "no focus, no pasting");
         input.focus(true);
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn long_text_scrolls_to_keep_the_cursor_in_view() {
-        let mut input = Input::default();
+        let mut input = TextInput::default();
         input.focus(true);
         input.set_value("abcdefghij");
         assert_eq!(drawn(&input, 8), "› fghij ", "the cursor sits past the end");
@@ -331,7 +331,7 @@ mod tests {
         assert_eq!(drawn(&input, 8), "› abcdef");
         input.focus(false);
         assert_eq!(drawn(&input, 20), "› abcdefghij");
-        assert_eq!(drawn(&Input::new(), 0), "");
+        assert_eq!(drawn(&TextInput::new(), 0), "");
 
         // wide characters scroll a whole one at a time, and a long value shows only its end
         input.focus(true);
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn the_cursor_shows_without_colour_too() {
         crate::set_color_mode(ColorMode::None);
-        let mut input = Input::new().placeholder("name");
+        let mut input = TextInput::new().placeholder("name");
         input.focus(true);
         let mut f = Frame::new(10, 1);
         f.render(f.area(), &input);
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn deletes_forwards_and_lights_the_caret_in_colour() {
-        let mut input = Input::new();
+        let mut input = TextInput::new();
         input.focus(true);
         input.set_value("abc");
         typed(&mut input, &[Key::Home, Key::Delete]);
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn an_empty_field_without_focus_shows_its_placeholder() {
-        let input = Input::new().placeholder("name");
+        let input = TextInput::new().placeholder("name");
         assert!(drawn(&input, 20).contains("name"));
     }
 }

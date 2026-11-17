@@ -147,7 +147,7 @@ fn a_grid_scrolls_sideways_a_column_at_a_time() {
 /// A little services screen with every piece on it, to see how they sit together.
 struct Services {
     cursor: Cursor,
-    filter: tinsel::app::Input,
+    filter: tinsel::app::TextInput,
     toasts: tinsel::app::Toasts,
     confirm: bool,
 }
@@ -183,7 +183,7 @@ fn every_piece_together_in_plain_text() {
     tinsel::set_color_mode(tinsel::ColorMode::None);
     let mut app = Services {
         cursor: Cursor::new(),
-        filter: tinsel::app::Input::new().prompt("/").placeholder("filter by name"),
+        filter: tinsel::app::TextInput::new().prompt("/").placeholder("filter by name"),
         toasts: tinsel::app::Toasts::new(),
         confirm: false,
     };
