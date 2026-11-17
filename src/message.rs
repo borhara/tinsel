@@ -19,6 +19,7 @@ use crate::text;
 /// assert!(tinsel::text::strip_ansi(&line).contains("Deployed my-app"));
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Tone {
     /// `●` in rose: something finished.
     Success,
@@ -164,6 +165,7 @@ pub fn rule(label: &str) -> String {
 
 /// The tone of a [`callout`] block, which sets its colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Callout {
     /// Rose: worth knowing.
     Note,

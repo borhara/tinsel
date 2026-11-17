@@ -295,6 +295,7 @@ pub struct Frame {
 /// How the terminal's own cursor looks, when a frame shows it with
 /// [`set_cursor`](Frame::set_cursor).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CursorShape {
     /// A solid block over the cell, for moving around.
     #[default]

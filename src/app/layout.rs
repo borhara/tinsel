@@ -27,6 +27,7 @@ pub struct Rect {
 
 /// How much of a split one piece gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Size {
     /// Exactly this many cells, if there's room.
     Fixed(usize),
