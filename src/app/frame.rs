@@ -227,11 +227,38 @@ impl Style {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Cell {
     ch: char,
+    /// Characters that take no room of their own (combining accents) drawn on `ch`, `'\0'`
+    /// where there are none.
+    marks: [char; 2],
     style: Style,
+}
+
+impl Cell {
+    fn new(ch: char, style: Style) -> Cell {
+        Cell {
+            ch,
+            marks: ['\0'; 2],
+            style,
+        }
+    }
+
+    /// The character, with any marks on it.
+    fn push_to(&self, out: &mut String) {
+        out.push(self.ch);
+        out.extend(self.marks.iter().filter(|&&m| m != '\0'));
+    }
+
+    /// Draw `mark` on this cell's character, if there's room for it.
+    fn mark(&mut self, mark: char) {
+        if let Some(slot) = self.marks.iter_mut().find(|m| **m == '\0') {
+            *slot = mark;
+        }
+    }
 }
 
 const EMPTY: Cell = Cell {
     ch: ' ',
+    marks: ['\0'; 2],
     style: Style {
         fg: Ink::Default,
         bg: Ink::Default,
@@ -582,6 +609,8 @@ impl Frame {
         let mut col = x;
         let mut style = Style::default();
         let mut chars = text.chars().peekable();
+        // the cell the last character went in, for marks that follow it
+        let mut last: Option<usize> = None;
         while let Some(c) = chars.next() {
             if c == '\x1b' {
                 match chars.next() {
@@ -611,14 +640,25 @@ impl Frame {
             }
             let c = if c == '\t' { ' ' } else { c };
             let w = char_width(c);
-            if c.is_control() || w == 0 {
+            if c.is_control() {
                 continue;
             }
+            if w == 0 {
+                // a joiner or an emoji selector would have the terminal draw something wider
+                // than the cells set aside for it, so those are still left out
+                if !matches!(c, '\u{200D}' | '\u{FE0F}') {
+                    if let Some(at) = last {
+                        self.cells[at].mark(c);
+                    }
+                }
+                continue;
+            }
+            last = None;
             if skip > 0 {
                 // half of a wide character scrolled off: the half still showing is a space
                 if w > skip && col < end {
                     let style = self.over(row + col, style);
-                    self.put(row, col, Cell { ch: ' ', style });
+                    self.put(row, col, Cell::new(' ', style));
                     col += 1;
                 }
                 skip = skip.saturating_sub(w);
@@ -628,10 +668,11 @@ impl Frame {
                 break;
             }
             let style = self.over(row + col, style);
-            self.put(row, col, Cell { ch: c, style });
+            self.put(row, col, Cell::new(c, style));
             if w == 2 {
-                self.put(row, col + 1, Cell { ch: '\0', style });
+                self.put(row, col + 1, Cell::new('\0', style));
             }
+            last = Some(row + col);
             col += w;
         }
         col - x
@@ -649,7 +690,8 @@ impl Frame {
     fn put(&mut self, row: usize, col: usize, cell: Cell) {
         let old = self.cells[row + col];
         if old.ch == '\0' && col > 0 {
-            self.cells[row + col - 1].ch = ' ';
+            let left = &mut self.cells[row + col - 1];
+            *left = Cell::new(' ', left.style);
         }
         // even when the new cell is itself a wide character's tail: the old one's tail is one
         // further on, and would be left without its character
@@ -676,7 +718,7 @@ impl Frame {
                 cell.style.sgr(&mut out);
                 style = cell.style;
             }
-            out.push(cell.ch);
+            cell.push_to(&mut out);
         }
         if style != Style::default() {
             out.push_str("\x1b[0m");
@@ -746,6 +788,9 @@ impl Frame {
                 let look = cell.style.look(fg, bg);
                 let mut text = String::new();
                 escape(cell.ch, &mut text);
+                for &mark in cell.marks.iter().filter(|&&m| m != '\0') {
+                    escape(mark, &mut text);
+                }
                 if char_width(cell.ch) == 2 {
                     // fonts rarely draw wide characters exactly two columns across; make them
                     text = format!("<span style=\"display:inline-block;width:2ch\">{text}</span>");
@@ -856,6 +901,29 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accents_written_after_their_letter_stay_on_it() {
+        let mut f = Frame::new(8, 1);
+        // "café" and "ñ" with the accents as separate characters, then a mark with nothing
+        // before it, and an emoji with its selector and a joiner
+        let n = f.print(f.area(), 0, "cafe\u{301} n\u{303}\u{301}\u{302}");
+        assert_eq!(n, 6);
+        assert_eq!(f.snapshot().plain(), "cafe\u{301} n\u{303}\u{301}");
+        assert!(f.diff(None).contains("e\u{301} n\u{303}\u{301}"));
+        assert!(f.html_pre().contains("e\u{301} n\u{303}\u{301}"));
+
+        let mut f = Frame::new(8, 1);
+        f.print(f.area(), 0, "\u{301}a\u{2764}\u{FE0F}\u{200D}b");
+        assert_eq!(f.snapshot().plain(), "a\u{2764}b");
+        // scrolled off with its letter, and gone when the cell is written over
+        f.print_from(f.area(), 0, "e\u{301}x", 1);
+        assert_eq!(f.snapshot().plain(), "x\u{2764}b");
+        let mut f = Frame::new(4, 1);
+        f.print(f.area(), 0, "e\u{301}");
+        f.print(f.area(), 0, "e");
+        assert_eq!(f.snapshot().plain(), "e");
+    }
 
     #[test]
     fn the_cursor_is_put_back_after_drawing_and_left_alone_otherwise() {
@@ -997,9 +1065,10 @@ mod tests {
     fn writes_text_and_blocks_and_drops_what_it_cant_keep() {
         let mut f = Frame::new(8, 3).at(1.5);
         assert_eq!(f.time(), 1.5);
-        // a hyperlink keeps its text, tabs become spaces, other controls and combining marks go
+        // a hyperlink keeps its text, tabs become spaces, other controls go,
+        // and combining marks stay on their letter
         let n = f.print(f.area(), 0, "\x1b]8;;https://x.y\x1b\\li\x1b]8;;\x07nk\ta\u{7}e\u{301}");
-        assert_eq!((f.row_text(0).as_str(), n), ("link ae", 7));
+        assert_eq!((f.row_text(0).as_str(), n), ("link ae\u{301}", 7));
         assert_eq!(f.print(f.area(), 5, "past the bottom"), 0);
         f.lines(
             Rect::new(2, 1, 6, 1),
@@ -1008,7 +1077,7 @@ mod tests {
         assert_eq!(f.row_text(1), "  one");
         f.tint(f.area(), crate::palette::ROSE);
         f.clear(Rect::new(0, 0, 4, 1));
-        assert_eq!(f.row_text(0), "     ae");
+        assert_eq!(f.row_text(0), "     ae\u{301}");
         assert_eq!(Frame::new(0, 2).diff(None), "");
     }
 
