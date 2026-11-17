@@ -70,7 +70,9 @@ impl Spinner {
 
     /// The spinner with this name, if there is one: handy for a `--spinner` flag.
     pub fn from_name(name: &str) -> Option<Spinner> {
-        Spinner::ALL.into_iter().find(|s| s.name() == name)
+        Spinner::ALL
+            .into_iter()
+            .find(|s| s.name().eq_ignore_ascii_case(name.trim()))
     }
 
     /// Columns the spinner occupies; step marks are centred in the same space so labels never shift.
