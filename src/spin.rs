@@ -41,7 +41,7 @@ const TAKE_OVER: &str = "\x1b[?25l\x1b[?7l";
 const GIVE_BACK: &str = "\x1b[?7h\x1b[?25h";
 
 impl Ticker {
-    fn start(frame: impl Fn(f32) -> String + Send + 'static) -> Ticker {
+    fn start(frame: impl Fn(f64) -> String + Send + 'static) -> Ticker {
         let prev_interrupt = term::guard_interrupt();
         output::write(TAKE_OVER);
         let line = Arc::new(Mutex::new(LineState::default()));
@@ -54,7 +54,7 @@ impl Ticker {
                 {
                     let s = lock(&state);
                     if s.paused == 0 && !s.abandoned {
-                        output::write(&format!("\r{}\x1b[K", frame(t0.elapsed().as_secs_f32())));
+                        output::write(&format!("\r{}\x1b[K", frame(t0.elapsed().as_secs_f64())));
                     }
                 }
                 thread::sleep(crate::fps::frame(rate.load(Ordering::Relaxed)));
@@ -448,7 +448,7 @@ impl<I: Iterator> Iterator for WithProgress<I> {
     }
 }
 
-fn progress_line(label: &str, c: &Counts, elapsed: Duration, t: f32) -> String {
+fn progress_line(label: &str, c: &Counts, elapsed: Duration, t: f64) -> String {
     let amount = |n: u64| {
         if c.bytes { format::bytes(n) } else { format::count(n) }
     };

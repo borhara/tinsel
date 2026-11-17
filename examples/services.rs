@@ -120,7 +120,7 @@ struct Dashboard {
     filter: TextInput,
     drifted_only: bool,
     env: usize,
-    dialog: Option<(Dialog, f32)>,
+    dialog: Option<(Dialog, f64)>,
     toasts: Toasts,
     loading: bool,
     refreshed: Option<Instant>,
@@ -226,14 +226,16 @@ impl Dashboard {
         match ran {
             Ok(Ok(status)) if status.success() => {
                 self.toasts
-                    .push(Tone::Success, format!("signed in to {}", ENVS[self.env]));
+                    .push(app::time(), Tone::Success, format!("signed in to {}", ENVS[self.env]));
                 self.refresh();
             }
-            Ok(Ok(status)) => self.toasts.push(Tone::Error, format!("sign-in failed ({status})")),
+            Ok(Ok(status)) => self
+                .toasts
+                .push(app::time(), Tone::Error, format!("sign-in failed ({status})")),
             Ok(Err(e)) => self
                 .toasts
-                .push(Tone::Error, format!("couldn't run the login command: {e}")),
-            Err(e) => self.toasts.push(Tone::Error, e.to_string()),
+                .push(app::time(), Tone::Error, format!("couldn't run the login command: {e}")),
+            Err(e) => self.toasts.push(app::time(), Tone::Error, e.to_string()),
         }
     }
 
@@ -460,7 +462,7 @@ impl Dashboard {
             (Dialog::Restart(name), Key::Char('y') | Key::Enter) => {
                 let msg = format!("restarting {name} in {}", ENVS[self.env]);
                 self.dialog = None;
-                self.toasts.push(Tone::Success, msg);
+                self.toasts.push(app::time(), Tone::Success, msg);
             }
             (Dialog::Help, _) | (_, Key::Esc | Key::Char('n' | 'q')) => self.dialog = None,
             _ => {}
@@ -491,10 +493,13 @@ impl App for Dashboard {
                 self.refreshed = Some(Instant::now());
                 let down = self.services.iter().filter(|s| s.health == Health::Down).count();
                 if down > 0 {
-                    self.toasts
-                        .push(Tone::Warn, format!("{} down", format::plural(down as u64, "service")));
+                    self.toasts.push(
+                        app::time(),
+                        Tone::Warn,
+                        format!("{} down", format::plural(down as u64, "service")),
+                    );
                 } else if !first {
-                    self.toasts.push(Tone::Info, "all services up to date");
+                    self.toasts.push(app::time(), Tone::Info, "all services up to date");
                 }
             }
             return Flow::Continue;

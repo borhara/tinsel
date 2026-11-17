@@ -11,6 +11,18 @@ const STARS: [&str; 4] = ["·", "⋆", "✧", "✦"];
 /// Eighths of a cell, lowest to full, for bars that rise.
 pub(crate) const LEVELS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
+/// The angle `t` seconds into a turning `speed` radians a second, as an f32 kept within one
+/// turn, so a sine of it stays smooth however long the clock has run.
+pub(crate) fn turn(t: f64, speed: f64) -> f32 {
+    (t * speed).rem_euclid(std::f64::consts::TAU) as f32
+}
+
+/// How many times something stepping `rate` times a second has stepped by `t`, for picking a
+/// frame from a list.
+pub(crate) fn tick(t: f64, rate: f64) -> usize {
+    (t.max(0.0) * rate) as u64 as usize
+}
+
 /// Random-looking but repeatable 0..1 noise for a cell at a moment, so glitter flickers
 /// without needing a random number generator.
 pub(crate) fn noise(cell: u32, tick: u32) -> f32 {
@@ -85,27 +97,27 @@ impl Spinner {
     }
 
     /// What the spinner looks like `t` seconds in. Call it every frame with the time so far.
-    pub fn frame(self, t: f32) -> Line {
+    pub fn frame(self, t: f64) -> Line {
         let rest = mix(TRACK, BERRY, 0.45);
         match self {
             Spinner::Sparkle => {
                 const PHASE: [f32; 3] = [0.0, 2.1, 4.2];
-                const SPEED: [f32; 3] = [4.6, 6.1, 3.9];
+                const SPEED: [f64; 3] = [4.6, 6.1, 3.9];
                 (0..3).fold(Line::new(), |line, i| {
-                    let b = ((t * SPEED[i] + PHASE[i]).sin() + 1.0) / 2.0;
+                    let b = ((turn(t, SPEED[i]) + PHASE[i]).sin() + 1.0) / 2.0;
                     // squared so each star rests dim and only briefly flares
                     let b = b * b;
                     line.push(sample(&[rest, ROSE, SHINE], b), STARS[((b * 4.0) as usize).min(3)])
                 })
             }
             Spinner::Dots => (0..3).fold(Line::new(), |line, i| {
-                let v = (t * 5.0 - i as f32 * 0.9).sin().max(0.0).powi(2);
+                let v = (turn(t, 5.0) - i as f32 * 0.9).sin().max(0.0).powi(2);
                 line.push(sample(&[rest, ROSE, PETAL], v), "•")
             }),
             Spinner::Wave => (0..5).fold(Line::new(), |line, i| {
                 let x = i as f32;
                 // two waves at unrelated speeds, so the shape keeps changing like real audio
-                let h = 0.5 + 0.3 * (t * 6.0 - x * 0.9).sin() + 0.2 * (t * 9.7 + x * 1.7).sin();
+                let h = 0.5 + 0.3 * (turn(t, 6.0) - x * 0.9).sin() + 0.2 * (turn(t, 9.7) + x * 1.7).sin();
                 let h = h.clamp(0.0, 1.0);
                 line.push(
                     sample(&[rest, ROSE, SHINE], h * h),
@@ -114,7 +126,7 @@ impl Spinner {
             }),
             Spinner::Comet => {
                 // triangle wave across the track, eased at the ends so the turn feels soft
-                let phase = (t * 0.9).rem_euclid(2.0);
+                let phase = (t * 0.9).rem_euclid(2.0) as f32;
                 let x = if phase > 1.0 { 2.0 - phase } else { phase };
                 let eased = x * x * (3.0 - 2.0 * x);
                 let head = eased * 4.0;
@@ -138,13 +150,13 @@ impl Spinner {
                     line.push(sample(&[rest, ROSE, SHINE], v), glyph)
                 })
             }
-            Spinner::Arc => Line::new().push(ROSE, ARC[(t * 12.0) as usize % ARC.len()]),
+            Spinner::Arc => Line::new().push(ROSE, ARC[tick(t, 12.0) % ARC.len()]),
             Spinner::Orbit => {
-                let drift = ((t * 0.8).sin() + 1.0) / 2.0;
-                Line::new().push(sample(&RAMP, drift), ORBIT[(t * 12.0) as usize % ORBIT.len()])
+                let drift = (turn(t, 0.8).sin() + 1.0) / 2.0;
+                Line::new().push(sample(&RAMP, drift), ORBIT[tick(t, 12.0) % ORBIT.len()])
             }
             Spinner::Pulse => {
-                let v = ((t * 3.2).sin() + 1.0) / 2.0;
+                let v = (turn(t, 3.2).sin() + 1.0) / 2.0;
                 let glyph = if v > 0.92 {
                     "✦"
                 } else if v > 0.66 {
@@ -162,10 +174,10 @@ impl Spinner {
 
 /// A soft light passing slowly across the label, with a little glitter: letters near the
 /// light now and then catch it and flash.
-pub fn shimmer(label: &str, t: f32) -> Line {
+pub fn shimmer(label: &str, t: f64) -> Line {
     let n = label.chars().count() as f32;
-    let pos = (t * 14.0).rem_euclid(n + 24.0) - 12.0;
-    let tick = (t * 7.0) as u32;
+    let pos = (t * 14.0).rem_euclid(n as f64 + 24.0) as f32 - 12.0;
+    let tick = tick(t, 7.0) as u32;
     label.chars().enumerate().fold(Line::new(), |line, (j, c)| {
         let k = (-(j as f32 - pos).powi(2) / 12.0).exp();
         let glitter = noise(j as u32, tick) < 0.015 + 0.2 * k;
@@ -176,7 +188,7 @@ pub fn shimmer(label: &str, t: f32) -> Line {
 
 /// The mark a step shows in the moment after it finishes: a quick twinkle that settles into
 /// `●`. `None` once settled.
-pub fn pop(age: f32) -> Option<Line> {
+pub fn pop(age: f64) -> Option<Line> {
     let (glyph, color) = match age {
         a if a < 0.1 => ("✧", SHINE),
         a if a < 0.22 => ("✦", SHINE),
@@ -194,7 +206,7 @@ pub fn bar(fraction: f32, width: usize) -> Line {
 
 /// [`tinsel::bar`](crate::bar) with a soft glint running along the filled part, for bars
 /// that are still moving.
-pub fn live_bar(fraction: f32, width: usize, t: f32) -> Line {
+pub fn live_bar(fraction: f32, width: usize, t: f64) -> Line {
     shiny_bar(fraction, width, Some(t))
 }
 
@@ -204,10 +216,10 @@ pub(crate) fn fraction(f: f32) -> f32 {
     if f.is_nan() { 0.0 } else { f.clamp(0.0, 1.0) }
 }
 
-fn shiny_bar(fraction: f32, width: usize, t: Option<f32>) -> Line {
+fn shiny_bar(fraction: f32, width: usize, t: Option<f64>) -> Line {
     let halves = (self::fraction(fraction) * width as f32 * 2.0).round() as usize;
     let filled = halves.div_ceil(2) as f32;
-    let glint = t.map(|t| (t * 16.0).rem_euclid(filled + 10.0) - 5.0);
+    let glint = t.map(|t| (t * 16.0).rem_euclid(filled as f64 + 10.0) as f32 - 5.0);
     (0..width).fold(Line::new(), |line, i| {
         let base = sample(&RAMP, i as f32 / width.saturating_sub(1).max(1) as f32);
         let c = glint.map_or(base, |g| mix(base, SHINE, (-(i as f32 - g).powi(2) / 3.0).exp() * 0.75));
@@ -234,7 +246,7 @@ pub enum BarStyle {
 
 impl BarStyle {
     /// The bar at `fraction`, `t` seconds into its animation.
-    pub(crate) fn draw(self, fraction: f32, width: usize, t: f32) -> Line {
+    pub(crate) fn draw(self, fraction: f32, width: usize, t: f64) -> Line {
         match self {
             BarStyle::Line => live_bar(fraction, width, t),
             BarStyle::Waveform => live_waveform(fraction, width, t),
@@ -263,11 +275,11 @@ pub fn waveform(fraction: f32, width: usize) -> Line {
 
 /// [`tinsel::waveform`](crate::waveform) still playing: the bars just behind the playhead bounce, and the playhead
 /// itself glows.
-pub fn live_waveform(fraction: f32, width: usize, t: f32) -> Line {
+pub fn live_waveform(fraction: f32, width: usize, t: f64) -> Line {
     wave(fraction, width, Some(t))
 }
 
-fn wave(fraction: f32, width: usize, t: Option<f32>) -> Line {
+fn wave(fraction: f32, width: usize, t: Option<f64>) -> Line {
     let head = self::fraction(fraction) * width as f32;
     (0..width).fold(Line::new(), |line, i| {
         let x = i as f32;
@@ -277,7 +289,7 @@ fn wave(fraction: f32, width: usize, t: Option<f32>) -> Line {
         if let Some(t) = t.filter(|_| played > 0.0 && head < width as f32) {
             // the last few played columns dance, fading with distance from the head
             let near = (-(head - x - 0.5).max(0.0) / 2.5).exp();
-            h = (h + 0.3 * near * (t * 11.0 + x * 1.9).sin()).clamp(0.12, 1.0);
+            h = (h + 0.3 * near * (turn(t, 11.0) + x * 1.9).sin()).clamp(0.12, 1.0);
         }
         let glyph = LEVELS[((h * 7.0).round() as usize).min(7)];
         if played <= 0.0 {

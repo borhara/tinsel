@@ -259,7 +259,7 @@ fn every_spinner_fills_exactly_its_width() {
     plain();
     for spinner in Spinner::ALL {
         for i in 0..200 {
-            let frame = spinner.frame(i as f32 * 0.037);
+            let frame = spinner.frame(i as f64 * 0.037);
             assert_eq!(frame.width(), spinner.width(), "{} at frame {i}", spinner.name());
         }
         assert_eq!(Spinner::from_name(spinner.name()), Some(spinner));

@@ -51,6 +51,10 @@
 //! # Time
 //!
 //! [`Frame::time`] is the seconds since the app started, for anything animated, and
+//! [`time`] the same clock read in [`App::event`]. Both are `f64`, so they stay precise
+//! however long an app runs. Whatever animates from a moment is told that moment, rather
+//! than reading the clock itself: [`Modal::opened`], [`Toasts::push`] and
+//! [`Toasts::showing`] all take it, so they can be drawn at any time in tests.
 //! [`Event::Tick`] arrives [`fps`](App::fps) times a second, for polling whatever your
 //! dashboard shows. Work done on other threads can wake the app the moment it's ready with
 //! a [`Waker`], so it needn't tick quickly just to notice.
@@ -283,7 +287,7 @@ fn drive(
             Some(old) => old.renew(size.0, size.1),
             None => Frame::new(size.0, size.1),
         };
-        let mut frame = blank.at(start.elapsed().as_secs_f32());
+        let mut frame = blank.at(start.elapsed().as_secs_f64());
         app.view(&mut frame);
         let diff = frame.diff(shown.as_ref());
         let (hide, place) = frame.cursor_escape(cursor, !diff.is_empty());
@@ -464,8 +468,8 @@ pub fn redraw() {
 /// ```
 /// assert_eq!(tinsel::app::time(), 0.0);
 /// ```
-pub fn time() -> f32 {
-    STARTED.with(|s| s.get()).map_or(0.0, |at| at.elapsed().as_secs_f32())
+pub fn time() -> f64 {
+    STARTED.with(|s| s.get()).map_or(0.0, |at| at.elapsed().as_secs_f64())
 }
 
 /// One frame of an app at `width` by `height`, as text: for tests, and for printing what a
@@ -1470,7 +1474,7 @@ mod tests {
 
     #[test]
     fn the_app_clock_runs_while_it_does() {
-        struct Timed(f32);
+        struct Timed(f64);
         impl App for Timed {
             fn view(&self, _: &mut Frame) {}
             fn event(&mut self, _: &Event) -> Flow {
