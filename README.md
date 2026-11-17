@@ -24,7 +24,7 @@ upload.done();
 live.finish_with_card(Card::success("deployed").kv("url", "https://my-app.example.com"));
 ```
 
-```
+```text
   deploy  my-app → production
 
     ●    Build                                                        1.2s
@@ -72,7 +72,7 @@ cargo add tinsel
 
 **One task with a spinner**, then a message:
 
-```rust
+```rust,ignore
 let files = tinsel::spin("Counting files", || count_files());
 tinsel::success(&format!("found {files} files"));
 ```
@@ -80,7 +80,7 @@ tinsel::success(&format!("found {files} files"));
 **A step list** for anything with stages: see the example at the top. Steps can run at the
 same time from different threads, have sub-steps, and log lines above the display:
 
-```rust
+```rust,ignore
 let build = live.step("Build");
 let targets = [build.step("linux"), build.step("macos")];   // drawn indented, folded once they pass
 build.start();
@@ -103,7 +103,7 @@ through, like an audio track: `Live::new(…).bar(BarStyle::Waveform)`.
 **Run real commands as steps.** The latest line of output shows as the step's detail; if
 it fails, its last lines stay under it:
 
-```rust
+```rust,ignore
 use std::process::Command;
 
 build.run(Command::new("cargo").args(["build", "--release"]))?;
@@ -116,7 +116,7 @@ fetch.retry(3, || download(url))?;      // any closure returning a Result
 
 **See where the time went**, with `live.finish_with_timeline()`:
 
-```
+```text
   Build      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  1.7s
     linux    ━━━━━━━━━━━━━━━━━━━━━━━                           1.2s
     macos    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  1.7s
@@ -129,7 +129,7 @@ fetch.retry(3, || download(url))?;      // any closure returning a Result
 draws the `Block` it returns, a table of services say, with lines logged above it. It's
 cleared when it finishes, unless you `keep()` the last frame:
 
-```rust
+```rust,ignore
 let region = tinsel::Region::new(move || status_table(&state.lock().unwrap())).keep();
 region.log("api is up");
 region.finish();
@@ -137,7 +137,7 @@ region.finish();
 
 **A loop with a progress bar:**
 
-```rust
+```rust,ignore
 use tinsel::ProgressIterator;
 
 for file in files.iter().progress("Indexing") {
@@ -147,7 +147,7 @@ for file in files.iter().progress("Indexing") {
 
 **Ask questions**, and handle someone pressing Ctrl-C. Long lists filter as you type:
 
-```rust
+```rust,ignore
 use tinsel::prompt;
 
 match prompt::select("Deploy to", &["staging", "production"]) {
@@ -159,7 +159,7 @@ match prompt::select("Deploy to", &["staging", "production"]) {
 
 Text questions can validate, and ask again until the answer passes:
 
-```rust
+```rust,ignore
 let port = prompt::Input::new("Port")
     .placeholder("8080")
     .validate(|s| s.parse::<u16>().map(|_| ()).map_err(|_| "a port is 1-65535".into()))
@@ -174,7 +174,7 @@ prompt::confirm_typing("Delete my-app?", "my-app")?;                       // ty
 
 Lists can be grouped, and say why an option can't be picked:
 
-```rust
+```rust,ignore
 let service = prompt::Select::new("Service")
     .heading("Frontend").option("web").disabled("docs", "deploys paused")
     .heading("Backend").options(["api", "worker"])
@@ -190,7 +190,7 @@ let version = prompt::Dropdown::new("Roll back to")
 **Help that looks like the rest of your CLI**, with a short entrance on a terminal: lines
 fade in one after another while the name shimmers:
 
-```rust
+```rust,no_run
 tinsel::Help::new("deploy", "ship an app to the cloud")
     .version(env!("CARGO_PKG_VERSION"))
     .usage("deploy [OPTIONS] <APP>")
@@ -221,7 +221,7 @@ Table::new(["service", "status", "p95"])
 change it in `event`; `app::run` takes over the screen and gives it back afterwards (even on
 a panic). Panels shimmer when focused, lists scroll themselves, and numbers can be drawn big:
 
-```rust
+```rust,ignore
 use tinsel::app::{self, App, Frame, Panel, Plot, Stat, Size::*};
 
 struct Dash { latency: Vec<f64> }
@@ -253,13 +253,13 @@ screenshots.
 
 **Report an error** with its whole cause chain:
 
-```rust
+```rust,ignore
 tinsel::Report::from_error("couldn't start", &err)
     .hint("create app.toml, or pass --config <path>")
     .eprint();
 ```
 
-```
+```text
   ✕  couldn't start
      ╰─ couldn't read app.toml
         ╰─ No such file or directory (os error 2)
@@ -268,14 +268,14 @@ tinsel::Report::from_error("couldn't start", &err)
 
 …and point at the problem:
 
-```rust
+```rust,ignore
 Report::new("couldn't read app.toml")
     .cause("port must be a number")
     .code(Code::around(&config, 3, 1).path("app.toml").caret(8, 8, "not a number"))
     .eprint();
 ```
 
-```
+```text
   ✕  couldn't read app.toml
      ╰─ port must be a number
        ╭─ app.toml:3
@@ -287,7 +287,7 @@ Report::new("couldn't read app.toml")
 
 **Panics**, drawn the same way, with the terminal put back first:
 
-```rust
+```rust,no_run
 fn main() {
     tinsel::install_panic_hook();
     // …
@@ -300,7 +300,7 @@ fn main() {
 tinsel::set_output(tinsel::Output::Json);   // or TINSEL_OUTPUT=json
 ```
 
-```
+```text
 {"event":"step","title":"deploy","step":"Build","path":["Build"],"state":"done","secs":1.204}
 {"event":"error","title":"couldn't start","causes":["couldn't read app.toml"],"code":[],"hint":"…"}
 ```
@@ -356,7 +356,7 @@ Full reference with examples for every item: **[docs.rs/tinsel](https://docs.rs/
 Catch everything your own code prints through tinsel, as it would come out into a pipe:
 messages, steps, spinners, tables and errors, in order, without colour:
 
-```rust
+```rust,ignore
 #[test]
 fn deploy_says_where_it_went() {
     let printed = tinsel::capture(|| my_cli::deploy("production"));
@@ -428,8 +428,30 @@ report, to print from a `--debug-terminal` flag of your own.
 
 ## Platform notes
 
-Everything works on macOS, Linux and Windows. Prompts read single keypresses with `stty` on
-Unix and the console API on Windows (Windows Terminal or a Windows 10+ console). Ctrl-C puts
-the cursor and the terminal back everywhere. Focus awareness and terminal background
-detection need a terminal that answers: on Windows that's Windows Terminal, and in the older
-console they quietly do nothing rather than wait for answers that never come.
+Everything works on macOS, Linux and Windows. Ctrl-C puts the cursor and the terminal back
+everywhere.
+
+- **Raw mode on Unix shells out to `stty`**, to stay free of dependencies. Prompts, `Keys`
+  and full-screen apps need it, so a minimal container without coreutils can't read single
+  keypresses (everything that only draws still works).
+- **Terminal size** comes from `ioctl` on macOS and Linux. Other Unixes, the BSDs among
+  them, fall back to `$COLUMNS` and `$LINES`, then 80×24.
+- **Widths** follow the Unicode 17 tables built into tinsel, so CJK, emoji and combining
+  marks line up without a lookup at run time.
+- **Windows** uses the console API for keys and size (Windows Terminal or a Windows 10+
+  console). Focus awareness and background detection need a terminal that answers, which
+  there means Windows Terminal; the older console quietly goes without rather than wait
+  for answers that never come.
+- **Colour** is truecolor when `COLORTERM` says so, the 16 basic colours when `TERM` names
+  a terminal without `256color`, and 256 colours otherwise. `NO_COLOR`, `FORCE_COLOR` and
+  `CLICOLOR` are respected.
+
+## Stability
+
+tinsel follows [semantic versioning](https://semver.org) from 1.0: nothing public changes
+in a way that breaks your code without a new major version. Enums and structs that are
+likely to grow are `#[non_exhaustive]`, so a new key, colour mode or event can arrive in a
+minor release; match them with a `_` arm.
+
+The minimum supported Rust version is 1.85. Raising it is a minor release, not a major
+one, and is said so in the changelog.
