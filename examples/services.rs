@@ -17,8 +17,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tinsel::app::{
-    self, App, Event, Flow, Footer, Frame, Grid, GridState, Key, List, Modal, Panel, Size::*, Tabs, TextInput, Toasts,
-    Waker,
+    self, App, Event, Flow, Footer, Frame, Grid, GridState, Key, Keymap, List, Modal, Panel, Size::*, Tabs, TextInput,
+    Toasts, Waker,
 };
 use tinsel::{ColorMode, Line, Spinner, Table, Theme, Tone, format, paint, palette, shimmer};
 
@@ -450,7 +450,7 @@ impl Dashboard {
         let Some((dialog, _)) = &mut self.dialog else { return };
         match (dialog, key) {
             (Dialog::Environment(at), Key::Up | Key::Down | Key::Char('j' | 'k')) => {
-                app::navigate(at, ENVS.len(), &Event::Key(key));
+                app::navigate(at, ENVS.len(), &Event::Key(key), Keymap::Vim);
             }
             (Dialog::Environment(at), Key::Enter) => {
                 self.env = *at;
@@ -506,7 +506,7 @@ impl App for Dashboard {
             return Flow::Continue;
         }
         if self.pane == Pane::Filter {
-            if !self.filter.event(event) {
+            if !self.filter.handle(event) {
                 match key {
                     Key::Esc => {
                         self.filter.clear();
@@ -551,7 +551,7 @@ impl App for Dashboard {
             _ if self.pane == Pane::Groups => match key {
                 Key::Right | Key::Char('l') | Key::Enter => self.focus(Pane::Table),
                 _ => {
-                    if app::navigate(&mut self.group, GROUPS.len(), event) {
+                    if app::navigate(&mut self.group, GROUPS.len(), event, Keymap::Vim) {
                         self.cursor.select(0);
                     }
                 }
@@ -565,7 +565,7 @@ impl App for Dashboard {
                 self.cursor.scroll_right();
             }
             _ => {
-                self.cursor.navigate(rows, event);
+                self.cursor.handle(rows, event);
             }
         }
         Flow::Continue

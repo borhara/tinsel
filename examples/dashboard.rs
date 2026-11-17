@@ -10,7 +10,7 @@
 //!   cargo run --example dashboard -- --html 120x36 > dashboard.html
 
 use tinsel::app::{
-    self, App, Event, Flow, Footer, Frame, Key, List, MouseKind, Panel, Plot, Size::*, Sparkles, Stat, Tabs,
+    self, App, Event, Flow, Footer, Frame, Key, Keymap, List, MouseKind, Panel, Plot, Size::*, Sparkles, Stat, Tabs,
 };
 use tinsel::{ColorMode, Line, Table, Theme, badge, meter, paint, palette, shimmer};
 
@@ -286,7 +286,7 @@ impl App for Dashboard {
                 }
             }
             other => {
-                app::navigate(&mut self.selected, self.services.len(), other);
+                app::navigate(&mut self.selected, self.services.len(), other, Keymap::Vim);
             }
         }
         Flow::Continue
