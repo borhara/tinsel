@@ -2,6 +2,8 @@
 //! their escape codes back into cells, so pieces can be placed anywhere, clipped, and drawn
 //! over each other, and only the rows that changed are sent to the terminal.
 
+use std::fmt::Write;
+
 use super::Rect;
 use super::widgets::Widget;
 use crate::block::Block;
@@ -186,17 +188,18 @@ impl Style {
             (REVERSE, 7),
         ] {
             if self.attrs & bit != 0 {
-                out.push_str(&format!(";{code}"));
+                let _ = write!(out, ";{code}");
             }
         }
+        // written straight into `out`: this runs for every change of style on every row sent
         for (ink, layer) in [(self.fg, 38), (self.bg, 48)] {
-            match ink {
-                Ink::Default => {}
-                Ink::Indexed(n) if n < 8 => out.push_str(&format!(";{}", layer - 8 + n as u16)),
-                Ink::Indexed(n) if n < 16 => out.push_str(&format!(";{}", layer + 52 + n as u16 - 8)),
-                Ink::Indexed(n) => out.push_str(&format!(";{layer};5;{n}")),
-                Ink::Rgb(r, g, b) => out.push_str(&format!(";{layer};2;{r};{g};{b}")),
-            }
+            let _ = match ink {
+                Ink::Default => Ok(()),
+                Ink::Indexed(n) if n < 8 => write!(out, ";{}", layer - 8 + n as u16),
+                Ink::Indexed(n) if n < 16 => write!(out, ";{}", layer + 52 + n as u16 - 8),
+                Ink::Indexed(n) => write!(out, ";{layer};5;{n}"),
+                Ink::Rgb(r, g, b) => write!(out, ";{layer};2;{r};{g};{b}"),
+            };
         }
         out.push('m');
     }
@@ -326,6 +329,22 @@ impl Frame {
             cursor_color: None,
             window_color: None,
             background: Ink::Default,
+        }
+    }
+
+    /// This frame emptied out as [`new`](Frame::new) would make it, keeping its cells'
+    /// memory when the size is the same, so a running app needn't allocate every frame.
+    pub(super) fn renew(self, width: usize, height: usize) -> Frame {
+        if (self.width, self.height) != (width, height) {
+            return Frame::new(width, height);
+        }
+        let mut cells = self.cells;
+        cells.fill(EMPTY);
+        Frame {
+            width,
+            height,
+            cells,
+            ..Frame::new(0, 0)
         }
     }
 
@@ -703,27 +722,32 @@ impl Frame {
 
     /// Row `y` as a styled string, without trailing blanks.
     fn row_text(&self, y: usize) -> String {
+        let mut out = String::new();
+        self.push_row(y, &mut out);
+        out
+    }
+
+    /// [`row_text`](Frame::row_text), added to `out`.
+    fn push_row(&self, y: usize, out: &mut String) {
         let row = &self.cells[y * self.width..(y + 1) * self.width];
         let end = row
             .iter()
             .rposition(|c| !(c.ch == ' ' && c.style.blank()))
             .map_or(0, |i| i + 1);
-        let mut out = String::new();
         let mut style = Style::default();
         for cell in &row[..end] {
             if cell.ch == '\0' {
                 continue;
             }
             if cell.style != style {
-                cell.style.sgr(&mut out);
+                cell.style.sgr(out);
                 style = cell.style;
             }
-            cell.push_to(&mut out);
+            cell.push_to(out);
         }
         if style != Style::default() {
             out.push_str("\x1b[0m");
         }
-        out
     }
 
     /// The frame as text, a line per row, trailing blanks trimmed. `.plain()` it in tests.
@@ -837,8 +861,8 @@ impl Frame {
             if prev.is_some_and(|p| p.cells[span.clone()] == self.cells[span]) {
                 continue;
             }
-            out.push_str(&format!("\x1b[{};1H\x1b[0m", y + 1));
-            out.push_str(&self.row_text(y));
+            let _ = write!(out, "\x1b[{};1H\x1b[0m", y + 1);
+            self.push_row(y, &mut out);
             // with wrapping off, a full row leaves the cursor on its last cell, which erasing
             // to the end of the line would take with it
             let last = self.cells[(y + 1) * self.width - 1];
@@ -923,6 +947,26 @@ mod tests {
         f.print(f.area(), 0, "e\u{301}");
         f.print(f.area(), 0, "e");
         assert_eq!(f.snapshot().plain(), "e");
+    }
+
+    #[test]
+    fn a_renewed_frame_is_as_good_as_new() {
+        let mut f = Frame::new(6, 2).at(3.0);
+        f.print(f.area(), 1, "\x1b[1mhello");
+        f.set_background(Rgb(1, 2, 3));
+        f.set_cursor(1, 1, CursorShape::Bar);
+        f.set_cursor_color(Rgb(4, 5, 6));
+        f.set_window_color(Rgb(7, 8, 9));
+        let renewed = f.clone().renew(6, 2);
+        let new = Frame::new(6, 2);
+        assert_eq!(renewed.cells, new.cells);
+        assert_eq!(renewed.diff(None), new.diff(None));
+        assert_eq!(
+            (renewed.time, renewed.cursor, renewed.cursor_color, renewed.window_color),
+            (0.0, None, None, None)
+        );
+        assert_eq!(renewed.background, Ink::Default);
+        assert_eq!(f.renew(3, 4).area(), Rect::new(0, 0, 3, 4));
     }
 
     #[test]
