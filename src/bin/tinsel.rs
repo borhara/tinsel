@@ -779,15 +779,15 @@ fn commands_section() {
     let lint = live.step("Lint");
     let test = live.step("Test");
     let audit = live.step("Audit");
-    let _ = lint.run(&mut script(
+    let _ = lint.run(script(
         "for f in main config live prompt table; do echo \"checking src/$f.rs\"; sleep 0.25; done",
     ));
-    let _ = test.run(&mut script(
+    let _ = test.run(script(
         "for i in $(seq 1 24); do echo \"test case_$i ... ok\"; sleep 0.06; done; \
          echo 'test parses_ports ... FAILED'; echo; echo 'thread panicked: expected 8080, got 80'; exit 101",
     ));
     let _ = audit
-        .command(&mut script("echo 'fetching advisory database'; sleep 5"))
+        .command(script("echo 'fetching advisory database'; sleep 5"))
         .timeout(Duration::from_millis(1500))
         .run();
     live.finish();
