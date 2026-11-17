@@ -95,14 +95,16 @@ impl Rect {
     /// One row of the rectangle, counted from 0. Empty if it's past the bottom.
     pub fn row(self, n: usize) -> Rect {
         if n >= self.height {
-            return Rect::new(self.x, self.y + self.height, self.width, 0);
+            return Rect::new(self.x, self.y.saturating_add(self.height), self.width, 0);
         }
         Rect::new(self.x, self.y + n, self.width, 1)
     }
 
     /// Whether the cell at `x`, `y` is inside: which panel a click landed in.
     pub fn contains(self, x: usize, y: usize) -> bool {
-        (self.x..self.x + self.width).contains(&x) && (self.y..self.y + self.height).contains(&y)
+        // saturating, so a rectangle reaching past the edge of the numbers can't overflow
+        (self.x..self.x.saturating_add(self.width)).contains(&x)
+            && (self.y..self.y.saturating_add(self.height)).contains(&y)
     }
 
     /// Whether there's no room in it at all.
@@ -113,10 +115,14 @@ impl Rect {
     /// The part of this rectangle that's also inside `other`.
     /// When they don't overlap, the result is empty and sits on `other`'s edge.
     pub fn intersect(self, other: Rect) -> Rect {
-        let right = (self.x + self.width).min(other.x + other.width);
-        let bottom = (self.y + self.height).min(other.y + other.height);
-        let x = self.x.max(other.x).min(other.x + other.width);
-        let y = self.y.max(other.y).min(other.y + other.height);
+        let (other_right, other_bottom) = (
+            other.x.saturating_add(other.width),
+            other.y.saturating_add(other.height),
+        );
+        let right = self.x.saturating_add(self.width).min(other_right);
+        let bottom = self.y.saturating_add(self.height).min(other_bottom);
+        let x = self.x.max(other.x).min(other_right);
+        let y = self.y.max(other.y).min(other_bottom);
         Rect::new(x, y, right.saturating_sub(x), bottom.saturating_sub(y))
     }
 }
@@ -161,6 +167,24 @@ fn split_into(total: usize, gap: usize, sizes: &[Size], lens: &mut [usize]) {
 mod tests {
     use super::Size::*;
     use super::*;
+
+    #[test]
+    fn rectangles_out_at_the_edge_of_the_numbers_dont_overflow() {
+        let huge = Rect::new(usize::MAX - 1, usize::MAX - 1, 10, 10);
+        assert!(huge.contains(usize::MAX - 1, usize::MAX - 1));
+        assert!(!huge.contains(0, 0));
+        let screen = Rect::new(0, 0, 80, 24);
+        assert!(huge.intersect(screen).is_empty());
+        assert!(screen.intersect(huge).is_empty());
+        assert_eq!(
+            Rect::new(2, 3, usize::MAX, usize::MAX).intersect(screen),
+            Rect::new(2, 3, 78, 21)
+        );
+        assert!(huge.row(20).is_empty());
+
+        let mut frame = super::super::Frame::new(5, 1);
+        assert_eq!(frame.print(Rect::new(1, 0, usize::MAX, 1), 0, "hello"), 4);
+    }
 
     #[test]
     fn splits_fixed_percent_and_fill() {
