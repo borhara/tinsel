@@ -81,7 +81,12 @@
 //! To test your own program's output, [`capture`] returns everything a closure prints
 //! through tinsel, as it would come out into a pipe, and [`with_color_mode`] picks a colour
 //! mode for one closure on one thread, so a test that checks colour codes doesn't change
-//! them for the tests running beside it.
+//! them for the tests running beside it. [`with_theme`], [`with_accent`], [`with_output`]
+//! and [`with_target`] do the same for the rest of the settings, so a library can scope
+//! them too without touching the program's.
+//!
+//! The environment variables tinsel reads (`TINSEL_OUTPUT`, `TINSEL_TARGET`,
+//! `TINSEL_THEME`, `TINSEL_ACCENT`, `TINSEL_FPS`) ignore case and surrounding spaces.
 
 #![warn(missing_docs)]
 
@@ -130,13 +135,14 @@ pub use live::{Live, RunError, Step, StepCommand};
 pub use markdown::markdown;
 pub use message::{Callout, Report, Tone, callout, counter, error, hint, info, rule, success, title, warn};
 pub use notify::notify;
-pub use output::{Output, Target, capture, output, set_output, set_target, target};
+pub use output::{Output, Target, capture, output, set_output, set_target, target, with_output, with_target};
 pub use panic::install_panic_hook;
 pub use region::Region;
 pub use spin::{Progress, ProgressIterator, WithProgress, spin, try_spin};
 pub use style::{
     Accent, ColorMode, Line, RAMP, Rgb, Theme, blink, bold, color_mode, dim, gradient, italic, mix, paint, paint_bg,
-    paint_on, palette, sample, set_accent, set_color_mode, set_theme, theme, underline, with_color_mode,
+    paint_on, palette, sample, set_accent, set_color_mode, set_theme, theme, underline, with_accent, with_color_mode,
+    with_theme,
 };
 pub use table::{Align, Border, Table};
 pub use term::width as terminal_width;
