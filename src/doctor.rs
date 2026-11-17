@@ -116,8 +116,15 @@ pub fn doctor() -> Block {
         "from TERM and TERM_PROGRAM, when drawing on a terminal".into(),
     ));
 
-    let vars: Vec<(String, String)> = std::env::vars().collect();
-    report(&rows, &problems(&vars))
+    report(&rows, &problems(&env_vars()))
+}
+
+/// Every environment variable, read so that one that isn't valid UTF-8 shows with
+/// replacement characters instead of stopping the program.
+fn env_vars() -> Vec<(String, String)> {
+    std::env::vars_os()
+        .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
+        .collect()
 }
 
 /// Laid out as `doctor` shows it: a heading, the rows, then each problem as a warning.
@@ -249,6 +256,21 @@ mod tests {
     fn problems_with(vars: &[(&str, &str)]) -> Vec<String> {
         let vars: Vec<(String, String)> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         problems(&vars)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_variable_that_isnt_utf8_is_read_lossily() {
+        use std::os::unix::ffi::OsStrExt;
+        let bad = std::ffi::OsStr::from_bytes(b"\xffbad");
+        // SAFETY: the name is used by no other test, and nothing reads it but env_vars
+        unsafe { std::env::set_var("DOCTOR_TEST_NOT_UTF8", bad) };
+        let vars = env_vars();
+        unsafe { std::env::remove_var("DOCTOR_TEST_NOT_UTF8") };
+        assert!(
+            vars.iter()
+                .any(|(k, v)| k == "DOCTOR_TEST_NOT_UTF8" && v == "\u{fffd}bad")
+        );
     }
 
     #[test]
