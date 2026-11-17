@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 
-use super::field::caret;
+use super::field::{caret, edit_line};
 use super::{Event, Frame, Key, Rect, Widget};
 use crate::style::palette::{BERRY, MUTED, SOFT, TEXT, TRACK};
 use crate::style::{italic, mix, paint};
@@ -198,25 +198,7 @@ impl TextArea {
             }
             Key::Right if col < self.lines[row].len() => self.col += 1,
             Key::Right if row < last => (self.row, self.col) = (row + 1, 0),
-            Key::Home | Key::Ctrl('a') => self.col = 0,
-            Key::End | Key::Ctrl('e') => self.col = self.lines[row].len(),
-            Key::Ctrl('u') => {
-                self.lines[row].drain(..col);
-                self.col = 0;
-            }
-            Key::Ctrl('k') => self.lines[row].truncate(col),
-            Key::Ctrl('w') => {
-                let line = &mut self.lines[row];
-                let mut start = col;
-                while start > 0 && line[start - 1] == ' ' {
-                    start -= 1;
-                }
-                while start > 0 && line[start - 1] != ' ' {
-                    start -= 1;
-                }
-                line.drain(start..col);
-                self.col = start;
-            }
+            key if edit_line(&mut self.lines[row], &mut self.col, key) => {}
             Key::Backspace | Key::Delete | Key::Left | Key::Right => {}
             _ => return false,
         }

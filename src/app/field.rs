@@ -140,24 +140,7 @@ impl Input {
             }
             Key::Left => self.at = at.saturating_sub(1),
             Key::Right => self.at = (at + 1).min(self.value.len()),
-            Key::Home | Key::Ctrl('a') => self.at = 0,
-            Key::End | Key::Ctrl('e') => self.at = self.value.len(),
-            Key::Ctrl('u') => {
-                self.value.drain(..at);
-                self.at = 0;
-            }
-            Key::Ctrl('k') => self.value.truncate(at),
-            Key::Ctrl('w') => {
-                let mut start = at;
-                while start > 0 && self.value[start - 1] == ' ' {
-                    start -= 1;
-                }
-                while start > 0 && self.value[start - 1] != ' ' {
-                    start -= 1;
-                }
-                self.value.drain(start..at);
-                self.at = start;
-            }
+            key if edit_line(&mut self.value, &mut self.at, key) => {}
             Key::Backspace | Key::Delete => {}
             _ => return false,
         }
@@ -218,6 +201,35 @@ impl Widget for Input {
             );
         }
     }
+}
+
+/// The keys an [`Input`] and a [`TextArea`](super::TextArea) edit a line with alike, on
+/// `line` with the cursor `at`: Home and Ctrl-A to the start, End and Ctrl-E to the end,
+/// Ctrl-U and Ctrl-K to cut what's before or after, Ctrl-W to cut the word before. Returns
+/// whether `key` was one of them.
+pub(super) fn edit_line(line: &mut Vec<char>, at: &mut usize, key: Key) -> bool {
+    match key {
+        Key::Home | Key::Ctrl('a') => *at = 0,
+        Key::End | Key::Ctrl('e') => *at = line.len(),
+        Key::Ctrl('u') => {
+            line.drain(..*at);
+            *at = 0;
+        }
+        Key::Ctrl('k') => line.truncate(*at),
+        Key::Ctrl('w') => {
+            let mut start = *at;
+            while start > 0 && line[start - 1] == ' ' {
+                start -= 1;
+            }
+            while start > 0 && line[start - 1] != ' ' {
+                start -= 1;
+            }
+            line.drain(start..*at);
+            *at = start;
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// The character under the cursor, lit up: on rose in colour, reversed without.
