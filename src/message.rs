@@ -55,9 +55,15 @@ impl Tone {
         if output::quiet() && !matches!(self, Tone::Warn | Tone::Error) {
             return;
         }
-        match self {
-            Tone::Error => output::err_line(&self.line(msg)),
-            _ => output::line(&self.line(msg)),
+        let line = self.line(msg);
+        let stderr = self == Tone::Error;
+        if crate::display::print_above(&[&line], stderr) {
+            return;
+        }
+        if stderr {
+            output::err_line(&line);
+        } else {
+            output::line(&line);
         }
     }
 }
@@ -114,11 +120,10 @@ pub fn counter(n: usize, total: usize, msg: &str) {
         return;
     }
     let w = total.to_string().len();
-    output::line(&format!(
-        "  {}  {}",
-        paint(MUTED, &format!("{n:>w$}/{total}")),
-        paint(TEXT, msg)
-    ));
+    let line = format!("  {}  {}", paint(MUTED, &format!("{n:>w$}/{total}")), paint(TEXT, msg));
+    if !crate::display::print_above(&[&line], false) {
+        output::line(&line);
+    }
 }
 
 /// Prints a heading with an optional quieter subtitle beside it, with a blank line either side.
@@ -131,7 +136,10 @@ pub fn title(text: &str, subtitle: Option<&str>) {
         return;
     }
     let sub = subtitle.map(|s| format!("  {}", paint(SOFT, s))).unwrap_or_default();
-    output::line(&format!("\n  {}{sub}\n", bold(&paint(ROSE, text))));
+    let heading = format!("\n  {}{sub}\n", bold(&paint(ROSE, text)));
+    if !crate::display::print_above(&[&heading], false) {
+        output::line(&heading);
+    }
 }
 
 /// A thin divider across the content width, with an optional label in it.

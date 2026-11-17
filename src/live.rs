@@ -6,7 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::block::Block;
-use crate::display::{Mode, lock, lock_patiently};
+use crate::display::{self, Mode, lock, lock_patiently};
 use crate::history::{self, History};
 use crate::output::{self, Val};
 use crate::style::palette::{AMBER, MUTED, RED, ROSE, SOFT, TEXT};
@@ -104,7 +104,7 @@ struct Shared {
     /// so [`Live::no_focus`] gets in first.
     watch: Option<Watch>,
     wants_focus: bool,
-    /// Questions open over this display ([`pause_all`]): nothing is drawn while any is.
+    /// Questions open over this display ([`display::pause_all`]): nothing is drawn while any is.
     paused: u32,
     /// The focus watch was stopped for a question: start it again on the next frame.
     refocus: bool,
@@ -201,23 +201,18 @@ fn estimated_fraction(elapsed: f64, usual: f64) -> f32 {
     f as f32
 }
 
-/// Displays drawing right now, so a panic can stop them and leave a clean screen.
-static DRAWING: Mutex<Vec<Weak<Mutex<Shared>>>> = Mutex::new(Vec::new());
+/// Stop every display mid-draw: running steps are marked failed, the last frame is drawn,
+/// and nothing is drawn after it. Called by the panic hook before it prints. Returns whether
+/// there were any.
+pub(crate) fn abandon_all() -> bool {
+    display::abandon_all()
+}
 
-/// Every drawing display, held still while a question is asked over it (see [`Paused`]).
-///
-/// A display and a question both want the terminal. The display redraws itself in place many
-/// times a second, which paints over the question, and its focus watch reads stdin, which
-/// takes the keys meant for the question; with both going, a typed answer went nowhere and
-/// the terminal was left in whichever mode the last one to let go had set (seen in a deploy
-/// tool asking "type prod to confirm" under its step list). So each display draws one last
-/// frame and leaves it where it is, its watch stops and hands the terminal back, and nothing
-/// is drawn until the question is done. Then it draws on below the answer, and watches again.
-pub(crate) fn pause_all() -> Paused {
-    let drawing: Vec<_> = lock(&DRAWING).iter().filter_map(Weak::upgrade).collect();
-    for shared in &drawing {
+impl display::Shown for Mutex<Shared> {
+    /// Draw one last frame and leave it where it is, for the question to go below it.
+    fn pause(&self) {
         let watch = {
-            let mut s = lock(shared);
+            let mut s = lock(self);
             if s.paused == 0 {
                 paint_frame(&mut s, false);
                 // left in the scrollback: the next frame starts below the question
@@ -231,36 +226,24 @@ pub(crate) fn pause_all() -> Paused {
             watch.stop();
         }
     }
-    Paused { drawing }
-}
 
-/// Displays held still for a question; they carry on when this is dropped.
-pub(crate) struct Paused {
-    drawing: Vec<Arc<Mutex<Shared>>>,
-}
-
-impl Drop for Paused {
-    fn drop(&mut self) {
-        for shared in &self.drawing {
-            let mut s = lock(shared);
-            s.paused -= 1;
-            if s.paused == 0 {
-                s.refocus = true;
-                output::write(HIDE_CURSOR);
-            }
+    fn resume(&self) {
+        let mut s = lock(self);
+        s.paused -= 1;
+        if s.paused == 0 {
+            s.refocus = true;
+            output::write(HIDE_CURSOR);
         }
     }
-}
 
-/// Stop every display mid-draw: running steps are marked failed, the last frame is drawn,
-/// and nothing is drawn after it. Called by the panic hook before it prints. Returns whether
-/// there were any.
-pub(crate) fn abandon_all() -> bool {
-    let drawing = std::mem::take(&mut *lock(&DRAWING));
-    let mut any = false;
-    for shared in drawing.iter().filter_map(Weak::upgrade) {
+    fn log(&self, line: &str) {
+        lock(self).logs.push(line.to_string());
+    }
+
+    /// Running steps are marked failed and the last frame is drawn.
+    fn abandon(&self) {
         // the panicking thread might be the one holding the lock, so never wait forever
-        let Some(mut s) = lock_patiently(&shared) else { continue };
+        let Some(mut s) = lock_patiently(self) else { return };
         let now = s.now();
         for step in s.steps.iter_mut().filter(|st| st.state == State::Active) {
             step.state = State::Fail;
@@ -270,9 +253,7 @@ pub(crate) fn abandon_all() -> bool {
         paint_frame(&mut s, true);
         s.abandoned = true;
         output::write(SHOW_CURSOR);
-        any = true;
     }
-    any
 }
 
 impl Live {
@@ -369,7 +350,7 @@ impl Live {
             s.history = History::open(&History::default_app());
             s.wants_focus = true;
         }
-        lock(&DRAWING).push(Arc::downgrade(&self.shared));
+        display::add(Arc::downgrade(&self.shared) as Weak<dyn display::Shown>);
         output::write(HIDE_CURSOR);
         let (shared, stop) = (self.shared.clone(), self.stop.clone());
         self.thread = Some(thread::spawn(move || {
@@ -597,7 +578,7 @@ impl Live {
         let _ = self.thread.take().map(JoinHandle::join);
         // the last frame is drawn settled, so a step that just finished shows ● rather than mid-twinkle
         draw(&self.shared, true);
-        lock(&DRAWING).retain(|w| w.upgrade().is_some_and(|s| !Arc::ptr_eq(&s, &self.shared)));
+        display::remove(Arc::as_ptr(&self.shared));
         let watch = lock(&self.shared).watch.take();
         let away = watch.as_ref().is_some_and(|w| w.focus.away());
         if let Some(mut watch) = watch {
@@ -1874,7 +1855,7 @@ mod tests {
                 let live = Live::new("q-title", "x").no_history().no_focus().fps(240);
                 live.step("q-waiting").wait("waiting for you");
                 std::thread::sleep(Duration::from_millis(30));
-                let paused = pause_all();
+                let paused = display::pause_all();
                 {
                     let s = lock(&live.shared);
                     // its last frame left in place, and nothing reading stdin

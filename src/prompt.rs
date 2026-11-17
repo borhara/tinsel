@@ -150,14 +150,12 @@ impl From<io::Error> for Error {
 /// What every question returns.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Raw keyboard input and a hidden cursor for as long as it lives, with every [`Live`]
-/// display held still meanwhile so the question has the screen and the keys to itself.
-///
-/// [`Live`]: crate::Live
+/// Raw keyboard input and a hidden cursor for as long as it lives, with every live display
+/// held still meanwhile so the question has the screen and the keys to itself.
 struct Raw {
     // dropped in this order: raw mode off before the displays start watching stdin again
     _mode: RawMode,
-    _paused: crate::live::Paused,
+    _paused: crate::display::Paused,
 }
 
 impl Raw {
@@ -165,7 +163,7 @@ impl Raw {
         // decide the theme first: finding out may mean asking the terminal, which needs stdin
         crate::style::theme();
         // before raw mode, so each display's focus watch has handed the terminal back first
-        let paused = crate::live::pause_all();
+        let paused = crate::display::pause_all();
         let mode = RawMode::enter()?;
         eprint!("\x1b[?25l");
         Ok(Raw {
@@ -2281,6 +2279,8 @@ fn edit(question: &str, initial: &str, command: &str) -> Result<String> {
     let path = std::env::temp_dir().join(format!("tinsel-{}-{nanos}.md", std::process::id()));
     std::fs::write(&path, initial)?;
 
+    // the editor has the whole terminal: nothing draws over it or reads its keys meanwhile
+    let _paused = crate::display::pause_all();
     let mut frame = Frame::default();
     frame.draw(&[format!(
         "{}  {}",
