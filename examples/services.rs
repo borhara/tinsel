@@ -16,11 +16,12 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use tinsel::anim::shimmer;
 use tinsel::app::{
     self, App, Event, Flow, Footer, Frame, Grid, GridState, Key, Keymap, List, Modal, Panel, Size::*, Tabs, TextInput,
     Toasts, Waker,
 };
-use tinsel::{ColorMode, Line, Spinner, Table, Theme, Tone, format, paint, palette, shimmer};
+use tinsel::{ColorMode, Line, Spinner, Table, Theme, Tone, format, paint, palette};
 
 #[derive(Clone)]
 struct Service {

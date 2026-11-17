@@ -1,3 +1,7 @@
+//! Colour and type: the palette, painting text, gradients, and how colour is chosen (the
+//! terminal's colour support, a light or dark theme, an accent). The everyday parts are at
+//! the crate root too: [`paint`], [`bold`], [`palette`], [`Rgb`] and friends.
+
 use std::fmt;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -86,7 +90,7 @@ fn stream_slot(stream: Target) -> &'static AtomicU8 {
 }
 
 /// The colour mode in use. Decided once, from `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR_FORCE`,
-/// whether stdout (or the [`Target`](crate::Target)) is a terminal, `TERM`, `CLICOLOR` and
+/// whether stdout (or the [`Target`]) is a terminal, `TERM`, `CLICOLOR` and
 /// `COLORTERM`, unless [`set_color_mode`] has chosen one.
 pub fn color_mode() -> ColorMode {
     color_mode_for(crate::output::target())
@@ -115,7 +119,7 @@ pub(crate) fn color_mode_for(stream: Target) -> ColorMode {
     mode_from(slot.load(Ordering::Relaxed)).unwrap_or(mode)
 }
 
-/// The colour mode for stderr, where errors go whatever the [`Target`](crate::Target).
+/// The colour mode for stderr, where errors go whatever the [`Target`].
 #[allow(dead_code)] // for the writers to stderr
 pub(crate) fn stderr_color_mode() -> ColorMode {
     color_mode_for(Target::Stderr)
@@ -724,7 +728,7 @@ pub fn underline(s: &str) -> String {
 /// kept to a single mark: a whole line blinking is hard to read.
 ///
 /// ```
-/// println!("  {} ready", tinsel::blink(&tinsel::paint(tinsel::palette::ROSE, "✦")));
+/// println!("  {} ready", tinsel::style::blink(&tinsel::paint(tinsel::palette::ROSE, "✦")));
 /// ```
 pub fn blink(s: &str) -> String {
     attr(5, 25, s)

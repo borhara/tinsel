@@ -268,8 +268,8 @@ fn every_spinner_fills_exactly_its_width() {
 
 #[test]
 fn pop_settles() {
-    assert!(tinsel::pop(0.0).is_some());
-    assert!(tinsel::pop(1.0).is_none());
+    assert!(tinsel::anim::pop(0.0).is_some());
+    assert!(tinsel::anim::pop(1.0).is_none());
 }
 
 #[test]
