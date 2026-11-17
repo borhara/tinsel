@@ -46,7 +46,7 @@ enum Value<'a> {
 /// # Ok::<(), tinsel::JsonError>(())
 /// ```
 pub fn json(src: &str) -> Result<Block, JsonError> {
-    let mut p = Parser { src, at: 0 };
+    let mut p = Parser { src, at: 0, depth: 0 };
     p.space();
     let value = p.value()?;
     p.space();
@@ -60,9 +60,14 @@ pub fn json(src: &str) -> Result<Block, JsonError> {
     Ok(out.into())
 }
 
+/// How deep arrays and objects may nest before the input is refused, so a hostile
+/// `[[[[…` can't run the parser out of stack.
+const MAX_DEPTH: usize = 512;
+
 struct Parser<'a> {
     src: &'a str,
     at: usize,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -99,6 +104,20 @@ impl<'a> Parser<'a> {
 
     fn value(&mut self) -> Result<Value<'a>, JsonError> {
         self.space();
+        if matches!(self.peek(), Some(b'{' | b'[')) {
+            if self.depth >= MAX_DEPTH {
+                return Err(self.error("this nests too deeply"));
+            }
+            self.depth += 1;
+            let value = self.nested();
+            self.depth -= 1;
+            return value;
+        }
+        self.scalar()
+    }
+
+    /// An object or an array.
+    fn nested(&mut self) -> Result<Value<'a>, JsonError> {
         match self.peek() {
             Some(b'{') => {
                 self.at += 1;
@@ -148,6 +167,13 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            _ => self.scalar(),
+        }
+    }
+
+    /// A string, number or literal.
+    fn scalar(&mut self) -> Result<Value<'a>, JsonError> {
+        match self.peek() {
             Some(b'"') => Ok(Value::String(self.string()?)),
             Some(b'-' | b'0'..=b'9') => {
                 let start = self.at;
@@ -184,7 +210,26 @@ impl<'a> Parser<'a> {
                     self.at += 1;
                     return Ok(&self.src[start..self.at]);
                 }
-                Some(b'\\') => self.at += 2,
+                Some(b'\\') => {
+                    self.at += 1;
+                    match self.peek() {
+                        Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => self.at += 1,
+                        Some(b'u')
+                            if self
+                                .src
+                                .as_bytes()
+                                .get(self.at + 1..self.at + 5)
+                                .is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit)) =>
+                        {
+                            self.at += 5
+                        }
+                        None => {}
+                        Some(_) => return Err(self.error("this escape isn't one JSON knows")),
+                    }
+                }
+                // Control characters must be escaped in JSON, and letting them through
+                // would let the input send its own escape sequences to the terminal.
+                Some(b) if b < 0x20 => return Err(self.error("a control character must be escaped in a string")),
                 Some(_) => self.at += 1,
                 None => {
                     self.at = start;
@@ -195,13 +240,31 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// A string as written, but with DEL and the C1 controls (which JSON allows raw) shown
+/// as `\u` escapes, so no string can reach the terminal as a control sequence.
+fn shown(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.chars().any(|c| ('\u{7f}'..='\u{9f}').contains(&c)) {
+        return s.into();
+    }
+    s.chars()
+        .map(|c| {
+            if ('\u{7f}'..='\u{9f}').contains(&c) {
+                format!("\\u{:04x}", c as u32)
+            } else {
+                c.to_string()
+            }
+        })
+        .collect::<String>()
+        .into()
+}
+
 /// Short arrays of plain values on one line, if they fit.
 fn inline(value: &Value) -> Option<String> {
     let Value::Array(items) = value else { return None };
     let parts: Option<Vec<String>> = items
         .iter()
         .map(|v| match v {
-            Value::String(s) => Some(paint(SAGE, s)),
+            Value::String(s) => Some(paint(SAGE, &shown(s))),
             Value::Number(n) => Some(paint(AMBER, n)),
             Value::Literal(l) => Some(paint(ROSE, l)),
             _ => None,
@@ -220,7 +283,7 @@ fn inline(value: &Value) -> Option<String> {
 fn draw(value: &Value, depth: usize, line: &mut String, out: &mut Vec<String>) {
     let indent = |d: usize| format!("  {}", "  ".repeat(d));
     match value {
-        Value::String(s) => *line += &paint(SAGE, s),
+        Value::String(s) => *line += &paint(SAGE, &shown(s)),
         Value::Number(n) => *line += &paint(AMBER, n),
         Value::Literal(l) => *line += &paint(ROSE, l),
         Value::Array(items) if items.is_empty() => *line += &paint(MUTED, "[]"),
@@ -244,7 +307,7 @@ fn draw(value: &Value, depth: usize, line: &mut String, out: &mut Vec<String>) {
             *line += &paint(MUTED, "{");
             for (i, (key, v)) in fields.iter().enumerate() {
                 out.push(std::mem::replace(line, indent(depth)));
-                *line += &format!("{}{} ", paint(BLUSH, key), paint(MUTED, ":"));
+                *line += &format!("{}{} ", paint(BLUSH, &shown(key)), paint(MUTED, ":"));
                 draw(v, depth + 1, line, out);
                 if i + 1 < fields.len() {
                     *line += &paint(MUTED, ",");
@@ -320,5 +383,32 @@ mod tests {
         assert!(msg("[1-2]").starts_with("this isn't a number"));
         assert!(msg("[nope]").starts_with("expected a value"));
         assert!(msg("[1,").starts_with("the text ended too soon"));
+        assert!(msg(r#""\q""#).starts_with("this escape isn't one JSON knows"));
+        assert!(msg(r#""\u12""#).starts_with("this escape isn't one JSON knows"));
+    }
+
+    #[test]
+    fn deep_nesting_is_an_error_not_a_stack_overflow() {
+        assert!(
+            json(&"[".repeat(200_000))
+                .unwrap_err()
+                .to_string()
+                .starts_with("this nests too deeply")
+        );
+        assert!(json(&"{\"a\":".repeat(200_000)).is_err());
+        let ok = format!("{}{}", "[".repeat(MAX_DEPTH), "]".repeat(MAX_DEPTH));
+        assert!(json(&ok).is_ok());
+        let deep = format!("{}{}", "[".repeat(MAX_DEPTH + 1), "]".repeat(MAX_DEPTH + 1));
+        assert!(json(&deep).is_err());
+    }
+
+    #[test]
+    fn strings_cannot_carry_control_characters_to_the_terminal() {
+        crate::set_color_mode(crate::ColorMode::None);
+        assert!(json("\"\x1b[31mred\"").is_err());
+        assert!(json("{\"a\tb\": 1}").is_err());
+        assert!(json(r#""\u001b\n\"\\\/""#).is_ok());
+        let out = json("[\"a\u{9b}31m\"]").unwrap().plain();
+        assert!(!out.contains('\u{9b}') && out.contains(r"\u009b"), "{out}");
     }
 }
