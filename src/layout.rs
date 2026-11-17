@@ -76,33 +76,106 @@ pub fn columns(items: &[&str]) -> Block {
 pub fn diff(old: &str, new: &str) -> Block {
     let a: Vec<&str> = old.lines().collect();
     let b: Vec<&str> = new.lines().collect();
-    // longest common subsequence table, filled from the end
-    let mut lcs = vec![vec![0usize; b.len() + 1]; a.len() + 1];
-    for i in (0..a.len()).rev() {
-        for j in (0..b.len()).rev() {
-            lcs[i][j] = if a[i] == b[j] {
-                lcs[i + 1][j + 1] + 1
-            } else {
-                lcs[i + 1][j].max(lcs[i][j + 1])
-            };
-        }
-    }
+    // lines are compared over and over, so each is numbered once and the numbers compared
+    let mut ids = std::collections::HashMap::new();
+    let mut numbered: Vec<usize> = a
+        .iter()
+        .chain(&b)
+        .map(|line| {
+            let next = ids.len();
+            *ids.entry(*line).or_insert(next)
+        })
+        .collect();
+    let nb = numbered.split_off(a.len());
+    let na = numbered;
+    let mut kept = Vec::new();
+    common(&na, &nb, (0, 0), &mut kept);
+    let same = |line: &str| format!("  {}  {}", paint(MUTED, " "), paint(MUTED, line));
+    let removed = |line: &str| format!("  {}  {}", paint(RED, "-"), paint(RED, line));
+    let added = |line: &str| format!("  {}  {}", paint(SAGE, "+"), paint(SAGE, line));
     let (mut i, mut j, mut out) = (0, 0, Block::new());
-    while i < a.len() || j < b.len() {
-        if i < a.len() && j < b.len() && a[i] == b[j] {
-            out.push(format!("  {}  {}", paint(MUTED, " "), paint(MUTED, a[i])));
-            i += 1;
-            j += 1;
-        } else if j < b.len() && (i == a.len() || lcs[i][j + 1] > lcs[i + 1][j]) {
-            // ties go to removal, so a changed line reads "- old" then "+ new"
-            out.push(format!("  {}  {}", paint(SAGE, "+"), paint(SAGE, b[j])));
-            j += 1;
-        } else {
-            out.push(format!("  {}  {}", paint(RED, "-"), paint(RED, a[i])));
-            i += 1;
+    // between kept lines, removals come first, so a changed line reads "- old" then "+ new"
+    for (x, y) in kept.into_iter().chain([(a.len(), b.len())]) {
+        a[i..x].iter().for_each(|l| out.push(removed(l)));
+        b[j..y].iter().for_each(|l| out.push(added(l)));
+        if x < a.len() {
+            out.push(same(a[x]));
         }
+        (i, j) = (x + 1, y + 1);
     }
     out
+}
+
+/// The pairs of lines `a` and `b` keep in common (as positions from `at`), in order: a
+/// shortest edit script by Myers' algorithm, split at its middle snake so it needs memory
+/// in proportion to the texts, not to their product.
+fn common<T: PartialEq>(a: &[T], b: &[T], at: (usize, usize), kept: &mut Vec<(usize, usize)>) {
+    let head = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    kept.extend((0..head).map(|i| (at.0 + i, at.1 + i)));
+    let (a, b, at) = (&a[head..], &b[head..], (at.0 + head, at.1 + head));
+    let tail = a.iter().rev().zip(b.iter().rev()).take_while(|(x, y)| x == y).count();
+    let (a, b) = (&a[..a.len() - tail], &b[..b.len() - tail]);
+    if !a.is_empty() && !b.is_empty() {
+        let (x, y, u, v) = middle_snake(a, b);
+        common(&a[..x], &b[..y], at, kept);
+        kept.extend((0..u - x).map(|i| (at.0 + x + i, at.1 + y + i)));
+        common(&a[u..], &b[v..], (at.0 + u, at.1 + v), kept);
+    }
+    kept.extend((0..tail).map(|i| (at.0 + a.len() + i, at.1 + b.len() + i)));
+}
+
+/// Where a shortest edit script from `a` to `b` crosses its middle: a run of equal lines
+/// from `(x, y)` to `(u, v)`, found by searching from both ends at once. `a` and `b` aren't
+/// empty and differ at both ends, so either side of it is a smaller edit.
+fn middle_snake<T: PartialEq>(a: &[T], b: &[T]) -> (usize, usize, usize, usize) {
+    let (n, m) = (a.len() as isize, b.len() as isize);
+    let delta = n - m;
+    let off = n + m + 1;
+    // the furthest x reached on each diagonal k = x - y, from the start and (counting
+    // back) from the end
+    let mut fwd = vec![0isize; 2 * off as usize + 1];
+    let mut back = vec![0isize; 2 * off as usize + 1];
+    let at = |k: isize| (off + k) as usize;
+    for d in 0..=(n + m + 1) / 2 {
+        for k in (-d..=d).step_by(2) {
+            let mut x = if k == -d || (k != d && fwd[at(k - 1)] < fwd[at(k + 1)]) {
+                fwd[at(k + 1)]
+            } else {
+                fwd[at(k - 1)] + 1
+            };
+            let (x0, y0) = (x, x - k);
+            while x < n && x - k < m && a[x as usize] == b[(x - k) as usize] {
+                x += 1;
+            }
+            fwd[at(k)] = x;
+            let r = delta - k;
+            if delta % 2 != 0 && r.abs() < d && x + back[at(r)] >= n {
+                return (x0 as usize, y0 as usize, x as usize, (x - k) as usize);
+            }
+        }
+        for r in (-d..=d).step_by(2) {
+            let mut x = if r == -d || (r != d && back[at(r - 1)] < back[at(r + 1)]) {
+                back[at(r + 1)]
+            } else {
+                back[at(r - 1)] + 1
+            };
+            let (x0, y0) = (x, x - r);
+            while x < n && x - r < m && a[(n - 1 - x) as usize] == b[(m - 1 - (x - r)) as usize] {
+                x += 1;
+            }
+            back[at(r)] = x;
+            let k = delta - r;
+            if delta % 2 == 0 && k.abs() <= d && fwd[at(k)] + x >= n {
+                return (
+                    (n - x) as usize,
+                    (m - (x - r)) as usize,
+                    (n - x0) as usize,
+                    (m - y0) as usize,
+                );
+            }
+        }
+    }
+    unreachable!("an edit script from a to b is at most a.len() + b.len() long")
 }
 
 /// Source lines with numbers in a gutter, and optionally one line marked, with a caret under
@@ -340,6 +413,64 @@ mod tests {
         assert!(out.lines().last().unwrap().ends_with("│ ^^^^"), "{out}");
         let out = Code::new("ab").highlight(1).caret(2, 3, "").lines().plain();
         assert!(out.lines().last().unwrap().ends_with("│  ^^^"), "{out}");
+    }
+
+    #[test]
+    fn diffs_are_shortest_and_put_removals_first() {
+        crate::set_color_mode(ColorMode::None);
+        let d = diff("a\nb\nc\nd\ne", "a\nx\nc\ne\nf").plain();
+        assert_eq!(d, "     a\n  -  b\n  +  x\n     c\n  -  d\n     e\n  +  f");
+        assert_eq!(diff("", "").plain(), "");
+        assert_eq!(diff("a\nb", "").plain(), "  -  a\n  -  b");
+        assert_eq!(diff("", "a").plain(), "  +  a");
+        let d = diff("x\na\nb\ny", "a\nz\nb").plain();
+        assert_eq!(d, "  -  x\n     a\n  +  z\n     b\n  -  y");
+    }
+
+    #[test]
+    fn diffs_match_the_longest_common_run_of_lines() {
+        // a small generator, so the check covers many shapes of edit
+        let mut seed = 7u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let words = ["a", "b", "c", "d"];
+        for _ in 0..300 {
+            let mut text = || {
+                let n = next() % 9;
+                (0..n).map(|_| words[(next() % 4) as usize]).collect::<Vec<_>>()
+            };
+            let (a, b) = (text(), text());
+            let mut kept = Vec::new();
+            common(&a, &b, (0, 0), &mut kept);
+            assert!(kept.iter().all(|&(x, y)| a[x] == b[y]), "{a:?} {b:?}");
+            assert!(
+                kept.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 < w[1].1),
+                "{a:?} {b:?}"
+            );
+            // the longest common subsequence, the slow way
+            let mut lcs = vec![vec![0; b.len() + 1]; a.len() + 1];
+            for i in (0..a.len()).rev() {
+                for j in (0..b.len()).rev() {
+                    lcs[i][j] = if a[i] == b[j] {
+                        lcs[i + 1][j + 1] + 1
+                    } else {
+                        lcs[i + 1][j].max(lcs[i][j + 1])
+                    };
+                }
+            }
+            assert_eq!(kept.len(), lcs[0][0], "{a:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn long_diffs_stay_small() {
+        let old: String = (0..2_000).map(|i| format!("{i}\n")).collect();
+        let new: String = (0..2_000).map(|i| format!("{}\n", i * 7 % 2_003)).collect();
+        assert!(diff(&old, &new).lines().len() >= 2_000);
     }
 
     #[test]
