@@ -65,8 +65,10 @@ pub(crate) trait Shown: Send + Sync {
     /// [`resume`](Shown::resume). Pauses nest: each one is undone by one resume.
     fn pause(&self);
     fn resume(&self);
-    /// Print a line above the display, which carries on drawing below it.
-    fn log(&self, line: &str);
+    /// Print lines above the display, which carries on drawing below it. A `patient` caller
+    /// (the panic hook, whose own thread might hold the display's lock) gives up after a
+    /// moment rather than wait forever; returns whether the lines were taken.
+    fn log(&self, lines: &[&str], patient: bool) -> bool;
     /// A panic is taking over the screen: leave it tidy, and never draw again.
     fn abandon(&self);
 }
@@ -138,6 +140,21 @@ impl Drop for Paused {
 /// Lines for stderr go above a display on stdout only when stderr is the same terminal;
 /// when it's a file they go there as usual, and the display isn't disturbed.
 pub(crate) fn print_above<S: AsRef<str>>(lines: &[S], stderr: bool) -> bool {
+    above(lines, stderr, false)
+}
+
+/// [`print_above`], for the panic hook: it gives up, and says so, rather than wait on a lock
+/// the panicking thread might be holding.
+pub(crate) fn print_above_patiently<S: AsRef<str>>(lines: &[S], stderr: bool) -> bool {
+    above(lines, stderr, true)
+}
+
+/// A lock, or for a `patient` caller one given up on after a moment.
+pub(crate) fn lock_if<T: ?Sized>(m: &Mutex<T>, patient: bool) -> Option<MutexGuard<'_, T>> {
+    if patient { lock_patiently(m) } else { Some(lock(m)) }
+}
+
+fn above<S: AsRef<str>>(lines: &[S], stderr: bool, patient: bool) -> bool {
     if !any_active() {
         return false;
     }
@@ -147,15 +164,11 @@ pub(crate) fn print_above<S: AsRef<str>>(lines: &[S], stderr: bool) -> bool {
     if !same_screen {
         return false;
     }
-    let Some(newest) = shown().pop() else {
+    let Some(newest) = lock_if(&SHOWN, patient).and_then(|all| all.iter().rev().find_map(Weak::upgrade)) else {
         return false;
     };
-    for line in lines {
-        for part in line.as_ref().split('\n') {
-            newest.log(part);
-        }
-    }
-    true
+    let parts: Vec<&str> = lines.iter().flat_map(|line| line.as_ref().split('\n')).collect();
+    newest.log(&parts, patient)
 }
 
 /// Stop every display mid-draw, for a panic. Returns whether there were any.

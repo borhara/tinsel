@@ -535,7 +535,10 @@ mod child {
         crate::install_panic_hook();
         let live = crate::Live::new("panicking", "x").no_history().no_focus();
         live.step("Deploy").start();
-        assert!(std::panic::catch_unwind(|| panic!("on purpose")).is_err());
+        // on a thread named as the main one is, since only a panic there stops the displays
+        let main = std::thread::Builder::new().name("main".into());
+        let caught = main.spawn(|| std::panic::catch_unwind(|| panic!("on purpose")).is_err());
+        assert!(caught.unwrap().join().unwrap());
         drop(live);
         let _ = std::panic::take_hook();
 

@@ -217,6 +217,7 @@ pub(crate) fn why() -> (bool, String) {
     match (ENABLED.load(Ordering::Relaxed), cache_dir()) {
         (2, _) => (false, "set in code".into()),
         (0, None) if std::env::var_os("TINSEL_NO_HISTORY").is_some() => (false, "TINSEL_NO_HISTORY is set".into()),
+        (_, None) if cfg!(windows) => (false, "there's no HOME or LOCALAPPDATA to keep it in".into()),
         (_, None) => (false, "there's no HOME or XDG_CACHE_HOME to keep it in".into()),
         (_, Some(dir)) => (true, format!("in {}", dir.display())),
     }
@@ -228,13 +229,22 @@ fn cache_dir() -> Option<PathBuf> {
         2 => false,
         _ => std::env::var_os("TINSEL_NO_HISTORY").is_none(),
     };
-    on.then(|| cache_dir_from(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME")))?
+    let local = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA")
+    } else {
+        None
+    };
+    on.then(|| cache_dir_from(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"), local))?
 }
 
-fn cache_dir_from(xdg: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
-    let base = xdg
-        .map(PathBuf::from)
-        .or_else(|| home.map(|h| PathBuf::from(h).join(".cache")))?;
+/// `$XDG_CACHE_HOME/tinsel`, or `~/.cache/tinsel`, or (on Windows, with no HOME)
+/// `%LOCALAPPDATA%\tinsel`. A value that's empty or relative is ignored, as the XDG spec
+/// says, rather than leaving the history wherever the program happens to be run from.
+fn cache_dir_from(xdg: Option<OsString>, home: Option<OsString>, local: Option<OsString>) -> Option<PathBuf> {
+    let absolute = |dir: Option<OsString>| dir.map(PathBuf::from).filter(|d| d.is_absolute());
+    let base = absolute(xdg)
+        .or_else(|| absolute(home).map(|h| h.join(".cache")))
+        .or_else(|| absolute(local))?;
     Some(base.join("tinsel"))
 }
 
@@ -334,7 +344,7 @@ mod tests {
         set_history(false);
         assert!(History::open("tinsel-test").is_none());
         set_history(true);
-        assert_eq!(cache_dir().is_some(), std::env::var_os("HOME").is_some());
+        assert!(cache_dir().is_some() || std::env::var_os("HOME").is_none());
         ENABLED.store(0, Ordering::Relaxed);
         let _ = cache_dir();
     }
@@ -350,12 +360,45 @@ mod tests {
         dir
     }
 
+    /// An absolute path on this platform: Windows wants a drive.
+    fn abs(dir: &str) -> String {
+        if cfg!(windows) {
+            format!("C:{dir}")
+        } else {
+            dir.to_string()
+        }
+    }
+
+    fn some(dir: &str) -> Option<OsString> {
+        Some(OsString::from(dir))
+    }
+
     #[test]
     fn the_cache_lives_under_xdg_or_home() {
-        let (xdg, home) = (Some(OsString::from("/x")), Some(OsString::from("/h")));
-        assert_eq!(cache_dir_from(xdg, home.clone()), Some(PathBuf::from("/x/tinsel")));
-        assert_eq!(cache_dir_from(None, home), Some(PathBuf::from("/h/.cache/tinsel")));
-        assert_eq!(cache_dir_from(None, None), None);
+        let (x, h, l) = (abs("/x"), abs("/h"), abs("/l"));
+        let under = |base: &str, rest: &[&str]| Some(rest.iter().fold(PathBuf::from(base), |p, r| p.join(r)));
+        assert_eq!(cache_dir_from(some(&x), some(&h), some(&l)), under(&x, &["tinsel"]));
+        assert_eq!(
+            cache_dir_from(None, some(&h), some(&l)),
+            under(&h, &[".cache", "tinsel"])
+        );
+        assert_eq!(cache_dir_from(None, None, some(&l)), under(&l, &["tinsel"]));
+        assert_eq!(cache_dir_from(None, None, None), None);
+    }
+
+    #[test]
+    fn an_empty_or_relative_cache_or_home_is_ignored() {
+        let (h, l) = (abs("/h"), abs("/l"));
+        let home_cache = Some(PathBuf::from(&h).join(".cache").join("tinsel"));
+        assert_eq!(cache_dir_from(some(""), some(&h), None), home_cache);
+        assert_eq!(cache_dir_from(some("cache"), some(&h), None), home_cache);
+        assert_eq!(cache_dir_from(some("./cache"), some(&h), None), home_cache);
+        assert_eq!(
+            cache_dir_from(None, some(""), some(&l)),
+            Some(PathBuf::from(&l).join("tinsel"))
+        );
+        assert_eq!(cache_dir_from(some(""), some("home"), None), None);
+        assert_eq!(cache_dir_from(None, None, some("relative")), None);
     }
 
     #[test]

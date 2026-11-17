@@ -105,8 +105,12 @@ impl crate::display::Shown for Mutex<State> {
         }
     }
 
-    fn log(&self, line: &str) {
-        lock(self).logs.push(line.to_string());
+    fn log(&self, lines: &[&str], patient: bool) -> bool {
+        let Some(mut s) = crate::display::lock_if(self, patient) else {
+            return false;
+        };
+        s.logs.extend(lines.iter().map(|l| l.to_string()));
+        true
     }
 
     fn abandon(&self) {
@@ -326,7 +330,14 @@ fn frame(s: &mut State, lines: &[String], room: usize) -> String {
     // no wrapping: an over-long line is cut at the edge rather than taking up two rows and
     // throwing off the next redraw
     buf += "\x1b[?7l";
-    let shown = &lines[..lines.len().min(room)];
+    // counted in rows, not lines, since that's how the next frame finds its way back up: a
+    // line with a break in it takes two
+    let rows: Vec<&str> = lines
+        .iter()
+        .flat_map(|line| line.split('\n'))
+        .map(|row| row.strip_suffix('\r').unwrap_or(row))
+        .collect();
+    let shown = &rows[..rows.len().min(room)];
     for line in shown {
         buf += line;
         buf += "\x1b[K\n";
@@ -379,6 +390,17 @@ mod tests {
         let mut s = state();
         let f = frame(&mut s, &lines(&["1", "2", "3", "4"]), 2);
         assert!(f.contains("2\x1b[K\n") && !f.contains("3\x1b[K\n"), "{f:?}");
+        assert_eq!(s.drawn, 2);
+    }
+
+    #[test]
+    fn line_breaks_in_a_view_are_counted_as_rows() {
+        let mut s = state();
+        let f = frame(&mut s, &lines(&["a\nb", "c\r\nd"]), 20);
+        assert_eq!(f, "\x1b[?7la\x1b[K\nb\x1b[K\nc\x1b[K\nd\x1b[K\n\x1b[J\x1b[?7h");
+        assert_eq!(s.drawn, 4);
+        // and only the rows that fit are drawn
+        frame(&mut s, &lines(&["1\n2\n3"]), 2);
         assert_eq!(s.drawn, 2);
     }
 
