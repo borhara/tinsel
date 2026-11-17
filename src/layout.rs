@@ -364,10 +364,19 @@ impl fmt::Display for Code {
     }
 }
 
-/// Anything [`Code::lang`] accepts: a [`Lang`], or a language's name.
-pub trait IntoLang {
+/// Anything [`Code::lang`] accepts: a [`Lang`], or a language's name. Sealed: tinsel decides
+/// what counts, so it can add more without breaking anything.
+pub trait IntoLang: sealed::Sealed {
     /// The language, if it's one tinsel knows.
     fn into_lang(self) -> Option<Lang>;
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::Lang {}
+    impl Sealed for &str {}
+    impl Sealed for String {}
+    impl Sealed for &String {}
 }
 
 impl IntoLang for Lang {
@@ -382,9 +391,41 @@ impl IntoLang for &str {
     }
 }
 
+impl IntoLang for String {
+    fn into_lang(self) -> Option<Lang> {
+        Lang::from_name(&self)
+    }
+}
+
+impl IntoLang for &String {
+    fn into_lang(self) -> Option<Lang> {
+        Lang::from_name(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn languages_come_by_value_or_by_name() {
+        let name = String::from("Python");
+        assert_eq!(
+            [
+                Lang::Rust.into_lang(),
+                "toml".into_lang(),
+                (&name).into_lang(),
+                name.into_lang()
+            ],
+            [
+                Some(Lang::Rust),
+                Some(Lang::Toml),
+                Some(Lang::Python),
+                Some(Lang::Python)
+            ]
+        );
+        assert_eq!("cobol".into_lang(), None);
+    }
 
     #[test]
     fn links_are_only_links_in_colour() {
