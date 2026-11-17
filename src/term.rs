@@ -1040,7 +1040,10 @@ mod tests {
         for (n, took) in [(0, waited), (3, now), (0, now), (0, now), (0, waited)] {
             assert!(keyboard.saw(n, took).is_ok());
         }
-        let gone = (0..10).map(|_| keyboard.saw(0, now)).last().unwrap();
+        let mut gone = Ok(());
+        for _ in 0..10 {
+            gone = keyboard.saw(0, now);
+        }
         if cfg!(unix) {
             assert_eq!(gone.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
         } else {
