@@ -226,7 +226,16 @@ impl Widget for Toasts {
 
             let edge = mix(LINE, color, 0.55);
             let left = 1.0 - age / self.life;
-            let run = ((w - 2) as f32 * left).round() as usize;
+            let span = (w - 2) as f32 * left.clamp(0.0, 1.0);
+            let run = span.floor() as usize;
+            // the cell where it ends fades between the two, so the line shrinks smoothly rather
+            // than a whole cell at a time
+            let part = span - run as f32;
+            let edge_cell = if run < w - 2 {
+                paint(mix(TRACK, color, part), if part >= 0.5 { "━" } else { "─" })
+            } else {
+                String::new()
+            };
             let rows = std::iter::once(paint(edge, &format!("╭{}╮", "─".repeat(w - 2))))
                 .chain(lines.iter().enumerate().map(|(i, line)| {
                     let lead = if i == 0 { paint(color, mark) } else { " ".into() };
@@ -239,10 +248,10 @@ impl Widget for Toasts {
                     )
                 }))
                 .chain(std::iter::once(format!(
-                    "{}{}{}{}",
+                    "{}{}{edge_cell}{}{}",
                     paint(edge, "╰"),
                     paint(color, &"━".repeat(run)),
-                    paint(TRACK, &"─".repeat(w - 2 - run)),
+                    paint(TRACK, &"─".repeat((w - 2).saturating_sub(run + 1))),
                     paint(edge, "╯")
                 )));
             frame.clear(visible);
