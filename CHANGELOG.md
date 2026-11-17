@@ -2,7 +2,20 @@
 
 ## [Unreleased]
 
-## [0.6.0](https://github.com/borhara/tinsel/compare/v0.5.0...v0.6.0) - 2026-11-17
+## [1.0.0](https://github.com/borhara/tinsel/compare/v0.5.0...v1.0.0) - 2026-11-17
+
+tinsel is stable: from here on, breaking changes wait for 2.0. Enums that may grow are
+`#[non_exhaustive]`, so new variants arrive in minor releases.
+
+### Breaking
+
+- `prompt::Date`'s fields are private: build one with `Date::new`, which checks it's a real date, and read it with `year()`, `month()` and `day()`
+- `style::RAMP` is a slice, `&[Rgb]`, rather than an array of three
+- Ctrl-C while tinsel draws ends the program by the signal itself, so shell loops stop too, rather than exiting with status 130 (Windows still exits with 130)
+- a Ctrl-C handler the program set up itself, or an ignored Ctrl-C, is left in place on Unix rather than replaced
+- `prompt::password` and other secret questions are never read from a pipe; without a terminal they return `NotATerminal`
+- `TINSEL_NO_FOCUS` and `TINSEL_NO_HISTORY` set but empty leave things on, as an empty `NO_COLOR` does
+
 
 ### Added
 
