@@ -4,9 +4,6 @@
 
 mod tables;
 
-/// Where tabs stop, as on almost every terminal.
-const TAB: usize = 8;
-
 /// A piece of text as the terminal takes it: an escape sequence, which shows nothing, or one
 /// cluster (a character with the marks, selectors and joiners that build on it) and the
 /// columns it takes up.
@@ -18,17 +15,15 @@ pub(crate) enum Token<'a> {
     Text(&'a str, usize),
 }
 
-/// The text as [`Token`]s, measured from the start of a line: a tab reaches the next tab stop,
-/// and a newline starts counting again.
+/// The text as [`Token`]s.
 pub(crate) fn tokens(s: &str) -> Tokens<'_> {
-    Tokens { s, at: 0, col: 0 }
+    Tokens { s, at: 0 }
 }
 
 /// What [`tokens`] gives.
 pub(crate) struct Tokens<'a> {
     s: &'a str,
     at: usize,
-    col: usize,
 }
 
 impl<'a> Iterator for Tokens<'a> {
@@ -44,9 +39,8 @@ impl<'a> Iterator for Tokens<'a> {
             self.at += len;
             return Some(Token::Escape(&rest[..len]));
         }
-        let (len, width) = cluster(rest, self.col);
+        let (len, width) = cluster(rest);
         self.at += len;
-        self.col = if rest.starts_with('\n') { 0 } else { self.col + width };
         Some(Token::Text(&rest[..len], width))
     }
 }
@@ -82,12 +76,13 @@ const ZWJ: char = '\u{200D}';
 const VS16: char = '\u{FE0F}';
 
 /// The cluster at the start of `s` (which isn't an escape), as its length in bytes and its
-/// width in columns, starting at column `col`.
-fn cluster(s: &str, col: usize) -> (usize, usize) {
+/// width in columns.
+fn cluster(s: &str) -> (usize, usize) {
     let mut chars = s.chars();
     let Some(first) = chars.next() else { return (0, 0) };
+    // tinsel's frames draw a tab as one space, so it's measured as one
     if first == '\t' {
-        return (1, TAB - col % TAB);
+        return (1, 1);
     }
     if first.is_control() {
         return (first.len_utf8(), 0);
@@ -176,13 +171,15 @@ pub fn strip_ansi(s: &str) -> String {
 }
 
 /// Columns a single character takes up, by Unicode 17's tables: two for wide (CJK and
-/// emoji), none for combining marks, joiners, variation selectors and control characters
-/// (a tab included: [`width`] takes it to the next tab stop), one for the rest. Text is
+/// emoji), none for combining marks, joiners, variation selectors and control characters,
+/// one for the rest, a tab included (it's drawn as a space). Text is
 /// better measured with [`width`], which knows that a character and what builds on it, such
 /// as a flag's two letters or a family joined into one emoji, are drawn as one.
 pub fn char_width(c: char) -> usize {
     let n = c as u32;
-    if n < 0x20 || (0x7F..0xA0).contains(&n) {
+    if c == '\t' {
+        1
+    } else if n < 0x20 || (0x7F..0xA0).contains(&n) {
         0
     } else if n < 0x300 {
         1
@@ -238,6 +235,31 @@ pub fn truncate(s: &str, cols: usize) -> String {
                 out += "…";
                 cut = true;
             }
+        }
+    }
+    out
+}
+
+/// The text with each tab replaced by the spaces that reach the next tab stop (every eight
+/// columns), as a terminal would show it.
+pub(crate) fn expand_tabs(s: &str) -> String {
+    if !s.contains('\t') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut col = 0;
+    for token in tokens(s) {
+        match token {
+            Token::Text("\t", _) => {
+                let n = 8 - col % 8;
+                out.extend(std::iter::repeat_n(' ', n));
+                col += n;
+            }
+            Token::Text(t, w) => {
+                out += t;
+                col = if t == "\n" { 0 } else { col + w };
+            }
+            Token::Escape(e) => out += e,
         }
     }
     out
@@ -346,10 +368,11 @@ mod tests {
     }
 
     #[test]
-    fn tabs_reach_the_next_stop() {
-        assert_eq!(width("\t"), 8);
-        assert_eq!(width("ab\tc"), 9);
-        assert_eq!(width("a\n\t"), 9);
+    fn tabs_are_a_column_until_expanded() {
+        assert_eq!(width("ab\tc"), 4);
+        assert_eq!(expand_tabs("ab\tc"), "ab      c");
+        assert_eq!(expand_tabs("日\t\x1b[1mx\tz"), "日      \x1b[1mx       z");
+        assert_eq!(expand_tabs("a\nb\tc"), "a\nb       c");
     }
 
     #[test]
