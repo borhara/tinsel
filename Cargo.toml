@@ -11,6 +11,10 @@ repository = "https://github.com/borhara/tinsel"
 documentation = "https://docs.rs/tinsel"
 keywords = ["cli", "terminal", "spinner", "progress", "prompt"]
 categories = ["command-line-interface"]
-exclude = ["/.github", "/docs", "/scripts", "demo.tape", "demo.gif", "release-plz.toml"]
+exclude = ["/.github", "/docs", "/scripts", "demo.tape", "demo.gif", "release-plz.toml", "rustfmt.toml", "CONTRIBUTING.md"]
 
 [dependencies]
+
+[package.metadata.docs.rs]
+# nothing differs between targets, so one build is enough
+targets = ["x86_64-unknown-linux-gnu"]
