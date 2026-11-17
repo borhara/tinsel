@@ -619,6 +619,10 @@ pub enum Keymap {
     /// [`Scroll`] and a [`GridState`].
     #[default]
     Vim,
+    /// For a list under a box being typed into, as in a file picker: the arrows and the
+    /// keys above them, and Ctrl-N, Ctrl-J and Tab a step down, Ctrl-P, Ctrl-K and
+    /// Shift-Tab a step up, leaving every letter for the box.
+    Picker,
 }
 
 /// Move a selection through a list of `len` things in response to an event, with the keys
@@ -671,9 +675,12 @@ pub fn keep_in_view(top: usize, selected: usize, rows: usize) -> usize {
 /// way was back towards the start, or nothing for any other event.
 fn step(at: usize, last: usize, page: usize, wheel: usize, event: &Event, keymap: Keymap) -> Option<(usize, bool)> {
     let vim = keymap == Keymap::Vim;
+    let picker = keymap == Keymap::Picker;
     let (to, back) = match event {
         Event::Key(Key::Up) => (at.saturating_sub(1), true),
         Event::Key(Key::Down) => (at + 1, false),
+        Event::Key(Key::Ctrl('p' | 'k') | Key::BackTab) if picker => (at.saturating_sub(1), true),
+        Event::Key(Key::Ctrl('n' | 'j') | Key::Tab) if picker => (at + 1, false),
         Event::Key(Key::Char('k')) if vim => (at.saturating_sub(1), true),
         Event::Key(Key::Char('j')) if vim => (at + 1, false),
         Event::Key(Key::PageUp) => (at.saturating_sub(page), true),
@@ -1575,6 +1582,22 @@ pub(crate) mod tests {
             assert!(!navigate(&mut at, 20, &Event::Key(Key::Char(c)), Keymap::Arrows));
         }
         assert!(navigate(&mut at, 20, &Event::Key(Key::Up), Keymap::Arrows));
+        // a picker's keys leave the letters for typing
+        let mut at = 5;
+        for (key, want) in [
+            (Key::Ctrl('n'), 6),
+            (Key::Tab, 7),
+            (Key::Ctrl('j'), 8),
+            (Key::Ctrl('p'), 7),
+            (Key::BackTab, 6),
+            (Key::Ctrl('k'), 5),
+            (Key::PageDown, 15),
+        ] {
+            navigate(&mut at, 20, &Event::Key(key), Keymap::Picker);
+            assert_eq!(at, want, "after {key:?}");
+        }
+        assert!(!navigate(&mut at, 20, &Event::Key(Key::Char('j')), Keymap::Picker));
+        assert!(!navigate(&mut at, 20, &Event::Key(Key::Tab), Keymap::Vim));
     }
 
     #[test]
