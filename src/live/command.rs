@@ -40,7 +40,7 @@ pub(super) fn attempts_note(error: &str, retries: u32) -> String {
 #[must_use = "the command only runs when `run` is called"]
 pub struct StepCommand<'a, 'c> {
     pub(super) step: &'a Step,
-    pub(super) command: Box<dyn BorrowMut<Command> + 'c>,
+    pub(super) command: Box<dyn BorrowMut<Command> + Send + Sync + 'c>,
     pub(super) stdin: Option<Stdio>,
     pub(super) timeout: Option<Duration>,
     pub(super) retries: u32,
@@ -308,3 +308,9 @@ impl std::error::Error for RunError {
         }
     }
 }
+
+// a command can be set up on one thread and run on another, as it could before
+const _: fn() = || {
+    fn send_sync<T: Send + Sync>() {}
+    send_sync::<StepCommand<'static, 'static>>();
+};

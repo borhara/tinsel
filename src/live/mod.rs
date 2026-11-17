@@ -1010,12 +1010,12 @@ impl Step {
     /// # Errors
     ///
     /// A [`RunError`] if the command can't be started or exits unsuccessfully.
-    pub fn run<'c>(&self, command: impl BorrowMut<Command> + 'c) -> Result<String, RunError> {
+    pub fn run<'c>(&self, command: impl BorrowMut<Command> + Send + Sync + 'c) -> Result<String, RunError> {
         self.command(command).run()
     }
 
     /// A command to run as this step, with options: see [`StepCommand`].
-    pub fn command<'c>(&self, command: impl BorrowMut<Command> + 'c) -> StepCommand<'_, 'c> {
+    pub fn command<'c>(&self, command: impl BorrowMut<Command> + Send + Sync + 'c) -> StepCommand<'_, 'c> {
         StepCommand {
             step: self,
             command: Box::new(command),
