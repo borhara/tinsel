@@ -94,6 +94,10 @@ pub(crate) fn pretended_terminal() -> Option<bool> {
 /// What was written while capturing, from any thread. One capture at a time.
 static CAPTURED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static CAPTURING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+thread_local! {
+    /// Whether this thread is inside a capture, so one inside it doesn't wait for itself.
+    static CAPTURING_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 /// Whether anything's capturing, so writes needn't take the lock to find out.
 static CAPTURE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -127,7 +131,8 @@ fn kept(s: &str) -> bool {
 /// Prints from every thread are caught, so steps finished on worker threads are too. That
 /// also means one capture runs at a time, and anything another test prints through tinsel
 /// meanwhile lands in it as well: capture in every test that prints, or look for what you
-/// expect rather than comparing the whole thing.
+/// expect rather than comparing the whole thing. A capture inside another, on the same
+/// thread, gets what's printed inside it, and the outer one carries on afterwards.
 ///
 /// ```
 /// fn deploy() {
@@ -145,8 +150,12 @@ pub fn capture(f: impl FnOnce()) -> String {
 
 /// [`capture`], for any closure.
 fn capture_while(f: &mut dyn FnMut()) -> String {
-    let _one = CAPTURING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    *captured() = Some(String::new());
+    // a capture inside a capture on the same thread already holds the lock: it takes over
+    // the buffer for a while, and hands the outer one back afterwards
+    let nested = CAPTURING_HERE.get();
+    let _one = (!nested).then(|| CAPTURING.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    CAPTURING_HERE.set(true);
+    let outer = captured().replace(String::new());
     CAPTURE_ON.store(true, Ordering::SeqCst);
     // tinsel's own tests ignore TINSEL_OUTPUT and TINSEL_TARGET unless a test chooses
     #[cfg(test)]
@@ -165,8 +174,16 @@ fn capture_while(f: &mut dyn FnMut()) -> String {
         TEST_OUTPUT.set(before.0);
         TEST_TARGET.set(before.1);
     }
-    CAPTURE_ON.store(false, Ordering::SeqCst);
-    let out = captured().take().unwrap_or_default();
+    let out = {
+        let mut buf = captured();
+        let out = buf.take().unwrap_or_default();
+        *buf = outer;
+        out
+    };
+    if !nested {
+        CAPTURE_ON.store(false, Ordering::SeqCst);
+    }
+    CAPTURING_HERE.set(nested);
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
@@ -399,6 +416,24 @@ mod tests {
             )
         });
         assert!(out.contains(r#"{"event":"thing","name":"x","secs":1.235,"ratio":null,"items":["a","b\"c"]}"#));
+    }
+
+    #[test]
+    fn a_capture_inside_a_capture_gets_its_own_output() {
+        let mut inner = String::new();
+        let outer = capture(|| {
+            line("before");
+            inner = capture(|| line("inside"));
+            line("after");
+        });
+        assert_eq!(inner, "inside\n");
+        assert!(
+            outer.contains("before\nafter\n") && !outer.contains("inside"),
+            "{outer:?}"
+        );
+        let caught = std::panic::catch_unwind(|| capture(|| drop(capture(|| panic!("deep")))));
+        assert!(caught.is_err());
+        assert!(capture(|| write("still works")).contains("still works"));
     }
 
     #[test]
