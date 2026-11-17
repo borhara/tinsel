@@ -385,8 +385,18 @@ impl Frame {
         self
     }
 
-    /// The frame with its [ambient clock](Frame::ambient_time) reading `seconds`.
-    pub(super) fn ambient_at(mut self, seconds: f64) -> Self {
+    /// The frame with its [ambient clock](Frame::ambient_time) reading `seconds`, whatever
+    /// [`at`](Frame::at) set: for testing how ambient animation looks after time in the
+    /// background, or holding it still while checking something else move.
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// let frame = Frame::new(4, 1).at(9.0).ambient_at(0.0);
+    /// assert_eq!((frame.time(), frame.ambient_time()), (9.0, 0.0));
+    /// ```
+    #[must_use]
+    pub fn ambient_at(mut self, seconds: f64) -> Self {
         self.ambient = seconds;
         self
     }
