@@ -242,6 +242,87 @@ pub fn truncate(s: &str, cols: usize) -> String {
     out
 }
 
+/// Cut text to at most `cols` columns from the front, starting with "…" when anything was
+/// cut: for a path, whose end says the most. Styled text is fine, as for [`truncate`].
+///
+/// ```
+/// use tinsel::text::truncate_start;
+///
+/// assert_eq!(truncate_start("src/app/main.rs", 10), "…p/main.rs");
+/// assert_eq!(truncate_start("main.rs", 10), "main.rs");
+/// ```
+pub fn truncate_start(s: &str, cols: usize) -> String {
+    if cols == 0 {
+        return String::new();
+    }
+    if width(s) <= cols {
+        return s.to_string();
+    }
+    let all: Vec<Token<'_>> = tokens(s).collect();
+    // the last stretch of text that fits beside the "…"
+    let mut used = 0;
+    let mut start = all.len();
+    for (i, token) in all.iter().enumerate().rev() {
+        match *token {
+            Token::Escape(_) => start = i,
+            Token::Text(_, w) if used + w < cols => {
+                used += w;
+                start = i;
+            }
+            Token::Text(..) => break,
+        }
+    }
+    let mut out: String = all[..start]
+        .iter()
+        .filter_map(|t| match t {
+            Token::Escape(e) => Some(*e),
+            Token::Text(..) => None,
+        })
+        .collect();
+    out.push('…');
+    for token in &all[start..] {
+        match token {
+            Token::Escape(t) | Token::Text(t, _) => out.push_str(t),
+        }
+    }
+    out
+}
+
+/// Columns a character takes up when it's drawn at `column` (counted from 0): a tab reaches
+/// the next tab stop, every `tab_stop` columns, and anything else is as wide as
+/// [`char_width`] says.
+///
+/// ```
+/// use tinsel::text::char_width_at;
+///
+/// assert_eq!(char_width_at('\t', 0, 4), 4);
+/// assert_eq!(char_width_at('\t', 6, 4), 2);
+/// assert_eq!(char_width_at('漢', 6, 4), 2);
+/// ```
+pub fn char_width_at(c: char, column: usize, tab_stop: usize) -> usize {
+    if c == '\t' {
+        let stop = tab_stop.max(1);
+        stop - column % stop
+    } else {
+        char_width(c)
+    }
+}
+
+/// Columns the text takes up with its tabs reaching the next tab stop, every `tab_stop`
+/// columns, as an editor shows them. Escape codes count for nothing, as for [`width`].
+///
+/// ```
+/// assert_eq!(tinsel::text::width_with_tabs("a\tb", 4), 5);
+/// assert_eq!(tinsel::text::width_with_tabs("\t\t", 8), 16);
+/// ```
+pub fn width_with_tabs(s: &str, tab_stop: usize) -> usize {
+    tokens(s).fold(0, |at, token| match token {
+        Token::Text("\t", _) => at + char_width_at('\t', at, tab_stop),
+        Token::Text(_, w) => at + w,
+        Token::Escape(_) => at,
+    })
+}
+
 /// The text with each tab replaced by the spaces that reach the next tab stop (every eight
 /// columns), as a terminal would show it.
 pub(crate) fn expand_tabs(s: &str) -> String {
@@ -412,5 +493,26 @@ mod tests {
     #[test]
     fn a_long_word_starts_its_own_line() {
         assert_eq!(wrap("ab abcdefghij", 4), ["ab", "abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn cutting_from_the_front_keeps_the_end_and_any_colour() {
+        assert_eq!(truncate_start("文書/メモ.md", 8), "…メモ.md");
+        assert_eq!(truncate_start("文書/メモ.md", 6), "…モ.md");
+        assert_eq!(truncate_start("文書/メモ.md", 5), "….md");
+        assert_eq!(truncate_start("abc", 1), "…");
+        assert_eq!(truncate_start("abc", 0), "");
+        let styled = "\x1b[31mred\x1b[0m tail";
+        let cut = truncate_start(styled, 7);
+        assert_eq!(strip_ansi(&cut), "…d tail");
+        assert!(cut.starts_with("\x1b[31m…") && cut.contains("\x1b[0m"), "{cut:?}");
+    }
+
+    #[test]
+    fn tabs_reach_the_next_stop() {
+        assert_eq!(width_with_tabs("ab\tc", 4), 5);
+        assert_eq!(width_with_tabs("\x1b[1m\t\x1b[0mx", 4), 5);
+        assert_eq!(width_with_tabs("\t", 0), 1, "a stop of 0 is taken as 1");
+        assert_eq!(char_width_at('a', 3, 4), 1);
     }
 }

@@ -345,7 +345,7 @@ cargo run --example deploy         # small, copyable examples: hello, deploy, pa
 | **apps** | `app::run` full-screen apps, drawn only when something changes or a frame asks (`animate`, `animate_at`, `redraw_at`) · `Panel` · `List` · `Grid` · `ScrollView` · `TextInput` · `TextArea` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys with their modifiers, read and written in vim's notation (`<C-a>`) and shown as symbols (`⌃A`), mouse and resize events · `app::snapshot` for tests · `Frame::html` for screenshots |
 | **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` / `Select` · `multiselect` / `MultiSelect` (filter as you type, headings, disabled options with a reason, validation) · `Dropdown` for long lists (notes, badges, your own answer) · `.back()` to go back a question · `editor` · suggestions and path completion · `confirm_typing` |
 | **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_focus` · `set_history` · `set_accent` · `set_theme` · `set_color_mode` · `set_fps` · `set_ctrl_c` · `timings` |
-| **helpers** | `text::{width, pad, truncate, wrap, strip_ansi, content_width}` · `terminal_width` · `format::{bytes, duration, count, ago, plural}` |
+| **helpers** | `text::{width, width_with_tabs, pad, truncate, truncate_start, wrap, strip_ansi, content_width}` · `terminal_width` · `format::{bytes, duration, count, ago, plural}` |
 
 Full reference with examples for every item: **[docs.rs/tinsel](https://docs.rs/tinsel)**.
 
