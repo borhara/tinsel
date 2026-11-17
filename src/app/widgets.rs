@@ -803,19 +803,83 @@ pub(super) fn centered(frame: &mut Frame, area: Rect, line: &str) {
 
 /// A scrollbar down `bar`, for `total` rows of which the ones from `start` are showing.
 pub(super) fn scrollbar(frame: &mut Frame, bar: Rect, start: usize, total: usize) {
-    let h = bar.height;
-    if h == 0 || total <= h {
-        return;
+    frame.render(bar, Scrollbar::new(start, total));
+}
+
+/// Where a view's rows are among all of them, as a thumb on a track down the first column
+/// of its area: for anything that scrolls. Nothing is drawn while everything fits.
+///
+/// ```
+/// use tinsel::app::{Frame, Rect, Scrollbar};
+///
+/// tinsel::set_color_mode(tinsel::ColorMode::None);
+/// let mut frame = Frame::new(1, 4);
+/// // rows 4 to 7 of 16 showing
+/// frame.render(frame.area(), Scrollbar::new(4, 16));
+/// assert_eq!(frame.snapshot().plain(), "│\n┃\n│\n│");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Scrollbar {
+    top: usize,
+    total: usize,
+    color: Option<Rgb>,
+    track: bool,
+}
+
+impl Scrollbar {
+    /// A scrollbar for a view showing from row `top` of `total`; it shows as many rows as
+    /// the area it's drawn in is tall.
+    pub fn new(top: usize, total: usize) -> Self {
+        Scrollbar {
+            top,
+            total,
+            color: None,
+            track: true,
+        }
     }
-    let thumb = (h * h / total).max(1);
-    let at = start.min(total - h) * (h - thumb) / (total - h);
-    for row in 0..h {
-        let mark = if (at..at + thumb).contains(&row) {
-            paint(ROSE, "┃")
-        } else {
-            paint(TRACK, "│")
-        };
-        frame.print(bar, row, &mark);
+
+    /// The thumb's colour: tinsel's pink unless changed.
+    #[must_use]
+    pub fn color(mut self, color: Rgb) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    /// Whether the track shows behind the thumb. Yes unless changed; without it the thumb
+    /// is a half block, `▐`, which reads as a bar on its own.
+    #[must_use]
+    pub fn track(mut self, track: bool) -> Self {
+        self.track = track;
+        self
+    }
+
+    /// Which rows of a bar `height` tall the thumb covers.
+    fn thumb(&self, height: usize) -> Option<std::ops::Range<usize>> {
+        if height == 0 || self.total <= height {
+            return None;
+        }
+        let size = (height * height / self.total).max(1);
+        let at = self.top.min(self.total - height) * (height - size) / (self.total - height);
+        Some(at..at + size)
+    }
+}
+
+impl Widget for Scrollbar {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        let Some(thumb) = self.thumb(area.height) else { return };
+        let color = self.color.unwrap_or(ROSE);
+        let glyph = if self.track { "┃" } else { "▐" };
+        for row in 0..area.height {
+            if thumb.contains(&row) {
+                frame.print(area, row, &paint(color, glyph));
+            } else if self.track {
+                frame.print(area, row, &paint(TRACK, "│"));
+            }
+        }
+    }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        Some((1, self.total))
     }
 }
 
@@ -1518,6 +1582,22 @@ mod tests {
                 assert!(span.split('"').next().unwrap().contains("background:"), "{html}");
             }
         });
+    }
+
+    #[test]
+    fn a_scrollbar_runs_from_top_to_bottom_and_can_go_without_a_track() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let drawn = |bar: Scrollbar| {
+            let mut f = Frame::new(1, 5);
+            f.render(f.area(), bar);
+            f.snapshot().plain().replace('\n', "")
+        };
+        assert_eq!(drawn(Scrollbar::new(0, 20)), "┃││││");
+        assert_eq!(drawn(Scrollbar::new(15, 20)), "││││┃");
+        assert_eq!(drawn(Scrollbar::new(99, 20)), "││││┃", "past the end is the end");
+        assert_eq!(drawn(Scrollbar::new(0, 5)), "", "everything fits");
+        assert_eq!(drawn(Scrollbar::new(0, 10).track(false).color(Rgb(1, 2, 3))), "▐▐");
+        assert_eq!(Scrollbar::new(0, 9).size(), Some((1, 9)));
     }
 
     #[test]
