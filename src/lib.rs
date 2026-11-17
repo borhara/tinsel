@@ -124,7 +124,7 @@ pub use history::set_history;
 pub use json::{JsonError, json};
 pub use layout::{Code, IntoLang, badge, columns, diff, link, pairs};
 pub use live::{Live, RunError, Step, StepCommand};
-pub use markdown::markdown;
+pub use markdown::{markdown, markdown_in};
 pub use message::{Callout, Report, Tone, callout, counter, error, hint, info, rule, success, title, warn};
 pub use notify::notify;
 pub use output::{Output, Target, capture, output, set_output, set_target, target};
