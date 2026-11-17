@@ -206,9 +206,16 @@ fn run_app(app: &mut dyn App) -> io::Result<()> {
         listen(&mut |buf| keyboard.read(buf), &tx, &control);
         control.idle.store(true, Ordering::SeqCst);
     }));
-    drive(app, &rx, &mut io::stdout(), &mut || (term::width(), term::height()))?;
+    // caught so the session, and with it the panic hook, is put back while not panicking,
+    // then the panic carries on to the caller
+    let driven = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drive(app, &rx, &mut io::stdout(), &mut || (term::width(), term::height()))
+    }));
     drop(session);
-    Ok(())
+    match driven {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 /// What the key reader sends: an event, or why there'll be no more (the terminal closed).
@@ -511,7 +518,7 @@ const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
 struct Session {
     control: Arc<Control>,
     reader: Option<std::thread::JoinHandle<()>>,
-    hook: Arc<PanicHook>,
+    _hook: Hook,
 }
 
 /// How the app's thread tells the key reader what to do.
@@ -549,24 +556,21 @@ impl Session {
         // give the screen back before any panic message, which would otherwise be drawn on
         // the alternate screen and vanish with it. Only a panic on this thread ends the app: a
         // worker thread panicking leaves it running, so it has to keep the screen
-        let hook: Arc<PanicHook> = Arc::new(std::panic::take_hook());
-        let previous = hook.clone();
         let owner = std::thread::current().id();
-        std::panic::set_hook(Box::new(move |info| {
+        let hook = Hook::install(move || {
             if std::thread::current().id() == owner {
                 leave_screen();
                 // unwinding drops the session, which puts the terminal back once the reader
                 // has stopped; with panic = "abort" nothing else will
                 cfg!(panic = "abort").then(term::restore_saved_terminal);
             }
-            previous(info);
-        }));
+        });
         ON_SCREEN.store(true, Ordering::SeqCst);
         // made before writing anything, so a failed write still puts everything back
         let session = Session {
             control: Arc::default(),
             reader: None,
-            hook,
+            _hook: hook,
         };
         RUNNING.with(|r| {
             *r.borrow_mut() = Some(Running {
@@ -597,10 +601,64 @@ impl Drop for Session {
         // out of line mode, unless a suspended closure panicked and it's already there
         RUNNING.with(|r| r.borrow_mut().take());
         term::forget_terminal();
-        if !std::thread::panicking() {
-            let previous = self.hook.clone();
-            let _ = std::panic::take_hook();
-            std::panic::set_hook(Box::new(move |info| previous(info)));
+    }
+}
+
+/// A panic hook that does something first and then hands on to the one it replaced, which is
+/// put back when this is dropped.
+struct Hook {
+    /// Lowered once dropped, for when the hook can't be taken out again.
+    active: Arc<AtomicBool>,
+    previous: Option<Arc<PanicHook>>,
+    /// Where the hook lives, to tell it from one set since.
+    ours: usize,
+}
+
+impl Hook {
+    fn install(first: impl Fn() + Sync + Send + 'static) -> Hook {
+        let previous: Arc<PanicHook> = Arc::new(std::panic::take_hook());
+        let active = Arc::new(AtomicBool::new(true));
+        let (on, next) = (active.clone(), previous.clone());
+        let hook: PanicHook = Box::new(move |info| {
+            if on.load(Ordering::SeqCst) {
+                first();
+            }
+            next(info);
+        });
+        let ours = hook_address(&hook);
+        std::panic::set_hook(hook);
+        Hook {
+            active,
+            previous: Some(previous),
+            ours,
+        }
+    }
+}
+
+fn hook_address(hook: &PanicHook) -> usize {
+    &**hook as *const (dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send) as *const () as usize
+}
+
+impl Drop for Hook {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::SeqCst);
+        // hooks can't be changed while panicking; `run` drops its session after catching a
+        // panic, so this only happens if the session is dropped some other way, and then the
+        // hook stays, doing nothing but hand on
+        if std::thread::panicking() {
+            return;
+        }
+        let current = std::panic::take_hook();
+        if hook_address(&current) != self.ours {
+            // someone set their own since, which stays
+            std::panic::set_hook(current);
+            return;
+        }
+        drop(current);
+        let Some(previous) = self.previous.take() else { return };
+        match Arc::try_unwrap(previous) {
+            Ok(previous) => std::panic::set_hook(previous),
+            Err(previous) => std::panic::set_hook(Box::new(move |info| previous(info))),
         }
     }
 }
@@ -1090,6 +1148,27 @@ mod tests {
             drop(waking);
         }
         WOKEN.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn the_panic_hook_is_put_back_unless_another_was_set_since() {
+        let theirs: PanicHook = Box::new(|_| {});
+        let theirs_at = hook_address(&theirs);
+        let before = std::panic::take_hook();
+        std::panic::set_hook(theirs);
+
+        drop(Hook::install(|| {}));
+        let now = std::panic::take_hook();
+        assert_eq!(hook_address(&now), theirs_at, "theirs again, exactly");
+        std::panic::set_hook(now);
+
+        let hook = Hook::install(|| {});
+        let later: PanicHook = Box::new(|_| {});
+        let later_at = hook_address(&later);
+        std::panic::set_hook(later);
+        drop(hook);
+        assert_eq!(hook_address(&std::panic::take_hook()), later_at, "the newer one stays");
+        std::panic::set_hook(before);
     }
 
     #[test]
