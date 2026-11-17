@@ -4,7 +4,7 @@
 use crate::block::Block;
 use crate::layout::{Code, link};
 use crate::style::palette::{BLUSH, LINE, MUTED, ROSE, SOFT, TEXT};
-use crate::style::{Rgb, bold, italic, paint};
+use crate::style::{Line, Rgb, bold, italic, paint};
 use crate::table::Table;
 use crate::term::content_width;
 use crate::text;
@@ -127,33 +127,50 @@ pub fn markdown_in(src: &str, width: usize) -> Block {
         // lists
         if list_item(line).is_some() {
             gap(&mut out);
-            let mut number = 0;
+            // each item's lead and text, so a continuation line can join the item above it
+            let mut items: Vec<(String, String)> = Vec::new();
+            // the number each level is up to, or None where a level's list is bullets
+            let mut numbers: Vec<Option<u64>> = Vec::new();
             while i < lines.len() {
                 let Some((level, marker, rest)) = list_item(lines[i]) else {
                     // a continuation line belongs to the item above
-                    if !lines[i].trim().is_empty() && lines[i].starts_with("  ") && !out.is_empty() {
+                    if !lines[i].trim().is_empty() && lines[i].starts_with("  ") {
+                        if let Some((_, text)) = items.last_mut() {
+                            text.push(' ');
+                            text.push_str(lines[i].trim());
+                        }
                         i += 1;
                         continue;
                     }
                     break;
                 };
-                let (bullet, rest) = match marker {
-                    Marker::Bullet => (paint(ROSE, if level == 0 { "•" } else { "◦" }), rest.to_string()),
-                    Marker::Number => {
-                        number += 1;
-                        (paint(BLUSH, &format!("{number}.")), rest.to_string())
+                numbers.truncate(level + 1);
+                numbers.resize(level + 1, None);
+                let bullet = match marker {
+                    Marker::Bullet => {
+                        numbers[level] = None;
+                        paint(ROSE, if level == 0 { "•" } else { "◦" })
+                    }
+                    Marker::Number(start) => {
+                        // a list counts on from the number it starts at
+                        let number = numbers[level].map_or(start, |n| n + 1);
+                        numbers[level] = Some(number);
+                        paint(BLUSH, &format!("{number}."))
                     }
                 };
                 // task lists
                 let (bullet, rest) = if let Some(r) = rest.strip_prefix("[ ] ") {
-                    (paint(MUTED, "○"), r.to_string())
+                    (paint(MUTED, "○"), r)
                 } else if let Some(r) = rest.strip_prefix("[x] ").or_else(|| rest.strip_prefix("[X] ")) {
-                    (paint(ROSE, "●"), r.to_string())
+                    (paint(ROSE, "●"), r)
                 } else {
                     (bullet, rest)
                 };
                 let indent = "  ".repeat(level + 1);
-                let lead = format!("{indent}{bullet} ");
+                items.push((format!("{indent}{bullet} "), rest.to_string()));
+                i += 1;
+            }
+            for (lead, rest) in items {
                 let hang = " ".repeat(text::width(&lead));
                 out.extend(wrap(
                     &words(&rest, TEXT),
@@ -161,7 +178,6 @@ pub fn markdown_in(src: &str, width: usize) -> Block {
                     &lead,
                     &hang,
                 ));
-                i += 1;
             }
             continue;
         }
@@ -190,7 +206,8 @@ pub fn markdown_in(src: &str, width: usize) -> Block {
 
 enum Marker {
     Bullet,
-    Number,
+    /// A numbered item, and its number in the source.
+    Number(u64),
 }
 
 /// `- item`, `* item`, `1. item`: its nesting level, kind and text.
@@ -206,7 +223,8 @@ fn list_item(line: &str) -> Option<(usize, Marker, &str)> {
     let digits = t.chars().take_while(char::is_ascii_digit).count();
     let rest = &t[digits..];
     if digits > 0 && (rest.starts_with(". ") || rest.starts_with(") ")) {
-        return Some((level, Marker::Number, rest[2..].trim()));
+        let number = t[..digits].parse().unwrap_or(1);
+        return Some((level, Marker::Number(number), rest[2..].trim()));
     }
     None
 }
@@ -294,7 +312,7 @@ fn spans(src: &str) -> Vec<(String, Style, Option<String>)> {
                     i += 1;
                 }
             }
-            '*' | '_' if next == Some(c) => {
+            '*' | '_' if next == Some(c) && toggles(&chars, i, 2, style.bold) => {
                 flush(&mut buf, style, &mut out);
                 style.bold = !style.bold;
                 i += 2;
@@ -304,7 +322,7 @@ fn spans(src: &str) -> Vec<(String, Style, Option<String>)> {
                 buf.push(c);
                 i += 1;
             }
-            '*' | '_' => {
+            '*' | '_' if next != Some(c) && toggles(&chars, i, 1, style.italic) => {
                 flush(&mut buf, style, &mut out);
                 style.italic = !style.italic;
                 i += 1;
@@ -334,6 +352,21 @@ fn spans(src: &str) -> Vec<(String, Style, Option<String>)> {
     out
 }
 
+/// Whether the run of `len` emphasis marks at `i` opens emphasis (when `on` is false) or
+/// closes it. It opens only before text, with a closing run to come, and closes only after
+/// text, so the `*` in `2 * 3` is just a star.
+fn toggles(chars: &[char], i: usize, len: usize, on: bool) -> bool {
+    let after_text = i > 0 && !chars[i - 1].is_whitespace();
+    if on {
+        return after_text;
+    }
+    let before_text = chars.get(i + len).is_some_and(|c| !c.is_whitespace());
+    let run = &chars[i..i + len];
+    before_text
+        && (i + len + 1..chars.len().saturating_sub(len - 1))
+            .any(|k| &chars[k..k + len] == run && !chars[k - 1].is_whitespace())
+}
+
 /// Inline markup as one styled string, for table cells.
 fn inline(src: &str, base: Rgb) -> String {
     words(src, base)
@@ -346,11 +379,27 @@ fn inline(src: &str, base: Rgb) -> String {
 /// Fill lines with words up to `width` columns, the first line starting with `first` and the
 /// rest with `rest`.
 fn wrap(words: &[Word], width: usize, first: &str, rest: &str) -> Block {
-    let width = width.max(10);
+    let width = width.max(1);
     let mut out = Vec::new();
     let (mut line, mut used) = (first.to_string(), 0);
     for w in words {
         let wlen = text::width(&w.plain);
+        if wlen > width {
+            // a word wider than the room is broken, its colours carried across each break
+            if used > 0 {
+                out.push(std::mem::replace(&mut line, rest.to_string()));
+            }
+            let pieces = Line::new().raw(&w.painted).wrap(width);
+            let last = pieces.len() - 1;
+            for (n, piece) in pieces.into_iter().enumerate() {
+                line += &piece.to_string();
+                used = piece.width();
+                if n < last {
+                    out.push(std::mem::replace(&mut line, rest.to_string()));
+                }
+            }
+            continue;
+        }
         if used > 0 && used + 1 + wlen > width {
             out.push(std::mem::replace(&mut line, rest.to_string()));
             used = 0;
@@ -421,7 +470,42 @@ mod tests {
         assert!(lines.contains(&"  Second") && lines.contains(&"  Third"), "{out}");
         assert!(lines.iter().any(|l| l.trim().starts_with("───")), "{out}");
         assert!(out.contains("○ todo") && out.contains("● done"), "{out}");
-        assert!(!out.contains("more about it"), "{out}");
+        assert!(out.contains("● done more about it"), "{out}");
+    }
+
+    #[test]
+    fn numbers_count_on_from_the_source_at_each_level() {
+        let out = plain("1. one\n   1. inner\n   2. inner two\n2. two\n\n5. five\n6. six");
+        assert_eq!(
+            out,
+            [
+                "  1. one",
+                "    1. inner",
+                "    2. inner two",
+                "  2. two",
+                "",
+                "  5. five",
+                "  6. six"
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn a_lone_star_is_just_a_star() {
+        assert_eq!(plain("2 * 3 = 6 and 4 * 5"), "  2 * 3 = 6 and 4 * 5");
+        assert_eq!(plain("a ** b"), "  a ** b");
+        assert_eq!(plain("*it* and 5*3"), "  it and 5*3");
+        assert_eq!(plain("**bold** _it_"), "  bold it");
+    }
+
+    #[test]
+    fn narrow_panes_are_kept_to() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let out = markdown_in("some words and a longishword here\n\n- an item that wraps", 8);
+        for line in out.lines() {
+            assert!(text::width(line) <= 8, "{line:?} in {out:?}");
+        }
     }
 
     #[test]
