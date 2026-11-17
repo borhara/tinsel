@@ -32,7 +32,7 @@
 //! | **colour** | [`palette`], [`Rgb`], [`mix`]; [`style`] for gradients, blinking and the rest; [`anim`] for the shimmer, twinkle and moving bars tinsel animates with, and [`anim::Glide`] and [`anim::Glider`] for values that ease into place |
 //! | **apps** | [`app`]: full-screen dashboards and tools, with [`app::Panel`]s, [`app::List`]s, [`app::ScrollView`]s, [`app::Tabs`], [`app::Plot`]s, [`app::Stat`]s, [`app::Loading`], [`app::Scrollbar`]s and [`app::big`] text laid out in [`app::Rect`]s, drawn only when something changes or a frame asks; [`app::Job`] for work on another thread; [`app::snapshot`] to test them |
 //! | **questions** | [`prompt`]: confirm, input (validation, suggestions, path completion), password, number, date, select and multiselect (filter as you type, headings, disabled options), a dropdown for long lists, editor, confirm by typing; `.back()` to go back a question |
-//! | **helpers** | [`text`] (width-aware pad, truncate from either end, wrap, widths with tabs) and [`format`](mod@format) (bytes, durations, ago, thousands marked off, the local time of day); [`clipboard`] to copy and paste; [`terminal_width`] |
+//! | **helpers** | [`text`] (width-aware pad, truncate from either end, wrap, widths with tabs, fuzzy matching and highlighting what matched) and [`format`](mod@format) (bytes, durations, ago, thousands marked off, the local time of day); [`clipboard`] to copy and paste; [`terminal_width`] |
 //! | **setup** | [`install_panic_hook`], [`set_output`] for `--json` and `--quiet`, [`set_target`] to draw on stderr, [`set_accent`], [`set_theme`], [`set_color_mode`], [`set_fps`], [`set_focus`], [`set_history`] and [`set_ctrl_c`], [`timings`], [`doctor`] |
 
 //! # How the pieces fit
