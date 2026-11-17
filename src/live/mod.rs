@@ -501,8 +501,8 @@ impl Live {
     /// Timings live in `$XDG_CACHE_HOME/tinsel` (or `~/.cache/tinsel`), one small file per
     /// name. Only runs drawn on a terminal are recorded, and only steps that succeed.
     /// [`timings`](crate::timings) shows what's been learned.
-    pub fn remember_as(mut self, name: &str) -> Self {
-        self.history = Some(name.to_string());
+    pub fn remember_as(mut self, name: impl Into<String>) -> Self {
+        self.history = Some(name.into());
         self
     }
 
