@@ -45,7 +45,8 @@ pub mod palette {
 }
 
 /// Berry → rose → blush, for titles and filled progress.
-pub const RAMP: [Rgb; 3] = [palette::BERRY, palette::ROSE, palette::BLUSH];
+/// A slice, so the stops can change without breaking code that uses it.
+pub const RAMP: &[Rgb] = &[palette::BERRY, palette::ROSE, palette::BLUSH];
 
 /// How much colour tinsel draws with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

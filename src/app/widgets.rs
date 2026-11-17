@@ -1082,7 +1082,7 @@ impl Widget for Plot {
             let t = (h - 1 - row) as f32 / h.saturating_sub(1).max(1) as f32;
             let color = match self.color {
                 Some(c) => mix(mix(TRACK, c, 0.45), c, t),
-                None => sample(&RAMP, t),
+                None => sample(RAMP, t),
             };
             let mut line = String::new();
             for &v in shown {
@@ -1144,7 +1144,7 @@ impl Widget for Stat {
             large.render(Rect::new(area.x, area.y + 1, area.width, 3), frame);
             4
         } else {
-            frame.print(area, 1, &bold(&gradient(&self.value, &RAMP, 0.0)));
+            frame.print(area, 1, &bold(&gradient(&self.value, RAMP, 0.0)));
             2
         };
         if let Some((note, color)) = &self.note {
@@ -1202,7 +1202,7 @@ pub fn big(text: &str) -> Block {
             row.push_str(&part);
         }
     }
-    rows.iter().map(|r| gradient(r, &RAMP, 0.0)).collect()
+    rows.iter().map(|r| gradient(r, RAMP, 0.0)).collect()
 }
 
 // MARK: - Loading

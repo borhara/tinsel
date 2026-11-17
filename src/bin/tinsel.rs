@@ -384,7 +384,7 @@ fn palette_section() {
         println!("  {}", cells.join(""));
     }
     println!();
-    println!("  {}", gradient(&"━".repeat(36), &RAMP, 0.0));
+    println!("  {}", gradient(&"━".repeat(36), RAMP, 0.0));
 }
 
 fn accents_section() {
@@ -404,7 +404,7 @@ fn accents_section() {
                 "  {}  {}  {}  {}",
                 paint(palette::MUTED, &format!("{name:<7}")),
                 Spinner::Sparkle.frame(1.3),
-                gradient("tinsel", &RAMP, 0.0),
+                gradient("tinsel", RAMP, 0.0),
                 badge(palette::ROSE, "live")
             )
         })

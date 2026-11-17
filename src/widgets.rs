@@ -153,7 +153,7 @@ impl Spinner {
             Spinner::Arc => Line::new().push(ROSE, ARC[tick(t, 12.0) % ARC.len()]),
             Spinner::Orbit => {
                 let drift = (turn(t, 0.8).sin() + 1.0) / 2.0;
-                Line::new().push(sample(&RAMP, drift), ORBIT[tick(t, 12.0) % ORBIT.len()])
+                Line::new().push(sample(RAMP, drift), ORBIT[tick(t, 12.0) % ORBIT.len()])
             }
             Spinner::Pulse => {
                 let v = (turn(t, 3.2).sin() + 1.0) / 2.0;
@@ -221,7 +221,7 @@ fn shiny_bar(fraction: f32, width: usize, t: Option<f64>) -> Line {
     let filled = halves.div_ceil(2) as f32;
     let glint = t.map(|t| (t * 16.0).rem_euclid(filled as f64 + 10.0) as f32 - 5.0);
     (0..width).fold(Line::new(), |line, i| {
-        let base = sample(&RAMP, i as f32 / width.saturating_sub(1).max(1) as f32);
+        let base = sample(RAMP, i as f32 / width.saturating_sub(1).max(1) as f32);
         let c = glint.map_or(base, |g| mix(base, SHINE, (-(i as f32 - g).powi(2) / 3.0).exp() * 0.75));
         match halves.saturating_sub(i * 2) {
             0 => line.push(TRACK, "━"),
@@ -295,7 +295,7 @@ fn wave(fraction: f32, width: usize, t: Option<f64>) -> Line {
         if played <= 0.0 {
             return line.push(TRACK, glyph);
         }
-        let base = sample(&RAMP, x / width.saturating_sub(1).max(1) as f32);
+        let base = sample(RAMP, x / width.saturating_sub(1).max(1) as f32);
         let lit = mix(TRACK, base, played);
         let glow = t.map_or(0.0, |_| (-(head - x - 0.5).abs() / 0.8).exp() * 0.7);
         line.push(mix(lit, SHINE, glow), glyph)
