@@ -1280,12 +1280,30 @@ impl Widget for Footer {
 #[derive(Clone, Copy, Debug)]
 pub struct Sparkles {
     density: f32,
+    wander: bool,
 }
 
 impl Sparkles {
     /// One star for every forty or so cells.
     pub fn new() -> Self {
-        Sparkles { density: 0.025 }
+        Sparkles {
+            density: 0.025,
+            wander: false,
+        }
+    }
+
+    /// Each star fades out completely and comes back somewhere else, instead of twinkling in
+    /// one place.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Sparkles};
+    ///
+    /// let mut frame = Frame::new(40, 10);
+    /// frame.render(frame.area(), Sparkles::new().wandering());
+    /// ```
+    pub fn wandering(mut self) -> Self {
+        self.wander = true;
+        self
     }
 
     /// The share of cells with a star, 0 to 1.
@@ -1301,10 +1319,36 @@ impl Default for Sparkles {
     }
 }
 
+fn wander(density: f32, area: Rect, frame: &mut Frame, t: f32) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let count = ((area.width * area.height) as f32 * density).round() as u32;
+    for star in 0..count {
+        let life = 2.5 + 3.5 * noise(star, 11);
+        let age = t / life + noise(star, 12);
+        let (lived, p) = (age.floor() as u32, age.fract());
+        let b = (p * std::f32::consts::PI).sin().powi(3);
+        // hidden near the ends of its life so it never visibly jumps
+        if b < 0.08 {
+            continue;
+        }
+        let place = star.wrapping_mul(7919) ^ lived.wrapping_mul(104_729);
+        let col = ((noise(place, 13) * area.width as f32) as usize).min(area.width - 1);
+        let row = ((noise(place, 14) * area.height as f32) as usize).min(area.height - 1);
+        let glyph = ["⋆", "✧", "✦"][((b * 3.0) as usize).min(2)];
+        let shine = paint(sample(&[BERRY, ROSE, SHINE], b), glyph);
+        frame.print(Rect::new(area.x + col, area.y + row, 1, 1), 0, &shine);
+    }
+}
+
 impl Widget for Sparkles {
     fn render(&self, area: Rect, frame: &mut Frame) {
         const STARS: [&str; 4] = ["·", "⋆", "✧", "✦"];
         let t = frame.time();
+        if self.wander {
+            return wander(self.density, area, frame, t);
+        }
         for row in 0..area.height {
             for col in 0..area.width {
                 let cell = ((area.y + row) * 4093 + area.x + col) as u32;
@@ -1328,6 +1372,21 @@ impl Widget for Sparkles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wandering_stars_go_out_and_come_back_elsewhere() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let drawn = |t: f32| {
+            let mut f = Frame::new(60, 20).at(t);
+            f.render(f.area(), Sparkles::new().density(0.02).wandering());
+            f.snapshot().plain()
+        };
+        let stars = |s: &str| s.chars().filter(|c| "⋆✧✦".contains(*c)).count();
+        let now = drawn(1.0);
+        assert!(stars(&now) <= 24 && !now.contains('·'), "no faint dots left behind");
+        let later = drawn(40.0);
+        assert_ne!(now, later, "they've moved on");
+    }
 
     #[test]
     fn loading_says_what_its_waiting_for_then_how_far_it_is() {
