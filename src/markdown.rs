@@ -1,5 +1,6 @@
 //! Markdown drawn for the terminal, in tinsel's colours: for changelogs, long help text and
-//! what's-new notes.
+//! what's-new notes. [`markdown`](fn@crate::markdown) wraps it to the terminal, and
+//! [`wrapped`] to a width of your own.
 
 use crate::block::Block;
 use crate::layout::{Code, link};
@@ -17,17 +18,17 @@ use crate::text;
 /// tinsel::markdown("## What's new\n\n- **Faster** builds\n- A `--json` flag").print();
 /// ```
 pub fn markdown(src: &str) -> Block {
-    markdown_in(src, content_width())
+    wrapped(src, content_width())
 }
 
-/// Like [`markdown`], wrapped to `width` columns rather than the terminal's: for a pane
-/// beside something else.
+/// Like [`markdown`](fn@crate::markdown), wrapped to `width` columns rather than the
+/// terminal's: for a pane beside something else.
 ///
 /// ```
-/// let narrow = tinsel::markdown_in("A paragraph long enough to wrap onto a second line.", 24);
+/// let narrow = tinsel::markdown::wrapped("A paragraph long enough to wrap onto a second line.", 24);
 /// assert!(narrow.lines().len() > 1);
 /// ```
-pub fn markdown_in(src: &str, width: usize) -> Block {
+pub fn wrapped(src: &str, width: usize) -> Block {
     let width = width.saturating_sub(2);
     let lines: Vec<&str> = src.lines().collect();
     let mut out = Block::new();
@@ -502,7 +503,7 @@ mod tests {
     #[test]
     fn narrow_panes_are_kept_to() {
         crate::set_color_mode(crate::ColorMode::None);
-        let out = markdown_in("some words and a longishword here\n\n- an item that wraps", 8);
+        let out = wrapped("some words and a longishword here\n\n- an item that wraps", 8);
         for line in out.lines() {
             assert!(text::width(line) <= 8, "{line:?} in {out:?}");
         }

@@ -478,7 +478,7 @@ mod child {
     pub fn terminal() {
         own_terminal();
         // what the terminal is: its size, colour and background, found by asking it
-        assert_eq!((crate::width(), crate::content_width()), (100, 76));
+        assert_eq!((crate::terminal_width(), crate::text::content_width()), (100, 76));
         assert_eq!(crate::color_mode(), crate::ColorMode::TrueColor);
         assert_eq!(crate::theme(), crate::Theme::Light);
         crate::set_theme(crate::Theme::Dark);
@@ -659,7 +659,7 @@ mod child {
         assert_eq!(crate::target(), Target::Stderr);
         assert_eq!(crate::color_mode(), ColorMode::None);
         crate::success("drawn on stderr");
-        assert!(crate::width() > 0);
+        assert!(crate::terminal_width() > 0);
         crate::set_target(Target::Stdout);
 
         // a mode that was chosen stays chosen when the target moves

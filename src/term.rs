@@ -4,13 +4,15 @@
 use std::io::{self, IsTerminal, Read, Write};
 use std::time::{Duration, Instant};
 
-/// The width tinsel lays things out in: the terminal's, capped so lines stay readable.
+/// The width tinsel lays text out in: the terminal's, capped at 76 columns so lines stay
+/// readable. What [`markdown`](fn@crate::markdown), cards and messages wrap to.
 pub fn content_width() -> usize {
     width().min(76)
 }
 
 /// Columns in the terminal tinsel draws on (stdout, or the [`Target`](crate::Target)), falling
-/// back to `$COLUMNS`, then 80.
+/// back to `$COLUMNS`, then 80. For the width of a piece of text, see
+/// [`text::width`](crate::text::width).
 pub fn width() -> usize {
     measured_or(ioctl_size().map(|(cols, _)| cols), "COLUMNS", 80)
 }

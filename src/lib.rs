@@ -27,7 +27,7 @@
 //! | **data** | [`Table`] (sorting, borders, wrapping, footers), [`Tree`], [`pairs`], [`columns`] |
 //! | **charts** | [`sparkline`], [`bars`], [`meter`], [`histogram`], [`heatmap`], [`waveform`] |
 //! | **code** | [`diff`], [`Code`] excerpts with syntax colouring ([`Lang`]) and carets under the problem |
-//! | **documents** | [`markdown`], [`json`], [`Help`] (with an entrance), and [`Block::page`] for anything long |
+//! | **documents** | [`markdown`](fn@markdown) (and [`markdown::wrapped`]), [`json`], [`Help`] (with an entrance), and [`Block::page`] for anything long |
 //! | **inline** | [`badge`], [`link`], [`Card`], [`paint`], [`bold`] and friends |
 //! | **apps** | [`app`]: full-screen dashboards and tools, with [`app::Panel`]s, [`app::List`]s, [`app::ScrollView`]s, [`app::Tabs`], [`app::Plot`]s, [`app::Stat`]s, [`app::Loading`] and [`app::big`] text laid out in [`app::Rect`]s; [`app::snapshot`] to test them |
 //! | **questions** | [`prompt`]: confirm, input (validation, suggestions, path completion), password, number, date, select and multiselect (filter as you type, headings, disabled options), a dropdown for long lists, editor, confirm by typing; `.back()` to go back a question |
@@ -97,7 +97,7 @@ mod history;
 mod json;
 mod layout;
 mod live;
-mod markdown;
+pub mod markdown;
 mod message;
 mod notify;
 mod output;
@@ -125,7 +125,7 @@ pub use history::set_history;
 pub use json::{JsonError, json};
 pub use layout::{Code, IntoLang, badge, columns, diff, link, pairs};
 pub use live::{Live, RunError, Step, StepCommand};
-pub use markdown::{markdown, markdown_in};
+pub use markdown::markdown;
 pub use message::{Callout, Report, Tone, callout, counter, error, hint, info, rule, success, title, warn};
 pub use notify::notify;
 pub use output::{Output, Target, capture, output, set_output, set_target, target};
@@ -137,7 +137,8 @@ pub use style::{
     palette, sample, set_accent, set_color_mode, set_theme, theme, underline, with_color_mode,
 };
 pub use table::{Align, Border, Table};
-pub use term::{CtrlC, content_width, set_ctrl_c, width};
+pub use term::width as terminal_width;
+pub use term::{CtrlC, set_ctrl_c};
 pub use tree::Tree;
 pub use watch::set_focus;
 pub use widgets::{BarStyle, Card, Label, Spinner, bar, live_bar, live_waveform, pop, shimmer, waveform};
