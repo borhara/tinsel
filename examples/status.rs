@@ -12,19 +12,19 @@ fn main() {
     Table::new(["service", "status", "p95", "requests"])
         .row([
             "api".to_string(),
-            badge("healthy", palette::SAGE),
+            badge(palette::SAGE, "healthy"),
             "84ms".into(),
             "1.2k/s".into(),
         ])
         .row([
             "worker".to_string(),
-            badge("degraded", palette::AMBER),
+            badge(palette::AMBER, "degraded"),
             "1.9s".into(),
             "40/s".into(),
         ])
         .row([
             "cron".to_string(),
-            badge("idle", palette::SOFT),
+            badge(palette::SOFT, "idle"),
             "-".into(),
             "0/s".into(),
         ])

@@ -651,6 +651,9 @@ pub(crate) fn ansi256(Rgb(r, g, b): Rgb) -> u8 {
 }
 
 /// Colour the text. Resets only the foreground, so it nests inside bold, backgrounds and so on.
+///
+/// Colours come before the text they colour throughout tinsel: `paint(ROSE, "hi")`,
+/// [`paint_on`], [`paint_bg`], [`badge`](crate::badge), [`Line::push`].
 pub fn paint(rgb: Rgb, s: &str) -> String {
     if color_mode() == ColorMode::None {
         return s.to_string();
@@ -658,8 +661,15 @@ pub fn paint(rgb: Rgb, s: &str) -> String {
     format!("\x1b[{}m{s}\x1b[39m", sgr(rgb, 38))
 }
 
-/// Colour both the text and the cells behind it.
-pub fn paint_bg(fg: Rgb, bg: Rgb, s: &str) -> String {
+/// Colour both the text and the cells behind it: `fg` text on `bg`.
+///
+/// ```
+/// use tinsel::{Rgb, paint_on};
+///
+/// let lit = tinsel::with_color_mode(tinsel::ColorMode::TrueColor, || paint_on(Rgb(0, 0, 0), Rgb(255, 255, 255), "hi"));
+/// assert_eq!(lit, "\x1b[38;2;0;0;0;48;2;255;255;255mhi\x1b[39;49m");
+/// ```
+pub fn paint_on(fg: Rgb, bg: Rgb, s: &str) -> String {
     if color_mode() == ColorMode::None {
         return s.to_string();
     }
@@ -667,7 +677,14 @@ pub fn paint_bg(fg: Rgb, bg: Rgb, s: &str) -> String {
 }
 
 /// Tint the cells behind the text, leaving its own colours alone.
-pub(crate) fn on_bg(bg: Rgb, s: &str) -> String {
+///
+/// ```
+/// use tinsel::{Rgb, paint_bg};
+///
+/// let lit = tinsel::with_color_mode(tinsel::ColorMode::TrueColor, || paint_bg(Rgb(40, 30, 36), "hi"));
+/// assert_eq!(lit, "\x1b[48;2;40;30;36mhi\x1b[49m");
+/// ```
+pub fn paint_bg(bg: Rgb, s: &str) -> String {
     if color_mode() == ColorMode::None {
         return s.to_string();
     }
@@ -744,7 +761,7 @@ impl Line {
     }
 
     /// Add text in a colour.
-    pub fn push(mut self, s: &str, rgb: Rgb) -> Self {
+    pub fn push(mut self, rgb: Rgb, s: &str) -> Self {
         self.text += &paint(rgb, s);
         self.width += crate::text::width(s);
         self
@@ -772,13 +789,13 @@ impl Line {
     }
 
     /// A muted, aligned key followed by a value - the row shape cards are built from.
-    pub fn kv(key: &str, value: &str, color: Rgb) -> Self {
+    pub fn kv(color: Rgb, key: &str, value: &str) -> Self {
         // a column of 10 for the keys, and always a space after a longer one
-        let key = Line::new().push(&format!("{key:<9} "), palette::MUTED);
+        let key = Line::new().push(palette::MUTED, &format!("{key:<9} "));
         let hang = key.width;
         Line {
             hang,
-            ..key.push(value, color)
+            ..key.push(color, value)
         }
     }
 
@@ -794,7 +811,7 @@ impl Line {
     /// ```
     /// use tinsel::{Line, palette};
     ///
-    /// let line = Line::kv("url", "https://example.com/a/rather/long/path", palette::TEXT);
+    /// let line = Line::kv(palette::TEXT, "url", "https://example.com/a/rather/long/path");
     /// assert!(line.wrap(30).iter().all(|piece| piece.width() <= 30));
     /// ```
     pub fn wrap(&self, cols: usize) -> Vec<Line> {
@@ -1115,7 +1132,7 @@ mod tests {
     fn wrapping_a_line_keeps_characters_whole() {
         let pieces = with_color_mode(ColorMode::None, || {
             Line::new()
-                .push("e\u{301}e\u{301}e\u{301} 日本語日本", palette::TEXT)
+                .push(palette::TEXT, "e\u{301}e\u{301}e\u{301} 日本語日本")
                 .wrap(4)
         });
         let texts: Vec<String> = pieces.iter().map(|p| p.to_string()).collect();

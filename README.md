@@ -210,8 +210,8 @@ colours JSON.
 use tinsel::{Border, Table, badge, palette};
 
 Table::new(["service", "status", "p95"])
-    .row(["api".to_string(), badge("healthy", palette::SAGE), "84ms".into()])
-    .row(["auth".to_string(), badge("slow", palette::AMBER), "1.2s".into()])
+    .row(["api".to_string(), badge(palette::SAGE, "healthy"), "84ms".into()])
+    .row(["auth".to_string(), badge(palette::AMBER, "slow"), "1.2s".into()])
     .sort_by_desc(2)           // by value: 1.2s before 84ms
     .border(Border::Rounded)
     .print();

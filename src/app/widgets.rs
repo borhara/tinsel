@@ -6,7 +6,7 @@ use super::{Frame, Rect};
 use crate::block::Block;
 use crate::layout::Code;
 use crate::style::palette::{BERRY, BLUSH, LINE, MUTED, PETAL, ROSE, SHINE, SOFT, TEXT, TRACK};
-use crate::style::{Line, RAMP, Rgb, bold, gradient, mix, paint, paint_bg, sample};
+use crate::style::{Line, RAMP, Rgb, bold, gradient, mix, paint, paint_on, sample};
 use crate::table::Table;
 use crate::text;
 use crate::tree::Tree;
@@ -398,7 +398,7 @@ impl<'a> Panel<'a> {
     /// use tinsel::{Line, palette};
     ///
     /// tinsel::set_color_mode(tinsel::ColorMode::None);
-    /// let title = Line::new().push("● ", palette::RED).push("api", palette::TEXT);
+    /// let title = Line::new().push(palette::RED, "● ").push(palette::TEXT, "api");
     /// let mut frame = Frame::new(14, 2);
     /// frame.render(frame.area(), Panel::new(title.to_string()));
     /// assert_eq!(frame.snapshot().plain(), "╭─ ● api ────╮\n╰────────────╯");
@@ -502,10 +502,10 @@ impl Widget for Panel<'_> {
         };
 
         // the title and footer sit on the border, so it's built a cell at a time around them
-        let mut title = Line::new().push(" ", LINE);
+        let mut title = Line::new().push(LINE, " ");
         if self.focused {
             let b = ((t * 2.6).sin() + 1.0) / 2.0;
-            title = title.push("✦ ", sample(&[BERRY, ROSE, SHINE], b * b));
+            title = title.push(sample(&[BERRY, ROSE, SHINE], b * b), "✦ ");
         }
         let pill = if self.count.is_empty() {
             String::new()
@@ -517,7 +517,7 @@ impl Widget for Panel<'_> {
             } else {
                 (SOFT, mix(TRACK, LINE, 0.4))
             };
-            format!(" {}", paint_bg(fg, bg, &format!(" {} ", self.count)))
+            format!(" {}", paint_on(fg, bg, &format!(" {} ", self.count)))
         };
         let pill_w = text::width(&pill);
         let room = w.saturating_sub(6 + title.width());
@@ -540,15 +540,15 @@ impl Widget for Panel<'_> {
             } else {
                 bold(&paint(PETAL, &name))
             };
-            title.raw(&name).raw(&pill).push(" ", LINE)
+            title.raw(&name).raw(&pill).push(LINE, " ")
         } else if styled {
-            title.raw(&name).raw(&pill).push(" ", LINE)
+            title.raw(&name).raw(&pill).push(LINE, " ")
         } else {
-            title.push(&name, SOFT).raw(&pill).push(" ", LINE)
+            title.push(SOFT, &name).raw(&pill).push(LINE, " ")
         };
-        let mut top = Line::new().push("╭", color(0));
+        let mut top = Line::new().push(color(0), "╭");
         if w > 2 {
-            top = top.push("─", color(1)).append(title.clone());
+            top = top.push(color(1), "─").append(title.clone());
         }
         // the status, with a dash either side of it and a space inside those
         let spare = (w - 1).saturating_sub(top.width() + 4);
@@ -567,12 +567,12 @@ impl Widget for Panel<'_> {
                 } else {
                     paint(MUTED, &status)
                 };
-                top = top.push(" ", LINE).raw(&status).push(" ", LINE);
+                top = top.push(LINE, " ").raw(&status).push(LINE, " ");
             } else {
-                top = top.push("─", color(x));
+                top = top.push(color(x), "─");
             }
         }
-        frame.print(area, 0, &top.push("╮", color(w - 1)).to_string());
+        frame.print(area, 0, &top.push(color(w - 1), "╮").to_string());
 
         for y in 1..h - 1 {
             frame.print(area.row(y), 0, &paint(color(perimeter - y), "│"));
@@ -590,16 +590,16 @@ impl Widget for Panel<'_> {
         };
         let footer_w = if footer.is_empty() { 0 } else { text::width(&footer) + 2 };
         let bottom_at = |x: usize| (w - 1) + (h - 1) + (w - 1 - x);
-        let mut bottom = Line::new().push("╰", color(bottom_at(0)));
+        let mut bottom = Line::new().push(color(bottom_at(0)), "╰");
         for x in 1..w - 2 - footer_w {
-            bottom = bottom.push("─", color(bottom_at(x)));
+            bottom = bottom.push(color(bottom_at(x)), "─");
         }
         if footer_w > 0 {
-            bottom = bottom.push(&format!(" {footer} "), MUTED);
+            bottom = bottom.push(MUTED, &format!(" {footer} "));
         }
         let bottom = bottom
-            .push("─", color(bottom_at(w - 2)))
-            .push("╯", color(bottom_at(w - 1)));
+            .push(color(bottom_at(w - 2)), "─")
+            .push(color(bottom_at(w - 1)), "╯");
         frame.print(area.row(h - 1), 0, &bottom.to_string());
 
         if let Some(body) = &self.body {
@@ -814,13 +814,13 @@ impl Tabs {
     /// use tinsel::palette;
     ///
     /// tinsel::set_color_mode(tinsel::ColorMode::None);
-    /// let tabs = Tabs::new(["build", "deploy"]).badge(0, "✔", palette::SAGE).badge(1, "3", palette::RED);
+    /// let tabs = Tabs::new(["build", "deploy"]).badge(0, palette::SAGE, "✔").badge(1, palette::RED, "3");
     /// let mut frame = Frame::new(30, 1);
     /// frame.render(frame.area(), &tabs);
     /// assert_eq!(frame.snapshot().plain(), " build ✔   deploy 3");
     /// assert_eq!(tabs.at(frame.area(), 7, 0), Some(0));
     /// ```
-    pub fn badge(mut self, index: usize, text: impl Into<String>, color: Rgb) -> Self {
+    pub fn badge(mut self, index: usize, color: Rgb, text: impl Into<String>) -> Self {
         if let Some(tab) = self.tabs.get_mut(index) {
             tab.badge = Some((text.into(), color));
         }
@@ -856,7 +856,7 @@ impl Widget for Tabs {
             }
             label.push(' ');
             if chosen {
-                line.raw(&crate::style::on_bg(mix(TRACK, ROSE, 0.32), &label))
+                line.raw(&crate::style::paint_bg(mix(TRACK, ROSE, 0.32), &label))
             } else {
                 line.raw(&label)
             }
@@ -949,7 +949,7 @@ impl Widget for Plot {
 ///
 /// tinsel::set_color_mode(tinsel::ColorMode::None);
 /// let mut frame = Frame::new(16, 3);
-/// frame.render(frame.area(), Stat::new("uptime", "99.9%").note("30 days", palette::SAGE));
+/// frame.render(frame.area(), Stat::new("uptime", "99.9%").note(palette::SAGE, "30 days"));
 /// assert_eq!(frame.snapshot().plain(), "uptime\n99.9%\n30 days");
 /// ```
 pub struct Stat {
@@ -969,7 +969,7 @@ impl Stat {
     }
 
     /// A line under the number, in a colour: `▲ 12%` in sage, `3 failing` in red.
-    pub fn note(mut self, text: impl Into<String>, color: Rgb) -> Self {
+    pub fn note(mut self, color: Rgb, text: impl Into<String>) -> Self {
         self.note = Some((text.into(), color));
         self
     }
@@ -1165,8 +1165,8 @@ impl Widget for Loading {
 /// ```
 pub fn hints(keys: &[(&str, &str)]) -> Line {
     keys.iter().enumerate().fold(Line::new(), |line, (i, (key, what))| {
-        let line = if i > 0 { line.push(" · ", TRACK) } else { line };
-        line.push(key, BLUSH).space(1).push(what, MUTED)
+        let line = if i > 0 { line.push(TRACK, " · ") } else { line };
+        line.push(BLUSH, key).space(1).push(MUTED, what)
     })
 }
 
@@ -1243,9 +1243,9 @@ impl Footer {
                 } else if i == 0 {
                     line.space(gap)
                 } else {
-                    line.push(" · ", TRACK)
+                    line.push(TRACK, " · ")
                 };
-                line = line.push(key, BLUSH).space(1).push(what, MUTED);
+                line = line.push(BLUSH, key).space(1).push(MUTED, what);
             }
         }
         line
@@ -1476,7 +1476,7 @@ mod tests {
 
     #[test]
     fn stats_go_big_when_there_is_room() {
-        let stat = Stat::new("p95", "12").note("ms", crate::palette::SOFT);
+        let stat = Stat::new("p95", "12").note(crate::palette::SOFT, "ms");
         assert_eq!(drawn(10, 5, &stat), "p95\n╶┐  ╶─╮\n │  ╭─╯\n╶┴╴ ╰─╴\nms");
         // too narrow for big digits: plain, with the note right under
         assert_eq!(drawn(4, 5, &stat), "p95\n12\nms\n\n");
@@ -1626,9 +1626,9 @@ mod tests {
     #[test]
     fn tabs_with_badges_are_wider_and_clicks_follow() {
         let tabs = Tabs::new(["a", "bb", "c"])
-            .badge(0, "12", crate::palette::RED)
+            .badge(0, crate::palette::RED, "12")
             .color(2, crate::palette::RED)
-            .badge(9, "ignored", crate::palette::RED)
+            .badge(9, crate::palette::RED, "ignored")
             .color(9, crate::palette::RED)
             .selected(2);
         assert_eq!(drawn(20, 1, &tabs), " a 12   bb   c");
@@ -1654,7 +1654,7 @@ mod tests {
     #[test]
     fn everything_printable_is_a_widget() {
         assert_eq!(drawn(4, 1, String::from("hi")), "hi");
-        assert_eq!(drawn(4, 1, Line::new().push("ok", TEXT)), "ok");
+        assert_eq!(drawn(4, 1, Line::new().push(TEXT, "ok")), "ok");
         assert_eq!(drawn(9, 2, Box::new("boxed up") as Box<dyn Widget>), "boxed up\n");
         assert_eq!(
             drawn(12, 2, Table::new(["a", "b"]).row(["1", "2"])).lines().next(),
@@ -1700,7 +1700,7 @@ mod tests {
     fn widgets_know_their_size() {
         crate::set_color_mode(crate::ColorMode::None);
         assert_eq!(String::from("ab\ncde").size(), Some((3, 2)));
-        assert_eq!(Line::new().push("abcd", TEXT).size(), Some((4, 1)));
+        assert_eq!(Line::new().push(TEXT, "abcd").size(), Some((4, 1)));
         assert_eq!(
             Block::from(vec!["  ab".to_string(), "  abc".to_string()]).size(),
             Some((3, 2))

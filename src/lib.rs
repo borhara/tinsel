@@ -134,7 +134,7 @@ pub use region::Region;
 pub use spin::{Progress, ProgressIterator, WithProgress, spin, try_spin};
 pub use style::{
     Accent, ColorMode, Line, RAMP, Rgb, Theme, blink, bold, color_mode, dim, gradient, italic, mix, paint, paint_bg,
-    palette, sample, set_accent, set_color_mode, set_theme, theme, underline, with_color_mode,
+    paint_on, palette, sample, set_accent, set_color_mode, set_theme, theme, underline, with_color_mode,
 };
 pub use table::{Align, Border, Table};
 pub use term::width as terminal_width;

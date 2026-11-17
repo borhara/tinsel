@@ -7,7 +7,7 @@ use tinsel::{ColorMode, Line, Table, badge, palette, set_color_mode, text};
 fn table_lines_up_styled_cells() {
     // a styled cell must take up only its visible width
     set_color_mode(ColorMode::TrueColor);
-    let table = Table::new(["app", "status"]).row(["core".to_string(), badge("live", palette::ROSE)]);
+    let table = Table::new(["app", "status"]).row(["core".to_string(), badge(palette::ROSE, "live")]);
     let widths: Vec<usize> = table.lines().lines().iter().map(|l| text::width(l)).collect();
     // "  " + 4 (core) + 3 (gap) + 6 ("status" / " live ")
     assert_eq!(widths, [15, 15, 15]);
@@ -16,6 +16,6 @@ fn table_lines_up_styled_cells() {
 #[test]
 fn line_measures_what_it_shows() {
     set_color_mode(ColorMode::TrueColor);
-    let line = Line::new().push("● ", palette::ROSE).push("日本", palette::TEXT);
+    let line = Line::new().push(palette::ROSE, "● ").push(palette::TEXT, "日本");
     assert_eq!(line.width(), 6);
 }

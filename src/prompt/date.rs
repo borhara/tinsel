@@ -179,7 +179,7 @@ pub(super) fn calendar(at: Date, today: Date) -> Vec<String> {
         let d = Date { day, ..at };
         let num = format!("{day:>2}");
         row += &if d == at {
-            paint_bg(ROSE, mix(TRACK, ROSE, 0.28), &format!(" {num} "))
+            paint_on(ROSE, mix(TRACK, ROSE, 0.28), &format!(" {num} "))
         } else if d == today {
             format!(" {} ", underline(&paint(ROSE, &num)))
         } else {

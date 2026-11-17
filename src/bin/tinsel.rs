@@ -404,7 +404,7 @@ fn accents_section() {
                 paint(palette::MUTED, &format!("{name:<7}")),
                 Spinner::Sparkle.frame(1.3),
                 gradient("tinsel", &RAMP, 0.0),
-                badge("live", palette::ROSE)
+                badge(palette::ROSE, "live")
             )
         })
         .collect();
@@ -520,11 +520,11 @@ fn report_section() {
 fn badges_section() {
     println!(
         "  {}  {}  {}  {}  {}",
-        badge("live", palette::ROSE),
-        badge("passing", palette::SAGE),
-        badge("beta", palette::AMBER),
-        badge("failed", palette::RED),
-        badge("v0.1.0", palette::SOFT)
+        badge(palette::ROSE, "live"),
+        badge(palette::SAGE, "passing"),
+        badge(palette::AMBER, "beta"),
+        badge(palette::RED, "failed"),
+        badge(palette::SOFT, "v0.1.0")
     );
     println!();
     println!(
@@ -538,21 +538,21 @@ fn table_section() {
     Table::new(["service", "status", "environments", "size", "deploys"])
         .row([
             "core".to_string(),
-            badge("live", palette::ROSE),
+            badge(palette::ROSE, "live"),
             "dev, staging, prod".into(),
             "34.2 MB".into(),
             "128".into(),
         ])
         .row([
             "queue".to_string(),
-            badge("building", palette::AMBER),
+            badge(palette::AMBER, "building"),
             "dev, staging".into(),
             "12.8 MB".into(),
             "64".into(),
         ])
         .row([
             "worker".to_string(),
-            badge("failed", palette::RED),
+            badge(palette::RED, "failed"),
             "dev".into(),
             "8.1 MB".into(),
             "9".into(),
@@ -762,7 +762,7 @@ fn progress_section() {
 fn card_section() {
     Card::success("all set")
         .kv("key", "value, aligned for you")
-        .kv_with("link", "https://example.com", palette::BLUSH)
+        .kv_with(palette::BLUSH, "link", "https://example.com")
         .width(52)
         .print();
 }
@@ -850,7 +850,7 @@ fn region_section() {
         let mut table = Table::new(["service", "status"]);
         for (i, name) in services.iter().enumerate() {
             let status = match i.cmp(&ready) {
-                std::cmp::Ordering::Less => badge("ready", palette::SAGE),
+                std::cmp::Ordering::Less => badge(palette::SAGE, "ready"),
                 std::cmp::Ordering::Equal => {
                     format!("{} {}", Spinner::default().frame(t), paint(palette::SOFT, "starting"))
                 }
@@ -1110,7 +1110,7 @@ fn demo(fail: bool, spinner: Spinner, bar: tinsel::BarStyle) {
             Card::failure("deploy failed at Lambda function")
                 .kv("why", "your user can't hand the role to the function")
                 .kv("fix", "allow iam:PassRole, then deploy again")
-                .kv_with("check", "my-app doctor", palette::ROSE),
+                .kv_with(palette::ROSE, "check", "my-app doctor"),
         );
         std::process::exit(1);
     }
@@ -1135,8 +1135,8 @@ fn demo(fail: bool, spinner: Spinner, bar: tinsel::BarStyle) {
     live.finish_with_card(
         Card::success("deployed")
             .aside(&total)
-            .kv_with("url", "https://my-app.example.com", palette::BLUSH)
+            .kv_with(palette::BLUSH, "url", "https://my-app.example.com")
             .kv("commands", "14 registered")
-            .kv_with("logs", "my-app logs --since 5m", palette::SOFT),
+            .kv_with(palette::SOFT, "logs", "my-app logs --since 5m"),
     );
 }
