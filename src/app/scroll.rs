@@ -3,7 +3,7 @@
 use std::cell::Cell;
 
 use super::widgets::{scrollbar, wrap};
-use super::{Event, Frame, Key, Rect, Widget};
+use super::{Event, Frame, Key, Keymap, Rect, Widget};
 use crate::style::paint;
 use crate::style::palette::MUTED;
 
@@ -22,7 +22,7 @@ use crate::style::palette::MUTED;
 /// let mut scroll = Scroll::new();
 /// let mut frame = Frame::new(10, 3);
 /// frame.render(frame.area(), ScrollView::new(&lines).scroll(&scroll));
-/// scroll.event(&Event::Key(Key::PageDown));
+/// scroll.handle(&Event::Key(Key::PageDown));
 /// frame.render(frame.area(), ScrollView::new(&lines).scroll(&scroll));
 /// assert_eq!(scroll.top(), 2);
 /// assert!(frame.snapshot().plain().starts_with("line 3"));
@@ -36,6 +36,7 @@ pub struct Scroll {
     top: Cell<usize>,
     rows: Cell<usize>,
     total: Cell<usize>,
+    keymap: Keymap,
 }
 
 impl Scroll {
@@ -51,6 +52,13 @@ impl Scroll {
             following: true,
             ..Scroll::default()
         }
+    }
+
+    /// Which keys scroll it: vim's j/k and g/G as well as the arrows unless this says
+    /// [`Keymap::Arrows`].
+    pub fn keymap(mut self, keymap: Keymap) -> Self {
+        self.keymap = keymap;
+        self
     }
 
     /// The first line showing, counted from 0.
@@ -77,18 +85,19 @@ impl Scroll {
         self.following = self.follows;
     }
 
-    /// Scroll in response to an event: ↑↓ and j/k a line, Page Up/Down and Space a screen,
-    /// Home/End (or g/G) to the ends, and the scroll wheel three lines. Returns whether it
+    /// Scroll in response to an event: ↑↓ (and j/k) a line, Page Up/Down and Space a screen,
+    /// Home/End (and g/G) to the ends, and the scroll wheel three lines, with the letters
+    /// only if its [`keymap`](Scroll::keymap) is vim's. Returns whether it
     /// moved, judging by how much the view showed when it was last drawn.
     ///
     /// ```
     /// use tinsel::app::{Event, Key, Scroll};
     ///
     /// let mut scroll = Scroll::following();
-    /// scroll.event(&Event::Key(Key::Up));
+    /// scroll.handle(&Event::Key(Key::Up));
     /// assert!(!scroll.is_following());
     /// ```
-    pub fn event(&mut self, event: &Event) -> bool {
+    pub fn handle(&mut self, event: &Event) -> bool {
         let (top, rows) = (self.top.get(), self.rows.get());
         let last = self.total.get().saturating_sub(rows);
         let page = rows.saturating_sub(1).max(1);
@@ -97,7 +106,7 @@ impl Scroll {
             Event::Key(Key::Char(' ')) => &Event::Key(Key::PageDown),
             event => event,
         };
-        let Some((to, up)) = super::step(top, last, page, 3, event) else {
+        let Some((to, up)) = super::step(top, last, page, 3, event, self.keymap) else {
             return false;
         };
         let was_following = self.following;
@@ -234,7 +243,7 @@ mod tests {
     fn moves_by_lines_pages_and_ends() {
         let lines = numbered(20);
         let mut s = Scroll::new();
-        assert!(!s.event(&key(Key::Down)), "nothing drawn yet, so nowhere to go");
+        assert!(!s.handle(&key(Key::Down)), "nothing drawn yet, so nowhere to go");
         drawn(ScrollView::new(&lines).scroll(&s), 6, 5);
         let wheel = |kind| Event::Mouse(super::super::Mouse::new(kind, 0, 0));
         let steps = [
@@ -254,11 +263,11 @@ mod tests {
             (wheel(MouseKind::ScrollUp), 0),
         ];
         for (event, want) in steps {
-            s.event(&event);
+            s.handle(&event);
             assert_eq!(s.top(), want, "after {event:?}");
         }
-        assert!(!s.event(&Event::Tick));
-        assert!(!s.event(&wheel(MouseKind::Click)));
+        assert!(!s.handle(&Event::Tick));
+        assert!(!s.handle(&wheel(MouseKind::Click)));
         s.scroll_to(18);
         assert_eq!(
             drawn(ScrollView::new(&lines).scroll(&s), 6, 5).lines().next(),
@@ -276,14 +285,14 @@ mod tests {
         assert!(drawn(ScrollView::new(&lines).scroll(&s), 6, 3).ends_with("new 2┃"));
 
         // up stops it, even at the end; down to the end starts it again
-        assert!(s.event(&key(Key::Up)) && !s.is_following());
-        assert!(s.event(&key(Key::Down)) && s.is_following());
-        assert!(s.event(&key(Key::Char('k'))) && !s.is_following());
+        assert!(s.handle(&key(Key::Up)) && !s.is_following());
+        assert!(s.handle(&key(Key::Down)) && s.is_following());
+        assert!(s.handle(&key(Key::Char('k'))) && !s.is_following());
         s.scroll_to_end();
         assert!(s.is_following());
         let wheel = Event::Mouse(super::super::Mouse::new(MouseKind::ScrollUp, 0, 0));
         drawn(ScrollView::new(&lines).scroll(&s), 6, 3);
-        assert!(s.event(&wheel) && !s.is_following());
+        assert!(s.handle(&wheel) && !s.is_following());
         lines.push("newer".into());
         assert!(!drawn(ScrollView::new(&lines).scroll(&s), 6, 3).contains("newer"));
 

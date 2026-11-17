@@ -19,7 +19,7 @@ use crate::text::char_width;
 ///
 /// filter.focus(true);
 /// for c in "api".chars() {
-///     filter.event(&Event::Key(Key::Char(c)));
+///     filter.handle(&Event::Key(Key::Char(c)));
 /// }
 /// assert_eq!(filter.value(), "api");
 /// ```
@@ -100,13 +100,13 @@ impl TextInput {
     /// let mut name = TextInput::new();
     /// name.focus(true);
     /// name.set_value("my-ap");
-    /// name.event(&Event::Key(Key::Char('p')));
-    /// name.event(&Event::Key(Key::Home));
-    /// name.event(&Event::Key(Key::Delete));
+    /// name.handle(&Event::Key(Key::Char('p')));
+    /// name.handle(&Event::Key(Key::Home));
+    /// name.handle(&Event::Key(Key::Delete));
     /// assert_eq!(name.value(), "y-app");
-    /// assert!(!name.event(&Event::Key(Key::Enter)));
+    /// assert!(!name.handle(&Event::Key(Key::Enter)));
     /// ```
-    pub fn event(&mut self, event: &Event) -> bool {
+    pub fn handle(&mut self, event: &Event) -> bool {
         if !self.focused {
             return false;
         }
@@ -264,7 +264,7 @@ mod tests {
 
     fn typed(input: &mut TextInput, keys: &[Key]) {
         for k in keys {
-            input.event(&Event::Key(*k));
+            input.handle(&Event::Key(*k));
         }
     }
 
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(input.value(), "one _two  three!");
         typed(&mut input, &[Key::Mod(Mods::ALT, NamedKey::Backspace)]);
         assert_eq!(input.value(), "one _two  ");
-        assert!(!input.event(&Event::Tick) && !input.event(&Event::Key(Key::Tab)));
+        assert!(!input.handle(&Event::Tick) && !input.handle(&Event::Key(Key::Tab)));
         input.clear();
         assert!(input.value().is_empty() && input.is_focused());
     }
@@ -311,11 +311,11 @@ mod tests {
     fn a_paste_goes_in_at_the_cursor_on_one_line() {
         let mut input = TextInput::new();
         let paste = Event::Paste("b\nc\td\x07".into());
-        assert!(!input.event(&paste), "no focus, no pasting");
+        assert!(!input.handle(&paste), "no focus, no pasting");
         input.focus(true);
         input.set_value("a!");
         typed(&mut input, &[Key::Left]);
-        assert!(input.event(&paste));
+        assert!(input.handle(&paste));
         assert_eq!(input.value(), "ab c d!");
         typed(&mut input, &[Key::Char('?')]);
         assert_eq!(input.value(), "ab c d?!");

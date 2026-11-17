@@ -3,7 +3,7 @@
 use std::cell::Cell;
 
 use super::widgets::{centered, scrollbar};
-use super::{Event, Frame, Rect, Widget};
+use super::{Event, Frame, Keymap, Rect, Widget};
 use crate::Spinner;
 use crate::style::palette::{BERRY, MUTED, RED, ROSE, TRACK};
 use crate::style::{ColorMode, Rgb, bold, color_mode, mix, paint, sample};
@@ -19,8 +19,8 @@ use crate::text;
 /// use tinsel::app::{GridState, Event, Key};
 ///
 /// let mut cursor = GridState::new();
-/// cursor.navigate(3, &Event::Key(Key::Down));
-/// cursor.navigate(3, &Event::Key(Key::End));
+/// cursor.handle(3, &Event::Key(Key::Down));
+/// cursor.handle(3, &Event::Key(Key::End));
 /// assert_eq!(cursor.row(), 2);
 /// ```
 #[derive(Clone, Debug, Default)]
@@ -30,6 +30,7 @@ pub struct GridState {
     // what the last drawing found, so the next move knows where it can go
     top: Cell<usize>,
     last_column: Cell<usize>,
+    keymap: Keymap,
 }
 
 impl GridState {
@@ -48,10 +49,18 @@ impl GridState {
         self.row = row;
     }
 
-    /// Move the cursor through `len` rows with the keys [`navigate`](super::navigate) knows.
+    /// Which keys move the cursor: vim's j/k and g/G as well as the arrows unless this says
+    /// [`Keymap::Arrows`].
+    pub fn keymap(mut self, keymap: Keymap) -> Self {
+        self.keymap = keymap;
+        self
+    }
+
+    /// Move the cursor through `len` rows in response to an event, as
+    /// [`navigate`](super::navigate) would with this state's [`keymap`](GridState::keymap).
     /// Returns whether it moved.
-    pub fn navigate(&mut self, len: usize, event: &Event) -> bool {
-        super::navigate(&mut self.row, len, event)
+    pub fn handle(&mut self, len: usize, event: &Event) -> bool {
+        super::navigate(&mut self.row, len, event, self.keymap)
     }
 
     /// The first column showing, when the grid is scrolled sideways.
@@ -178,7 +187,7 @@ impl<'a> Grid<'a> {
 
     /// Start a group: a heading drawn on its own line above the rows added after it, up to
     /// the next heading. Headings aren't rows: the cursor, [`row_at`](Grid::row_at) and
-    /// [`GridState::navigate`]'s `len` count only the rows, so row 0 is the first row under the
+    /// [`GridState::handle`]'s `len` count only the rows, so row 0 is the first row under the
     /// first heading, and moving steps over headings. Scrolling up to a group's first rows
     /// brings its heading into view too.
     ///
@@ -754,7 +763,7 @@ mod tests {
         assert_eq!(shown, "  name\n  ┈┈┈┈\n  a\n  r0\n  r1\n  r2\n  b\n› r3\n  r4\n  r5");
         // moving steps from the last row of one group to the first of the next
         cursor.select(2);
-        assert!(cursor.navigate(6, &Event::Key(super::super::Key::Down)));
+        assert!(cursor.handle(6, &Event::Key(super::super::Key::Down)));
         assert_eq!(cursor.row(), 3);
         assert_eq!(grouped(&cursor).size(), Some((6, 10)));
     }
