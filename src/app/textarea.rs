@@ -62,6 +62,7 @@ impl TextArea {
     }
 
     /// Quiet text shown while the box is empty, saying what goes in it.
+    #[must_use]
     pub fn placeholder(mut self, text: impl Into<String>) -> Self {
         self.placeholder = text.into();
         self

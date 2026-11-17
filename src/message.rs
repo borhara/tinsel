@@ -18,7 +18,7 @@ use crate::text;
 /// let line = Tone::Success.line("Deployed my-app");
 /// assert!(tinsel::text::strip_ansi(&line).contains("Deployed my-app"));
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Tone {
     /// `●` in rose: something finished.
@@ -164,7 +164,7 @@ pub fn rule(label: &str) -> String {
 }
 
 /// The tone of a [`callout`] block, which sets its colour.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Callout {
     /// Rose: worth knowing.
@@ -259,6 +259,7 @@ impl Report {
     }
 
     /// Add the next cause, one level deeper than the last.
+    #[must_use]
     pub fn cause(mut self, cause: impl Into<String>) -> Self {
         self.causes.push(cause.into());
         self
@@ -276,12 +277,14 @@ impl Report {
     ///     .hint("use a port like 8080")
     ///     .eprint();
     /// ```
+    #[must_use]
     pub fn code(mut self, code: crate::layout::Code) -> Self {
         self.code = Some(code);
         self
     }
 
     /// What to do about it.
+    #[must_use]
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self

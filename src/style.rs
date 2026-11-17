@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use crate::output::Target;
 use crate::text::Token;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 /// A colour as red, green and blue, 0-255 each.
 pub struct Rgb(pub u8, pub u8, pub u8);
 
@@ -48,7 +48,7 @@ pub mod palette {
 pub const RAMP: [Rgb; 3] = [palette::BERRY, palette::ROSE, palette::BLUSH];
 
 /// How much colour tinsel draws with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ColorMode {
     /// Plain text, no escape codes at all: piped output, `NO_COLOR`, or tests.
@@ -351,7 +351,7 @@ fn depth(env: &ColorEnv) -> (ColorMode, String) {
 /// Whether the terminal's background is dark or light. tinsel's palette is designed for dark
 /// backgrounds; on light ones every colour is redrawn darker, keeping its hue, so pinks stay
 /// pink and text stays readable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Theme {
     /// Light text on a dark background.
@@ -808,7 +808,7 @@ pub fn gradient(s: &str, stops: &[Rgb], shift: f32) -> String {
 }
 
 /// A painted string that remembers its visible width, so it can be padded and aligned.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Line {
     text: String,
     width: usize,
@@ -823,6 +823,7 @@ impl Line {
     }
 
     /// Add text in a colour.
+    #[must_use]
     pub fn push(mut self, rgb: Rgb, s: &str) -> Self {
         self.text += &paint(rgb, s);
         self.width += crate::text::width(s);
@@ -830,6 +831,7 @@ impl Line {
     }
 
     /// Append text that's already styled (a badge, a link); its width is measured without the codes.
+    #[must_use]
     pub fn raw(mut self, styled: &str) -> Self {
         self.text += styled;
         self.width += crate::text::width(styled);
@@ -837,6 +839,7 @@ impl Line {
     }
 
     /// Add another line's text to the end of this one.
+    #[must_use]
     pub fn append(mut self, other: Line) -> Self {
         self.text += &other.text;
         self.width += other.width;
@@ -844,6 +847,7 @@ impl Line {
     }
 
     /// Add `n` spaces.
+    #[must_use]
     pub fn space(mut self, n: usize) -> Self {
         self.text += &" ".repeat(n);
         self.width += n;

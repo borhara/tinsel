@@ -234,12 +234,14 @@ impl Code {
     }
 
     /// Number the first line of the excerpt as `n`, as when showing lines from inside a file.
+    #[must_use]
     pub fn first_line(mut self, n: usize) -> Self {
         self.first_line = n;
         self
     }
 
     /// Mark line `n` (in the same numbering as the gutter).
+    #[must_use]
     pub fn highlight(mut self, n: usize) -> Self {
         self.highlight = Some(n);
         self
@@ -247,6 +249,7 @@ impl Code {
 
     /// Name the file the excerpt comes from, shown above it with the marked line's number.
     /// If its extension is one tinsel knows ([`Lang`]), the code is coloured as that language.
+    #[must_use]
     pub fn path(mut self, path: impl Into<String>) -> Self {
         let path = path.into();
         self.lang = self.lang.or_else(|| Lang::from_path(&path));
@@ -261,12 +264,14 @@ impl Code {
     /// ```
     /// tinsel::Code::new("let port = 8080; // default").lang("rust").print();
     /// ```
+    #[must_use]
     pub fn lang(mut self, lang: impl IntoLang) -> Self {
         self.lang = lang.into_lang();
         self
     }
 
     /// Leave out the line numbers, keeping a plain bar down the left (default: numbered).
+    #[must_use]
     pub fn numbers(mut self, show: bool) -> Self {
         self.numbers = show;
         self
@@ -282,6 +287,7 @@ impl Code {
 
     /// Underline `len` characters of the marked line, starting at column `col` (from 1), with
     /// a short label beside the carets.
+    #[must_use]
     pub fn caret(mut self, col: usize, len: usize, label: impl Into<String>) -> Self {
         self.caret = Some((col.max(1), len.max(1), label.into()));
         self

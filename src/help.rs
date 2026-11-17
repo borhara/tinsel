@@ -78,18 +78,21 @@ impl Help {
     }
 
     /// The version, shown beside the name.
+    #[must_use]
     pub fn version(mut self, version: impl Into<String>) -> Self {
         self.version = Some(version.into());
         self
     }
 
     /// A usage line, like `deploy [OPTIONS] <APP>`. Call again for more than one.
+    #[must_use]
     pub fn usage(mut self, line: impl Into<String>) -> Self {
         self.usage.push(line.into());
         self
     }
 
     /// Start a new group of items under `title`. [`item`](Help::item) adds to it.
+    #[must_use]
     pub fn group(mut self, title: impl Into<String>) -> Self {
         self.groups.push(Group {
             title: title.into(),
@@ -101,6 +104,7 @@ impl Help {
 
     /// Add a row to the latest group: what to type on the left (`<args>` and `[optional]`
     /// parts are dimmed), what it does on the right.
+    #[must_use]
     pub fn item(mut self, left: impl Into<String>, right: impl Into<String>) -> Self {
         match self.groups.last_mut() {
             Some(g) => g.rows.push((left.into(), right.into())),
@@ -122,21 +126,25 @@ impl Help {
     }
 
     /// Add a subcommand, to the "commands" group.
+    #[must_use]
     pub fn command(self, name: impl Into<String>, about: impl Into<String>) -> Self {
         self.add_to("commands", Kind::Items, name.into(), about.into())
     }
 
     /// Add a flag or option, to the "options" group.
+    #[must_use]
     pub fn flag(self, flag: impl Into<String>, about: impl Into<String>) -> Self {
         self.add_to("options", Kind::Items, flag.into(), about.into())
     }
 
     /// Add an example command line and what it does, to the "examples" group.
+    #[must_use]
     pub fn example(self, command: impl Into<String>, about: impl Into<String>) -> Self {
         self.add_to("examples", Kind::Examples, command.into(), about.into())
     }
 
     /// A closing line: where the docs are, how to report bugs.
+    #[must_use]
     pub fn footer(mut self, text: impl Into<String>) -> Self {
         self.footer = Some(text.into());
         self

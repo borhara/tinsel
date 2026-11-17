@@ -683,7 +683,7 @@ pub(crate) fn push_back_input(_: &[u8]) {}
 
 /// What Ctrl-C does while tinsel draws something live: a spinner, progress bar, steps, a
 /// [`Region`](crate::Region) or the help pager. Set with [`set_ctrl_c`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CtrlC {
     /// Put the terminal back and exit with code 130. The default.

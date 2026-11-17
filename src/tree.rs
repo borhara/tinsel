@@ -29,12 +29,14 @@ impl Tree {
     }
 
     /// Add a branch with children of its own.
+    #[must_use]
     pub fn child(mut self, tree: Tree) -> Self {
         self.children.push(tree);
         self
     }
 
     /// Add a child with no children.
+    #[must_use]
     pub fn leaf(self, label: impl Into<String>) -> Self {
         self.child(Tree::new(label))
     }

@@ -294,7 +294,7 @@ pub struct Frame {
 
 /// How the terminal's own cursor looks, when a frame shows it with
 /// [`set_cursor`](Frame::set_cursor).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CursorShape {
     /// A solid block over the cell, for moving around.
@@ -361,6 +361,7 @@ impl Frame {
     /// };
     /// assert_eq!(draw(0.0).plain(), draw(1.0).plain());   // the same text…
     /// ```
+    #[must_use]
     pub fn at(mut self, seconds: f64) -> Self {
         self.time = seconds;
         self

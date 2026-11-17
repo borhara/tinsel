@@ -51,6 +51,7 @@ impl GridState {
 
     /// Which keys move the cursor: vim's j/k and g/G as well as the arrows unless this says
     /// [`Keymap::Arrows`].
+    #[must_use]
     pub fn keymap(mut self, keymap: Keymap) -> Self {
         self.keymap = keymap;
         self
@@ -171,6 +172,7 @@ impl<'a> Grid<'a> {
     /// Give `column` whatever width the grid has to spare, so the grid fills its area
     /// instead of leaving a gap at the right. Longer cells there are cut only when the
     /// area is too narrow.
+    #[must_use]
     pub fn fill(mut self, column: usize) -> Self {
         self.fill = Some(column);
         self
@@ -178,6 +180,7 @@ impl<'a> Grid<'a> {
 
     /// Add a row of cells. Styled cells ([`badge`](crate::badge)s, coloured dots) are fine.
     /// As with [`Table::row`], debug builds stop at a row with more cells than headers.
+    #[must_use]
     pub fn row<S: Into<String>>(mut self, cells: impl IntoIterator<Item = S>) -> Self {
         let cells: Vec<String> = cells.into_iter().map(Into::into).collect();
         crate::table::check_row("Grid", &self.headers, cells.len(), self.rows.len());
@@ -210,18 +213,21 @@ impl<'a> Grid<'a> {
     ///     "  service   pods\n  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n  frontend\n  web          4\n  backend\n› api         12"
     /// );
     /// ```
+    #[must_use]
     pub fn heading(mut self, text: impl Into<String>) -> Self {
         self.headings.push((self.rows.len(), text.into()));
         self
     }
 
     /// Override the automatic alignment of one column.
+    #[must_use]
     pub fn align(mut self, column: usize, align: Align) -> Self {
         self.align.push((column, align));
         self
     }
 
     /// Cut cells in a column to at most `cols` wide, ending in `…`.
+    #[must_use]
     pub fn max_width(mut self, column: usize, cols: usize) -> Self {
         self.limits.push((column, cols.max(1)));
         self
@@ -229,6 +235,7 @@ impl<'a> Grid<'a> {
 
     /// Where the cursor is and how far it's scrolled. Without one, nothing is chosen and the
     /// grid starts at the top.
+    #[must_use]
     pub fn state(mut self, state: &'a GridState) -> Self {
         self.cursor = Some(state);
         self
@@ -236,12 +243,14 @@ impl<'a> Grid<'a> {
 
     /// Whether keys go to this grid. When they don't, the cursor row stays marked, but
     /// quietly. Focused unless set.
+    #[must_use]
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self
     }
 
     /// Tint every other row faintly, to help the eye along wide rows.
+    #[must_use]
     pub fn striped(mut self) -> Self {
         self.striped = true;
         self
@@ -249,6 +258,7 @@ impl<'a> Grid<'a> {
 
     /// Leave empty cells blank, instead of marking each with a muted `·`
     /// (see [`Table::blank_cells`]).
+    #[must_use]
     pub fn blank_cells(mut self) -> Self {
         self.blank = true;
         self
@@ -256,12 +266,14 @@ impl<'a> Grid<'a> {
 
     /// Mark `column` as the one the rows are sorted by, smallest first: `▲` beside its
     /// header. Sort the rows yourself, so the cursor's row is the one you think it is.
+    #[must_use]
     pub fn sorted(mut self, column: usize) -> Self {
         self.sorted = Some((column, false));
         self
     }
 
     /// Like [`sorted`](Grid::sorted), largest first: `▼`.
+    #[must_use]
     pub fn sorted_desc(mut self, column: usize) -> Self {
         self.sorted = Some((column, true));
         self
@@ -269,6 +281,7 @@ impl<'a> Grid<'a> {
 
     /// Show that the rows are still on their way: shimmering placeholder rows under the
     /// header, and a spinner.
+    #[must_use]
     pub fn loading(mut self, loading: bool) -> Self {
         if loading {
             self.body = Body::Loading;
@@ -277,12 +290,14 @@ impl<'a> Grid<'a> {
     }
 
     /// Show that the rows couldn't be had, instead of any rows.
+    #[must_use]
     pub fn error(mut self, message: impl Into<String>) -> Self {
         self.body = Body::Error(message.into());
         self
     }
 
     /// What to say when there are no rows. "nothing here yet" unless set.
+    #[must_use]
     pub fn empty(mut self, message: impl Into<String>) -> Self {
         self.empty = message.into();
         self

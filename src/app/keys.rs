@@ -32,6 +32,14 @@ pub struct Keys {
     raw: Option<term::RawMode>,
 }
 
+impl std::fmt::Debug for Keys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Keys")
+            .field("scripted", &self.raw.is_none())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Keys {
     /// Start reading keys from the terminal on stdin. Fails without one.
     pub fn open() -> io::Result<Keys> {

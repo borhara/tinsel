@@ -90,6 +90,7 @@
 //! `TINSEL_THEME`, `TINSEL_ACCENT`, `TINSEL_FPS`) ignore case and surrounding spaces.
 
 #![warn(missing_docs)]
+#![warn(clippy::return_self_not_must_use)]
 
 pub mod anim;
 pub mod app;

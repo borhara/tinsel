@@ -158,6 +158,7 @@ impl Shared {
 /// terminal it does none of this and prints one plain line per finished
 /// step, so CI logs stay readable. With [`Output::Json`](crate::Output::Json) every change is
 /// a JSON event instead, and with [`Output::Quiet`](crate::Output::Quiet) only failures print.
+#[must_use = "a live display finishes as soon as it's dropped"]
 pub struct Live {
     shared: Arc<Mutex<Shared>>,
     stop: Arc<AtomicBool>,
@@ -268,6 +269,28 @@ impl display::Shown for Mutex<Shared> {
         paint_frame(&mut s, true);
         s.abandoned = true;
         output::write(SHOW_CURSOR);
+    }
+}
+
+impl std::fmt::Debug for Live {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = lock(&self.shared);
+        f.debug_struct("Live")
+            .field("title", &s.title)
+            .field("subject", &s.target)
+            .field("steps", &s.steps.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Step {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = lock(&self.shared);
+        let step = &s.steps[self.idx];
+        f.debug_struct("Step")
+            .field("label", &step.label)
+            .field("state", &step.state)
+            .finish_non_exhaustive()
     }
 }
 
@@ -767,6 +790,8 @@ impl Step {
     /// }
     /// build.done();
     /// ```
+    // adding is what matters: the new step can be left unnamed, to show the plan
+    #[allow(clippy::return_self_not_must_use)]
     pub fn step(&self, label: impl Into<String>) -> Step {
         add_step(&self.shared, Some(self.idx), label.into())
     }
