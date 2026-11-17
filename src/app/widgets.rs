@@ -396,6 +396,7 @@ pub struct Panel<'a> {
     body: Option<Box<dyn Widget + 'a>>,
     focused: bool,
     padding: (usize, usize),
+    background: Option<Rgb>,
 }
 
 impl std::fmt::Debug for Panel<'_> {
@@ -407,6 +408,7 @@ impl std::fmt::Debug for Panel<'_> {
             .field("footer", &self.footer)
             .field("focused", &self.focused)
             .field("padding", &self.padding)
+            .field("background", &self.background)
             .finish_non_exhaustive()
     }
 }
@@ -435,6 +437,7 @@ impl<'a> Panel<'a> {
             body: None,
             focused: false,
             padding: (1, 0),
+            background: None,
         }
     }
 
@@ -506,6 +509,23 @@ impl<'a> Panel<'a> {
         self
     }
 
+    /// Fill the panel, border and all, with this colour, so it stands apart from what's
+    /// around it: a popup over text, say. What's drawn inside keeps any colour of its own.
+    /// Without colour it's left as it is.
+    ///
+    /// ```
+    /// use tinsel::Rgb;
+    /// use tinsel::app::{Frame, Panel};
+    ///
+    /// let mut frame = Frame::new(10, 3);
+    /// frame.render(frame.area(), Panel::new("pick").background(Rgb(44, 33, 51)));
+    /// ```
+    #[must_use]
+    pub fn background(mut self, color: Rgb) -> Self {
+        self.background = Some(color);
+        self
+    }
+
     /// Where the body goes inside a panel drawn at `area`.
     pub fn inner(&self, area: Rect) -> Rect {
         area.shrink(1, 1).shrink(self.padding.0, self.padding.1)
@@ -518,6 +538,9 @@ impl Widget for Panel<'_> {
             return;
         }
         frame.clear(area);
+        if let Some(bg) = self.background {
+            frame.tint(area, bg);
+        }
         let (w, h, t) = (area.width, area.height, frame.ambient_time());
         if self.focused {
             // the light running round the border
@@ -1455,6 +1478,20 @@ impl Widget for Sparkles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_panel_with_a_background_fills_it_under_its_border_and_body() {
+        crate::with_color_mode(crate::ColorMode::TrueColor, || {
+            let mut f = Frame::new(12, 3);
+            f.render(f.area(), Panel::new("x").body("hi").background(Rgb(44, 33, 51)));
+            let html = f.html_pre();
+            let spans: Vec<&str> = html.split("<span style=\"").skip(1).collect();
+            assert!(!spans.is_empty() && html.contains("hi"));
+            for span in spans {
+                assert!(span.split('"').next().unwrap().contains("background:"), "{html}");
+            }
+        });
+    }
 
     #[test]
     fn animated_widgets_ask_for_frames_and_still_ones_dont() {
