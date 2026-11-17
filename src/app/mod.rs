@@ -224,12 +224,14 @@ fn drive(
     let mut titled: Option<String> = None;
     let mut cursor: Option<(usize, usize, CursorShape)> = None;
     let mut cursor_color: Option<crate::style::Rgb> = None;
+    let mut window_color: Option<crate::style::Rgb> = None;
     loop {
         if REDRAW.with(|r| r.replace(false)) {
             shown = None;
             titled = None;
             cursor = None;
             cursor_color = None;
+            window_color = None;
         }
         let title = app.title();
         if title.is_some() && title != titled {
@@ -254,13 +256,14 @@ fn drive(
         app.view(&mut frame);
         let diff = frame.diff(shown.as_ref());
         let (hide, place) = frame.cursor_escape(cursor, !diff.is_empty());
-        let color = frame.cursor_color_escape(cursor_color);
+        let color = frame.cursor_color_escape(cursor_color) + &frame.window_color_escape(window_color);
         if !diff.is_empty() || !hide.is_empty() || !place.is_empty() || !color.is_empty() {
             write!(out, "\x1b[?2026h{hide}{diff}{color}{place}\x1b[?2026l")?;
             out.flush()?;
         }
         cursor = frame.cursor();
         cursor_color = frame.cursor_color().or(cursor_color);
+        window_color = frame.window_color().or(window_color);
         shown = Some(frame);
 
         let tick = Duration::from_secs_f64(1.0 / app.fps().clamp(1, 240) as f64);
@@ -478,7 +481,7 @@ static ON_SCREEN: AtomicBool = AtomicBool::new(false);
 // and pastes arrive bracketed (2004), so they can be told apart from typing
 const ENTER: &str = "\x1b[22;0t\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?2004h\x1b[2J";
 const LEAVE: &str =
-    "\x1b[0m\x1b]112\x07\x1b[0 q\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t";
+    "\x1b[0m\x1b]112\x07\x1b]111\x07\x1b[0 q\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t";
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
 
 /// The alternate screen, raw keys and a hidden cursor, for as long as it lives.

@@ -258,6 +258,7 @@ pub struct Frame {
     time: f32,
     cursor: Option<(usize, usize, CursorShape)>,
     cursor_color: Option<Rgb>,
+    window_color: Option<Rgb>,
     background: Ink,
 }
 
@@ -296,6 +297,7 @@ impl Frame {
             time: 0.0,
             cursor: None,
             cursor_color: None,
+            window_color: None,
             background: Ink::Default,
         }
     }
@@ -442,6 +444,23 @@ impl Frame {
     /// ```
     pub fn set_cursor_color(&mut self, rgb: Rgb) {
         self.cursor_color = Some(crate::style::shown(rgb));
+    }
+
+    /// Colour the terminal's own background, where the terminal allows it: what shows in its
+    /// window padding around the frame, so bars at the edges can run into it. It goes back to
+    /// the terminal's own when the app ends.
+    ///
+    /// ```
+    /// use tinsel::Rgb;
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(4, 1);
+    /// frame.set_window_color(Rgb(30, 20, 30));
+    /// ```
+    pub fn set_window_color(&mut self, rgb: Rgb) {
+        if crate::style::color_mode() != crate::style::ColorMode::None {
+            self.window_color = Some(crate::style::shown(rgb));
+        }
     }
 
     /// Let the terminal's own background show behind part of the screen, keeping whatever's
@@ -797,6 +816,19 @@ impl Frame {
         self.cursor_color
     }
 
+    /// The escape that colours the terminal's background, if this frame wants a colour other
+    /// than `shown`.
+    pub(crate) fn window_color_escape(&self, shown: Option<Rgb>) -> String {
+        match self.window_color {
+            Some(c) if Some(c) != shown => format!("\x1b]11;#{:02x}{:02x}{:02x}\x07", c.0, c.1, c.2),
+            _ => String::new(),
+        }
+    }
+
+    pub(crate) fn window_color(&self) -> Option<Rgb> {
+        self.window_color
+    }
+
     /// Escapes to send before and after drawing, given where the last frame left the cursor.
     /// Drawing moves the cursor, so it's hidden while drawing and put back after.
     pub(crate) fn cursor_escape(
@@ -897,6 +929,18 @@ mod tests {
                 panic!()
             };
             assert!(some < 200 && some > all, "{some} {all}");
+        });
+    }
+
+    #[test]
+    fn the_window_colour_is_sent_when_it_changes() {
+        crate::with_color_mode(crate::ColorMode::TrueColor, || {
+            let mut f = Frame::new(2, 1);
+            assert_eq!(f.window_color_escape(None), "");
+            f.set_window_color(Rgb(1, 2, 3));
+            let shown = f.window_color();
+            assert!(f.window_color_escape(None).starts_with("\x1b]11;#"));
+            assert_eq!(f.window_color_escape(shown), "");
         });
     }
 
