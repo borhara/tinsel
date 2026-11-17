@@ -27,7 +27,7 @@ use crate::term;
 /// # Ok::<(), std::io::Error>(())
 /// ```
 pub struct Keys {
-    pending: Vec<u8>,
+    decoder: input::Decoder,
     raw: Option<term::RawMode>,
 }
 
@@ -40,7 +40,7 @@ impl Keys {
             Some(term::RawMode::enter()?)
         };
         Ok(Keys {
-            pending: Vec::new(),
+            decoder: input::Decoder::new(),
             raw,
         })
     }
@@ -57,13 +57,13 @@ impl Keys {
             if let Some(key) = self.take(false) {
                 return Ok(Some(key));
             }
-            match term::read_byte()? {
-                Some(b) => self.pending.push(b),
-                // a pause ends whatever was half read, such as a lone Esc
-                None => {
-                    if let Some(key) = self.take(true) {
-                        return Ok(Some(key));
-                    }
+            let mut buf = [0u8; 256];
+            let n = term::read_some(&mut buf)?;
+            self.decoder.push(&buf[..n]);
+            // a pause ends whatever was half read, such as a lone Esc
+            if n == 0 {
+                if let Some(key) = self.take(true) {
+                    return Ok(Some(key));
                 }
             }
             if Instant::now() >= deadline {
@@ -73,8 +73,7 @@ impl Keys {
     }
 
     fn take(&mut self, done: bool) -> Option<Key> {
-        while let Some((event, used)) = input::parse(&self.pending, done) {
-            self.pending.drain(..used);
+        while let Some(event) = self.decoder.next(done) {
             if let Some(Event::Key(key)) = event {
                 return Some(key);
             }
@@ -100,9 +99,10 @@ mod tests {
     #[test]
     fn half_read_bytes_become_keys() {
         let mut keys = Keys {
-            pending: b"\x1b[Ax\x1b".to_vec(),
+            decoder: input::Decoder::new(),
             raw: None,
         };
+        keys.decoder.push(b"\x1b[Ax\x1b");
         assert_eq!(keys.take(false), Some(Key::Up));
         assert_eq!(keys.take(false), Some(Key::Char('x')));
         assert_eq!(keys.take(false), None);
