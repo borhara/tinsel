@@ -614,8 +614,35 @@ pub(crate) fn sgr(rgb: Rgb, layer: u8) -> String {
     if color_mode() == ColorMode::TrueColor {
         format!("{layer};2;{r};{g};{b}")
     } else {
-        let q = |c: u8| (c as u16 * 5 + 127) / 255;
-        format!("{layer};5;{}", 16 + 36 * q(r) + 6 * q(g) + q(b))
+        format!("{layer};5;{}", ansi256(Rgb(r, g, b)))
+    }
+}
+
+/// The nearest colour in xterm's 256-colour palette: the closer of the best match in its
+/// 6×6×6 cube (whose levels are 0, 95, 135, 175, 215 and 255, not evenly spaced) and the
+/// best in its ramp of 24 greys (8 to 238 in steps of 10), which holds the dark greys the
+/// cube can't.
+pub(crate) fn ansi256(Rgb(r, g, b): Rgb) -> u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let level = |c: u8| match c {
+        0..48 => 0,
+        48..115 => 1,
+        _ => (c - 35) / 40,
+    };
+    let distance = |(x, y, z): (u8, u8, u8)| {
+        let d = |a: u8, b: u8| (a as i32 - b as i32).pow(2);
+        d(x, r) + d(y, g) + d(z, b)
+    };
+    let (qr, qg, qb) = (level(r), level(g), level(b));
+    let cube = 16 + 36 * qr + 6 * qg + qb;
+    let cube_rgb = (LEVELS[qr as usize], LEVELS[qg as usize], LEVELS[qb as usize]);
+    let mean = (r as u16 + g as u16 + b as u16) / 3;
+    let step = (mean.saturating_sub(3) / 10).min(23) as u8;
+    let grey = 8 + 10 * step;
+    if distance((grey, grey, grey)) < distance(cube_rgb) {
+        232 + step
+    } else {
+        cube
     }
 }
 
@@ -1081,6 +1108,22 @@ mod tests {
     fn colours_fall_back_to_the_256_palette() {
         let red = with_color_mode(ColorMode::Ansi256, || sgr(Rgb(255, 0, 0), 38));
         assert_eq!(red, "38;5;196");
+    }
+
+    #[test]
+    fn the_256_palette_is_matched_by_its_real_levels_and_greys() {
+        // a near-black stays near black, from the grey ramp, not mid grey
+        assert_eq!(ansi256(Rgb(38, 32, 36)), 235);
+        assert_eq!(ansi256(Rgb(0, 0, 0)), 16);
+        assert_eq!(ansi256(Rgb(255, 255, 255)), 231);
+        assert_eq!(ansi256(Rgb(128, 128, 128)), 244);
+        // cube levels: 95 is level 1, 100 is nearer 95 than 135
+        assert_eq!(ansi256(Rgb(100, 0, 0)), 16 + 36);
+        assert_eq!(ansi256(Rgb(255, 0, 0)), 196);
+        assert_eq!(ansi256(Rgb(0, 175, 0)), 16 + 6 * 3);
+        for c in 0..=255u8 {
+            assert!(ansi256(Rgb(c, c / 2, 255 - c)) >= 16);
+        }
     }
 
     #[test]
