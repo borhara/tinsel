@@ -330,8 +330,12 @@ pub enum Theme {
     Light,
 }
 
-// 0 = not decided yet, 1 = dark, 2 = light
-static THEME: AtomicU8 = AtomicU8::new(0);
+// The theme chosen with set_theme, which wins over the one worked out: 0 = none chosen,
+// 1 = dark, 2 = light.
+static THEME_CHOSEN: AtomicU8 = AtomicU8::new(0);
+// The theme worked out, and how. Only one thread ever asks the terminal: any others that
+// need the theme meanwhile wait for its answer rather than asking again over it.
+static THEME_DETECTED: std::sync::OnceLock<(Theme, String)> = std::sync::OnceLock::new();
 
 /// The theme in use. Decided once: from `TINSEL_THEME` (`light` or `dark`) if set, then the
 /// `COLORFGBG` variable some terminals export, then by asking the terminal for its background
@@ -341,37 +345,28 @@ pub fn theme() -> Theme {
     if let Some(theme) = TEST_THEME.get() {
         return theme;
     }
-    match THEME.load(Ordering::Relaxed) {
+    match THEME_CHOSEN.load(Ordering::Relaxed) {
         1 => Theme::Dark,
         2 => Theme::Light,
-        _ => {
-            let (theme, why) = detect_theme();
-            store_theme(theme, why);
-            theme
-        }
+        _ => detected_theme().0,
     }
+}
+
+fn detected_theme() -> &'static (Theme, String) {
+    THEME_DETECTED.get_or_init(detect_theme)
 }
 
 /// Choose the theme yourself, for a `--theme` flag or to preview the other one.
 pub fn set_theme(theme: Theme) {
-    store_theme(theme, "set in code".into());
+    THEME_CHOSEN.store(if theme == Theme::Light { 2 } else { 1 }, Ordering::Relaxed);
 }
 
-/// How the theme in use was decided, for [`doctor`](crate::doctor).
-static THEME_WHY: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-
-fn store_theme(theme: Theme, why: String) {
-    *THEME_WHY.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = why;
-    THEME.store(if theme == Theme::Light { 2 } else { 1 }, Ordering::Relaxed);
-}
-
-/// Why the theme is what it is.
+/// Why the theme is what it is, for [`doctor`](crate::doctor).
 pub(crate) fn theme_why() -> String {
-    theme();
-    THEME_WHY
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+    match THEME_CHOSEN.load(Ordering::Relaxed) {
+        0 => detected_theme().1.clone(),
+        _ => "set in code".into(),
+    }
 }
 
 fn detect_theme() -> (Theme, String) {
