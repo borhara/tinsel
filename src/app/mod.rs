@@ -258,7 +258,7 @@ fn drive(
         let (hide, place) = frame.cursor_escape(cursor, !diff.is_empty());
         let color = frame.cursor_color_escape(cursor_color) + &frame.window_color_escape(window_color);
         if !diff.is_empty() || !hide.is_empty() || !place.is_empty() || !color.is_empty() {
-            write!(out, "\x1b[?2026h{hide}{diff}{color}{place}\x1b[?2026l")?;
+            write!(out, "\x1b[?2026h{color}{hide}{diff}{place}\x1b[?2026l")?;
             out.flush()?;
         }
         cursor = frame.cursor();
