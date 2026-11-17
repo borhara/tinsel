@@ -1,7 +1,8 @@
 //! Knowing whether anyone's looking. Terminals that support focus reporting (iTerm2, kitty,
 //! WezTerm, Ghostty, Alacritty, foot, …) send `ESC [ I` when their window gains focus and
 //! `ESC [ O` when it loses it. Reading those means reading stdin, so anything else typed
-//! meanwhile is kept and handed back to the terminal afterwards.
+//! meanwhile is kept and handed back to the terminal afterwards, where the system allows it
+//! (see [`term::push_back_input`]).
 
 use std::io::{self, IsTerminal, Read};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};

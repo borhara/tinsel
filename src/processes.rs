@@ -45,6 +45,8 @@ fn scenario() {
         ("interrupted plainly", child::interrupted_plainly),
         #[cfg(unix)]
         ("children-ignored", child::children_ignored),
+        #[cfg(unix)]
+        ("exits", child::exits),
         ("piped", child::piped),
         ("settings", child::settings),
         ("panics", child::panics),
@@ -317,6 +319,16 @@ fn on_a_terminal_that_never_says_its_colour() {
 
 #[cfg(unix)]
 #[test]
+fn exiting_mid_run_puts_the_terminal_back() {
+    let t = Terminal::start("exits", 80, 24, true, &[]);
+    let (status, seen) = t.finish();
+    assert_eq!(status.code(), Some(3), "{seen}");
+    let after = &seen[seen.rfind("\x1b[?1004h").expect("focus reports were on")..];
+    assert!(after.contains("\x1b[?1004l\x1b[?25h"), "{after:?}");
+}
+
+#[cfg(unix)]
+#[test]
 fn ctrl_c_puts_the_terminal_back_and_says_why() {
     let mut t = Terminal::start("interrupted", 80, 24, true, &[]);
     t.wait_for("[running]");
@@ -542,6 +554,17 @@ mod child {
         marker("[running]");
         // Ctrl-C ends it; if it never comes, finishing normally fails the test
         std::thread::sleep(Duration::from_secs(20));
+    }
+
+    /// `std::process::exit` mid-run, which skips every destructor.
+    #[cfg(unix)]
+    pub fn exits() {
+        own_terminal();
+        crate::set_focus(true);
+        let live = crate::Live::new("leaving", "x").no_history();
+        live.step("Wait").start();
+        std::thread::sleep(Duration::from_millis(300));
+        std::process::exit(3);
     }
 
     #[cfg(unix)]

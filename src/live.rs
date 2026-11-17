@@ -141,7 +141,8 @@ impl Shared {
 ///   you're away, you get a desktop notification ([`notify_after`](Live::notify_after)), and
 ///   when you come back, the steps that finished meanwhile twinkle once so you can see them.
 /// - **It stays out of the way of typing.** Keys pressed during the run don't scribble over
-///   the display; they're handed back to the shell when it ends.
+///   the display; they're handed back to the shell when it ends, where the system allows it.
+///   Linux 6.2 and later doesn't by default (`dev.tty.legacy_tiocsti`), so there they're lost.
 ///
 /// It draws on stdout, or stderr after [`set_target`](crate::set_target). When that isn't a
 /// terminal it does none of this and prints one plain line per finished
