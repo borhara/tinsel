@@ -66,6 +66,10 @@ impl Block {
         if crate::output::json() {
             return self.emit();
         }
+        // above a display drawing in place, if there is one, so its next frame keeps them
+        if crate::display::print_above(&self.lines, false) {
+            return;
+        }
         crate::output::write(&self.lines.iter().map(|l| format!("{l}\n")).collect::<String>());
     }
 
@@ -73,6 +77,9 @@ impl Block {
     pub fn eprint(&self) {
         if crate::output::json() {
             return self.emit();
+        }
+        if crate::display::print_above(&self.lines, true) {
+            return;
         }
         for line in &self.lines {
             crate::output::err_line(line);

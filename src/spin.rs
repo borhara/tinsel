@@ -2,11 +2,11 @@
 
 use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::display::lock;
+use crate::display::{self, lock};
 use crate::output::{self, Val};
 use crate::style::palette::{MUTED, RED, ROSE, SOFT, TEXT};
 use crate::style::{Rgb, mix, paint};
@@ -15,6 +15,7 @@ use crate::{format, term, text};
 
 /// Redraws one line in place from a background thread until finished.
 struct Ticker {
+    line: Arc<Mutex<LineState>>,
     stop: Arc<AtomicBool>,
     /// Frames a second; 0 for the global rate.
     fps: Arc<AtomicU32>,
@@ -22,23 +23,46 @@ struct Ticker {
     prev_interrupt: Option<usize>,
 }
 
+/// What the drawing thread and everyone else agree on, under one lock so a frame is never
+/// drawn halfway through something else.
+#[derive(Default)]
+struct LineState {
+    /// Questions open over the line: nothing is drawn while any is.
+    paused: u32,
+    /// Lines logged while paused, printed above it once it carries on.
+    logs: Vec<String>,
+    /// A panic took over the screen: stop drawing.
+    abandoned: bool,
+}
+
+/// The cursor hidden and no wrapping: an over-long line is cut at the edge instead of
+/// breaking the redraw.
+const TAKE_OVER: &str = "\x1b[?25l\x1b[?7l";
+const GIVE_BACK: &str = "\x1b[?7h\x1b[?25h";
+
 impl Ticker {
     fn start(frame: impl Fn(f32) -> String + Send + 'static) -> Ticker {
         let prev_interrupt = term::guard_interrupt();
-        // no cursor, and no wrapping: an over-long line is cut at the edge instead of breaking the redraw
-        output::write("\x1b[?25l\x1b[?7l");
+        output::write(TAKE_OVER);
+        let line = Arc::new(Mutex::new(LineState::default()));
         let stop = Arc::new(AtomicBool::new(false));
-        let flag = stop.clone();
         let fps = Arc::new(AtomicU32::new(0));
-        let rate = fps.clone();
+        let (state, flag, rate) = (line.clone(), stop.clone(), fps.clone());
         let thread = thread::spawn(move || {
             let t0 = Instant::now();
             while !flag.load(Ordering::Relaxed) {
-                output::write(&format!("\r{}\x1b[K", frame(t0.elapsed().as_secs_f32())));
+                {
+                    let s = lock(&state);
+                    if s.paused == 0 && !s.abandoned {
+                        output::write(&format!("\r{}\x1b[K", frame(t0.elapsed().as_secs_f32())));
+                    }
+                }
                 thread::sleep(crate::fps::frame(rate.load(Ordering::Relaxed)));
             }
         });
+        display::add(Arc::downgrade(&line) as Weak<dyn display::Shown>);
         Ticker {
+            line,
             stop,
             fps,
             thread: Some(thread),
@@ -52,7 +76,14 @@ impl Ticker {
         };
         self.stop.store(true, Ordering::Relaxed);
         let _ = thread.join();
-        output::write(&format!("\r{last}\x1b[K\n\x1b[?7h\x1b[?25h"));
+        display::remove(Arc::as_ptr(&self.line));
+        let mut s = lock(&self.line);
+        if !s.abandoned {
+            let mut out: String = s.logs.drain(..).map(|l| format!("\r{l}\x1b[K\n")).collect();
+            out += &format!("\r{last}\x1b[K\n{GIVE_BACK}");
+            output::write(&out);
+        }
+        drop(s);
         term::restore_interrupt(self.prev_interrupt.take());
     }
 }
@@ -60,6 +91,42 @@ impl Ticker {
 impl Drop for Ticker {
     fn drop(&mut self) {
         self.finish("");
+    }
+}
+
+impl display::Shown for Mutex<LineState> {
+    /// Clear the line away, for the question to go where it was.
+    fn pause(&self) {
+        let mut s = lock(self);
+        if s.paused == 0 && !s.abandoned {
+            output::write(&format!("\r\x1b[K{GIVE_BACK}"));
+        }
+        s.paused += 1;
+    }
+
+    fn resume(&self) {
+        let mut s = lock(self);
+        s.paused -= 1;
+        if s.paused == 0 && !s.abandoned {
+            let logs: String = s.logs.drain(..).map(|l| format!("{l}\n")).collect();
+            output::write(&format!("{logs}{TAKE_OVER}"));
+        }
+    }
+
+    fn log(&self, line: &str) {
+        let mut s = lock(self);
+        if s.paused > 0 || s.abandoned {
+            return s.logs.push(line.to_string());
+        }
+        // wrapping is back on for the line, which may be long; the next frame goes below it
+        output::write(&format!("\r\x1b[K\x1b[?7h{line}\n\x1b[?7l"));
+    }
+
+    fn abandon(&self) {
+        if let Some(mut s) = display::lock_patiently(self) {
+            s.abandoned = true;
+        }
+        output::write(&format!("\n{GIVE_BACK}"));
     }
 }
 
