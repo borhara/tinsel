@@ -14,7 +14,7 @@ fn a_script_answers_a_flow_of_questions_and_goes_back() {
         Err(Error::Back)
     ));
     assert_eq!(
-        Select::new("Env").options(["dev", "sit"]).default(env).ask().unwrap(),
+        Select::new("Env").options(["dev", "sit"]).selected(env).ask().unwrap(),
         1
     );
     assert_eq!(MultiSelect::new("Parts").options(["a", "b"]).ask().unwrap(), [0]);
@@ -188,7 +188,7 @@ fn right_answers_like_enter() {
     keys.extend([Key::Home, Key::Right, Key::Char('.'), Key::Right, Key::Right]);
     assert_eq!(Input::new("Version").run(&mut Ui::script(&keys)).unwrap(), "v.2");
     // with a suggestion showing, → takes it, and the next → answers
-    let region = Input::new("Region").suggestions(&["eu-west-1"]);
+    let region = Input::new("Region").suggestions(["eu-west-1"]);
     let mut keys = typed("eu");
     keys.extend([Key::Right, Key::Right]);
     assert_eq!(region.run(&mut Ui::script(&keys)).unwrap(), "eu-west-1");
@@ -237,7 +237,7 @@ fn run_select(question: &str, options: &[&str], ui: &mut Ui) -> Result<usize> {
 fn run_multiselect(question: &str, options: &[&str], ticked: &[usize], ui: &mut Ui) -> Result<Vec<usize>> {
     MultiSelect::new(question)
         .options(options.iter().copied())
-        .default(ticked)
+        .selected(ticked)
         .run(ui)
 }
 
@@ -384,8 +384,8 @@ fn headings_and_disabled_options_are_skipped() {
     assert_eq!(pick(&[Key::Up, Key::Enter]), 4);
     assert_eq!(pick(&[Key::Down, Key::Down, Key::Down, Key::Enter]), 0);
     // a disabled default isn't where the cursor starts
-    assert_eq!(services().default(1).run(&mut Ui::script(&[Key::Enter])).unwrap(), 0);
-    assert_eq!(services().default(2).run(&mut Ui::script(&[Key::Enter])).unwrap(), 2);
+    assert_eq!(services().selected(1).run(&mut Ui::script(&[Key::Enter])).unwrap(), 0);
+    assert_eq!(services().selected(2).run(&mut Ui::script(&[Key::Enter])).unwrap(), 2);
 }
 
 #[test]
@@ -395,7 +395,7 @@ fn multiselect_never_ticks_disabled_options() {
             .option("api")
             .disabled("cron", "retired")
             .option("worker")
-            .default(&[1])
+            .selected(&[1])
     };
     let mut ui = Ui::script(&[Key::Down, Key::Space, Key::Enter]);
     assert_eq!(restart().run(&mut ui).unwrap(), [2]);
@@ -484,7 +484,7 @@ fn dropdowns_scroll_with_counts_above_and_below() {
     let shown = |keys: &[Key], default: Option<usize>| {
         let mut tags = tags();
         if let Some(d) = default {
-            tags = tags.default(d);
+            tags = tags.selected(d);
         }
         let mut ui = Ui::script(keys);
         let _ = tags.run(&mut ui);
@@ -578,23 +578,23 @@ fn dropdowns_filter_and_take_typed_answers() {
 #[test]
 fn without_a_terminal_lists_answer_with_their_default() {
     assert!(matches!(services().unasked(), Err(Error::NotATerminal)));
-    assert_eq!(services().default(2).unasked().unwrap(), 2);
+    assert_eq!(services().selected(2).unasked().unwrap(), 2);
     // a default that can't be picked is no answer
-    assert!(matches!(services().default(1).unasked(), Err(Error::NotATerminal)));
-    let picky = services().default(2).validate(|_| Err("no".into()));
+    assert!(matches!(services().selected(1).unasked(), Err(Error::NotATerminal)));
+    let picky = services().selected(2).validate(|_| Err("no".into()));
     assert!(matches!(picky.unasked(), Err(Error::Invalid(_))));
 
     let restart = || MultiSelect::new("Restart").option("api").disabled("cron", "retired");
     assert!(matches!(restart().unasked(), Err(Error::NotATerminal)));
-    assert_eq!(restart().default(&[0, 1]).unasked().unwrap(), [0]);
-    assert_eq!(restart().default(&[]).unasked().unwrap(), [] as [usize; 0]);
+    assert_eq!(restart().selected(&[0, 1]).unasked().unwrap(), [0]);
+    assert_eq!(restart().selected(&[]).unasked().unwrap(), [] as [usize; 0]);
     let at_least_one = restart()
-        .default(&[])
+        .selected(&[])
         .validate(|p| if p.is_empty() { Err("pick one".into()) } else { Ok(()) });
     assert!(matches!(at_least_one.unasked(), Err(Error::Invalid(_))));
 
     assert!(matches!(tags().unasked(), Err(Error::NotATerminal)));
-    assert_eq!(tags().default(1).unasked().unwrap(), "v1.12.0-rc.1");
+    assert_eq!(tags().selected(1).unasked().unwrap(), "v1.12.0-rc.1");
 }
 
 #[test]
@@ -738,7 +738,7 @@ fn passwords_show_dots() {
 #[test]
 fn tab_cycles_through_many_suggestions() {
     let many = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8"];
-    let q = Input::new("Pick").suggestions(&many);
+    let q = Input::new("Pick").suggestions(many);
     let mut ui = Ui::script(&[Key::Char('a'), Key::Tab, Key::Tab]);
     let _ = q.run(&mut ui);
     assert_eq!(ui.shown()[0], "  ?  Pick  a2▏");
@@ -867,9 +867,9 @@ fn the_shortcuts_ask_through_a_script() {
 #[test]
 fn asking_without_a_terminal_or_options() {
     with_terminal(false, || {
-        assert_eq!(Select::new("q").option("a").default(0).ask().unwrap(), 0);
-        assert_eq!(MultiSelect::new("q").option("a").default(&[0]).ask().unwrap(), [0]);
-        assert_eq!(Dropdown::new("q").option("a").default(0).ask().unwrap(), "a");
+        assert_eq!(Select::new("q").option("a").selected(0).ask().unwrap(), 0);
+        assert_eq!(MultiSelect::new("q").option("a").selected(&[0]).ask().unwrap(), [0]);
+        assert_eq!(Dropdown::new("q").option("a").selected(0).ask().unwrap(), "a");
     });
     let _script = script([K::Enter]);
     assert!(matches!(
