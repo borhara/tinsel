@@ -99,6 +99,37 @@ pub(crate) fn read_some(buf: &mut [u8]) -> io::Result<usize> {
     io::stdin().lock().read(buf)
 }
 
+/// [`read_some`], telling a terminal that's quiet from one that's gone. A quiet one gives
+/// nothing after waiting 0.1s; one that's hung up (its window closed) gives nothing at once,
+/// every time, which read on regardless would spin a core.
+#[derive(Default)]
+pub(crate) struct Keyboard {
+    instant_nothings: u32,
+}
+
+impl Keyboard {
+    pub(crate) fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let asked = Instant::now();
+        let n = match read_some(buf) {
+            // a signal (the window resizing, say) cut the wait short
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => return Ok(0),
+            read => read?,
+        };
+        self.saw(n, asked.elapsed())?;
+        Ok(n)
+    }
+
+    fn saw(&mut self, n: usize, took: Duration) -> io::Result<()> {
+        // only Unix reads wait; on Windows nothing can come back at once, from mouse events
+        let instant = n == 0 && took < Duration::from_millis(20) && cfg!(unix);
+        self.instant_nothings = if instant { self.instant_nothings + 1 } else { 0 };
+        if self.instant_nothings >= 10 {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "the terminal closed"));
+        }
+        Ok(())
+    }
+}
+
 /// Stdin read through [`read_some`], so reads give up after 0.1s everywhere.
 pub(crate) struct TimedStdin;
 
@@ -797,6 +828,22 @@ mod tests {
             let saved = stty(&["-g"]).unwrap();
             assert!(stty(RAW).is_ok());
             stty(&[&saved]).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_terminal_that_answers_nothing_at_once_has_gone() {
+        let mut keyboard = Keyboard::default();
+        let (now, waited) = (Duration::ZERO, Duration::from_millis(100));
+        // quiet, then typing, then nothing at once a few times: all still there
+        for (n, took) in [(0, waited), (3, now), (0, now), (0, now), (0, waited)] {
+            assert!(keyboard.saw(n, took).is_ok());
+        }
+        let gone = (0..10).map(|_| keyboard.saw(0, now)).last().unwrap();
+        if cfg!(unix) {
+            assert_eq!(gone.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+        } else {
+            assert!(gone.is_ok());
         }
     }
 
