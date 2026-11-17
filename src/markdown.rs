@@ -3,7 +3,6 @@
 
 use crate::block::Block;
 use crate::layout::{Code, link};
-use crate::message::rule;
 use crate::style::palette::{BLUSH, LINE, MUTED, ROSE, SOFT, TEXT};
 use crate::style::{Rgb, bold, italic, paint};
 use crate::table::Table;
@@ -18,7 +17,18 @@ use crate::text;
 /// tinsel::markdown("## What's new\n\n- **Faster** builds\n- A `--json` flag").print();
 /// ```
 pub fn markdown(src: &str) -> Block {
-    let width = content_width().saturating_sub(2);
+    markdown_in(src, content_width())
+}
+
+/// Like [`markdown`], wrapped to `width` columns rather than the terminal's: for a pane
+/// beside something else.
+///
+/// ```
+/// let narrow = tinsel::markdown_in("A paragraph long enough to wrap onto a second line.", 24);
+/// assert!(narrow.lines().len() > 1);
+/// ```
+pub fn markdown_in(src: &str, width: usize) -> Block {
+    let width = width.saturating_sub(2);
     let lines: Vec<&str> = src.lines().collect();
     let mut out = Block::new();
     // blocks are separated by exactly one blank line, however many the source has
@@ -75,7 +85,7 @@ pub fn markdown(src: &str) -> Block {
                 .any(|c| trimmed.chars().all(|x| x.to_string() == *c || x == ' '))
         {
             gap(&mut out);
-            out.push(rule(""));
+            out.push(format!("  {}", paint(LINE, &"─".repeat(width))));
             i += 1;
             continue;
         }
