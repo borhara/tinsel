@@ -36,7 +36,8 @@ pub trait Widget {
     /// Draw into `area` of `frame`. `area` is already clipped to the screen.
     fn render(&self, area: Rect, frame: &mut Frame);
 
-    /// How many columns and rows it would like, if it knows: what a [`Modal`](super::Modal)
+    /// How many columns and rows it would like, as `(width, height)` like every size in tinsel,
+    /// if it knows: what a [`Modal`](super::Modal)
     /// is sized to. `None` unless implemented.
     ///
     /// ```
