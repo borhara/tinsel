@@ -125,7 +125,7 @@ pub use notation::ParseKeyError;
 pub use overlay::{Modal, Toasts};
 pub use scroll::{Scroll, ScrollView};
 pub use textarea::{Position, TextArea};
-pub use widgets::{Footer, List, Loading, Panel, Plot, Sparkles, Stat, Tabs, Widget, big, hints};
+pub use widgets::{Footer, List, Loading, Panel, Plot, Scrollbar, Sparkles, Stat, Tabs, Widget, big, hints};
 
 use crate::block::Block;
 use crate::term;
