@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 /// tinsel::success("deployed");    // {"event":"message","level":"success","text":"deployed"}
 /// # tinsel::set_output(tinsel::Output::Pretty);
 /// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Output {
     /// For people: colour and animation on a terminal, plain `[ok] Build (1.2s)` lines elsewhere.
@@ -230,7 +230,7 @@ pub fn set_output(out: Output) {
 /// tinsel::success("checked");    // on stderr, coloured if stderr is a terminal
 /// # tinsel::set_target(tinsel::Target::Stdout);
 /// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Target {
     /// Standard output.

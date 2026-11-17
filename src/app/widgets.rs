@@ -388,6 +388,19 @@ pub struct Panel<'a> {
     padding: (usize, usize),
 }
 
+impl std::fmt::Debug for Panel<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Panel")
+            .field("title", &self.title)
+            .field("count", &self.count)
+            .field("status", &self.status)
+            .field("footer", &self.footer)
+            .field("focused", &self.focused)
+            .field("padding", &self.padding)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> Panel<'a> {
     /// A panel with this title (which can be empty). Plain text is drawn in the panel's own
     /// quiet colour (pink when focused); styled text keeps its own colours, so a title can
@@ -416,6 +429,7 @@ impl<'a> Panel<'a> {
     }
 
     /// What goes inside.
+    #[must_use]
     pub fn body(mut self, widget: impl Widget + 'a) -> Self {
         self.body = Some(Box::new(widget));
         self
@@ -432,6 +446,7 @@ impl<'a> Panel<'a> {
     /// frame.render(frame.area(), Panel::new("services").count(12));
     /// assert_eq!(frame.snapshot().plain(), "╭─ services 12 ────╮\n╰──────────────────╯");
     /// ```
+    #[must_use]
     pub fn count(mut self, count: impl std::fmt::Display) -> Self {
         self.count = count.to_string();
         self
@@ -453,18 +468,21 @@ impl<'a> Panel<'a> {
     ///     "╭─ services ── staging · read now ─╮\n╰──────────────────────────────────╯"
     /// );
     /// ```
+    #[must_use]
     pub fn status(mut self, text: impl Into<String>) -> Self {
         self.status = text.into();
         self
     }
 
     /// A little text on the bottom border, at the right: a count, a hint.
+    #[must_use]
     pub fn footer(mut self, text: impl Into<String>) -> Self {
         self.footer = text.into();
         self
     }
 
     /// Whether this is the panel keys go to. Its border shimmers and its title twinkles.
+    #[must_use]
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self
@@ -472,6 +490,7 @@ impl<'a> Panel<'a> {
 
     /// Space between the border and the body: `x` columns each side, `y` rows top and
     /// bottom. `(1, 0)` unless set.
+    #[must_use]
     pub fn padding(mut self, x: usize, y: usize) -> Self {
         self.padding = (x, y);
         self
@@ -642,6 +661,7 @@ impl Widget for Panel<'_> {
 /// frame.render(frame.area(), List::new(["api", "worker", "cron"]).selected(1));
 /// assert_eq!(frame.snapshot().plain(), "  api\n› worker\n  cron");
 /// ```
+#[derive(Clone, Debug)]
 pub struct List {
     items: Vec<String>,
     selected: Option<usize>,
@@ -657,6 +677,7 @@ impl List {
     }
 
     /// Which item is chosen.
+    #[must_use]
     pub fn selected(mut self, index: usize) -> Self {
         self.selected = Some(index);
         self
@@ -749,11 +770,13 @@ pub(super) fn scrollbar(frame: &mut Frame, bar: Rect, start: usize, total: usize
 /// assert_eq!(frame.snapshot().plain(), " overview   logs");
 /// assert_eq!(tabs.at(frame.area(), 13, 0), Some(1));
 /// ```
+#[derive(Clone, Debug)]
 pub struct Tabs {
     tabs: Vec<Tab>,
     selected: usize,
 }
 
+#[derive(Clone, Debug)]
 struct Tab {
     title: String,
     color: Option<Rgb>,
@@ -785,6 +808,7 @@ impl Tabs {
     }
 
     /// Which tab is chosen.
+    #[must_use]
     pub fn selected(mut self, index: usize) -> Self {
         self.selected = index;
         self
@@ -799,6 +823,7 @@ impl Tabs {
     ///
     /// let tabs = Tabs::new(["overview", "errors"]).color(1, palette::RED);
     /// ```
+    #[must_use]
     pub fn color(mut self, index: usize, color: Rgb) -> Self {
         if let Some(tab) = self.tabs.get_mut(index) {
             tab.color = Some(color);
@@ -820,6 +845,7 @@ impl Tabs {
     /// assert_eq!(frame.snapshot().plain(), " build ✔   deploy 3");
     /// assert_eq!(tabs.at(frame.area(), 7, 0), Some(0));
     /// ```
+    #[must_use]
     pub fn badge(mut self, index: usize, color: Rgb, text: impl Into<String>) -> Self {
         if let Some(tab) = self.tabs.get_mut(index) {
             tab.badge = Some((text.into(), color));
@@ -878,6 +904,7 @@ impl Widget for Tabs {
 /// frame.render(frame.area(), Plot::new(&[1.0, 2.0, 3.0, 4.0, 3.0, 2.0]));
 /// assert_eq!(frame.snapshot().plain(), "  ▄█▄\n▄█████");
 /// ```
+#[derive(Clone, Debug)]
 pub struct Plot {
     values: Vec<f64>,
     range: Option<(f64, f64)>,
@@ -896,12 +923,14 @@ impl Plot {
 
     /// The values at the bottom and top of the chart. Unless set, it runs from 0 (or the
     /// lowest value, if that's negative) to the highest.
+    #[must_use]
     pub fn range(mut self, low: f64, high: f64) -> Self {
         self.range = Some((low, high));
         self
     }
 
     /// Fill in one colour, fading towards the bottom, instead of the pink ramp.
+    #[must_use]
     pub fn color(mut self, color: Rgb) -> Self {
         self.color = Some(color);
         self
@@ -952,6 +981,7 @@ impl Widget for Plot {
 /// frame.render(frame.area(), Stat::new("uptime", "99.9%").note(palette::SAGE, "30 days"));
 /// assert_eq!(frame.snapshot().plain(), "uptime\n99.9%\n30 days");
 /// ```
+#[derive(Clone, Debug)]
 pub struct Stat {
     label: String,
     value: String,
@@ -969,6 +999,7 @@ impl Stat {
     }
 
     /// A line under the number, in a colour: `▲ 12%` in sage, `3 failing` in red.
+    #[must_use]
     pub fn note(mut self, color: Rgb, text: impl Into<String>) -> Self {
         self.note = Some((text.into(), color));
         self
@@ -1085,6 +1116,7 @@ impl Loading {
 
     /// A quieter line under the label, saying more: what it's waiting on, how long it's been.
     /// Left out once there's progress to show.
+    #[must_use]
     pub fn detail(mut self, text: impl Into<String>) -> Self {
         self.detail = text.into();
         self
@@ -1092,18 +1124,21 @@ impl Loading {
 
     /// How far along it is, from 0 to 1, shown as a bar and a percentage, with `text`
     /// beside it: `"6 / 12"`, `"17 MB"`.
+    #[must_use]
     pub fn progress(mut self, fraction: f32, text: impl Into<String>) -> Self {
         self.progress = Some((crate::widgets::fraction(fraction), text.into()));
         self
     }
 
     /// Which spinner: [`Sparkle`](crate::Spinner::Sparkle) unless changed.
+    #[must_use]
     pub fn spinner(mut self, spinner: crate::Spinner) -> Self {
         self.spinner = spinner;
         self
     }
 
     /// Sit in the middle of the area, as a panel's whole body does while it waits.
+    #[must_use]
     pub fn centered(mut self) -> Self {
         self.centered = true;
         self
@@ -1215,6 +1250,7 @@ impl Footer {
 
     /// A group of keys and what they do, set a little apart from the others. Groups added
     /// first stay longest when the footer is short of room.
+    #[must_use]
     pub fn keys(mut self, keys: &[(&str, &str)]) -> Self {
         self.groups
             .push(keys.iter().map(|(k, w)| (k.to_string(), w.to_string())).collect());
@@ -1222,6 +1258,7 @@ impl Footer {
     }
 
     /// What's going on, at the right. Styled text is fine: a spinner, a coloured dot.
+    #[must_use]
     pub fn status(mut self, status: impl Into<String>) -> Self {
         self.status = status.into();
         self
@@ -1301,12 +1338,14 @@ impl Sparkles {
     /// let mut frame = Frame::new(40, 10);
     /// frame.render(frame.area(), Sparkles::new().wandering());
     /// ```
+    #[must_use]
     pub fn wandering(mut self) -> Self {
         self.wander = true;
         self
     }
 
     /// The share of cells with a star, 0 to 1.
+    #[must_use]
     pub fn density(mut self, density: f32) -> Self {
         self.density = density.clamp(0.0, 1.0);
         self

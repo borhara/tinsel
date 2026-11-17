@@ -95,6 +95,7 @@ impl Key {
 
     /// The key with its modifiers let go: Ctrl-← is ←, Alt-b and Ctrl-B are `Char('b')`,
     /// Shift-Tab is Tab.
+    #[must_use]
     pub fn unmodified(self) -> Key {
         match self {
             Key::Ctrl(c) | Key::Alt(c) => Key::Char(c),

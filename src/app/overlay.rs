@@ -34,6 +34,15 @@ pub struct Modal<'a> {
     opened: Option<f64>,
 }
 
+impl std::fmt::Debug for Modal<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Modal")
+            .field("size", &self.size)
+            .field("opened", &self.opened)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> Modal<'a> {
     /// A modal holding this widget.
     pub fn new(body: impl Widget + 'a) -> Self {
@@ -45,6 +54,7 @@ impl<'a> Modal<'a> {
     }
 
     /// Make it `width` by `height`, whatever's inside.
+    #[must_use]
     pub fn size(mut self, width: usize, height: usize) -> Self {
         self.size = Some((width, height));
         self
@@ -52,6 +62,7 @@ impl<'a> Modal<'a> {
 
     /// When it was opened, from [`app::time`](super::time) (or [`Frame::time`]), so it can
     /// rise gently into place instead of appearing all at once.
+    #[must_use]
     pub fn opened(mut self, seconds: f64) -> Self {
         self.opened = Some(seconds);
         self
@@ -159,6 +170,7 @@ impl Toasts {
     }
 
     /// How many seconds each toast stays.
+    #[must_use]
     pub fn life(mut self, seconds: f64) -> Self {
         self.life = seconds.max(SLIDE as f64 * 2.0);
         self

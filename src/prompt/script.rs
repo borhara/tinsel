@@ -87,6 +87,7 @@ pub fn typed(text: &str) -> Vec<crate::app::Key> {
 
 /// Questions on this thread answered from a list of keys; made by [`script`]. Dropping it
 /// gives the keyboard back.
+#[derive(Debug)]
 #[must_use = "the script stops when this is dropped"]
 pub struct Script {
     // tied to the thread whose questions it answers

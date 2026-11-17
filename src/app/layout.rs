@@ -26,7 +26,7 @@ pub struct Rect {
 }
 
 /// How much of a split one piece gets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Size {
     /// Exactly this many cells, if there's room.
@@ -77,6 +77,7 @@ impl Rect {
     }
 
     /// The rectangle with `x` columns taken off each side and `y` rows off the top and bottom.
+    #[must_use]
     pub fn shrink(self, x: usize, y: usize) -> Rect {
         Rect::new(
             self.x + x.min(self.width / 2),
@@ -88,12 +89,14 @@ impl Rect {
 
     /// A `width` by `height` rectangle in the middle of this one, for dialogs and popups.
     /// Clamped to fit.
+    #[must_use]
     pub fn center(self, width: usize, height: usize) -> Rect {
         let (w, h) = (width.min(self.width), height.min(self.height));
         Rect::new(self.x + (self.width - w) / 2, self.y + (self.height - h) / 2, w, h)
     }
 
     /// One row of the rectangle, counted from 0. Empty if it's past the bottom.
+    #[must_use]
     pub fn row(self, n: usize) -> Rect {
         if n >= self.height {
             return Rect::new(self.x, self.y.saturating_add(self.height), self.width, 0);
@@ -115,6 +118,7 @@ impl Rect {
 
     /// The part of this rectangle that's also inside `other`.
     /// When they don't overlap, the result is empty and sits on `other`'s edge.
+    #[must_use]
     pub fn intersect(self, other: Rect) -> Rect {
         let (other_right, other_bottom) = (
             other.x.saturating_add(other.width),
