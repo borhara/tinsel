@@ -168,12 +168,9 @@ fn content_width() -> usize {
     term::width().min(MAX_WIDTH)
 }
 
+/// Seconds as [`format::duration`] says them, so a step reads the same as a spinner's line.
 fn fmt_secs(s: f64) -> String {
-    if s < 60.0 {
-        format!("{s:.1}s")
-    } else {
-        format!("{}m{:02}s", (s / 60.0) as u64, (s % 60.0) as u64)
-    }
+    format::duration(Duration::try_from_secs_f64(s).unwrap_or_default())
 }
 
 /// Whole seconds, rounded up, for estimates that shouldn't flicker every frame.
@@ -181,7 +178,7 @@ fn approx(secs: f64) -> String {
     if secs < 60.0 {
         format!("{}s", secs.ceil().max(1.0))
     } else {
-        format::duration(Duration::from_secs_f64(secs))
+        format::duration(Duration::try_from_secs_f64(secs).unwrap_or(Duration::MAX))
     }
 }
 
@@ -1816,8 +1813,8 @@ mod tests {
         for want in [
             "p-title target\n",
             "  [ok] s-done (",
-            "  [warn] s-warn (0.0s) - careful\n",
-            "  [FAIL] s-fail (0.0s) - broke\n      | second line\n",
+            "  [warn] s-warn (0ms) - careful\n",
+            "  [FAIL] s-fail (0ms) - broke\n      | second line\n",
             "  [skip] s-skip - not needed\n",
             "  [cancelled] s-cancel - stopped\n",
             "  [wait] s-wait - approval\n",
@@ -1979,6 +1976,10 @@ mod tests {
         assert_eq!(attempts_note("nope", 0), "nope");
         assert_eq!(attempts_note("nope\nmore", 2), "nope (after 3 attempts)\nmore");
         assert_eq!(fmt_secs(75.0), "1m15s");
+        // the same as everywhere else, and never a panic
+        assert_eq!(fmt_secs(0.3), format::duration(Duration::from_millis(300)));
+        assert_eq!(fmt_secs(5000.0), format::duration(Duration::from_secs(5000)));
+        assert_eq!(fmt_secs(-1.0), format::duration(Duration::ZERO));
     }
 
     #[test]
