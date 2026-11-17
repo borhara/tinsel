@@ -4,9 +4,7 @@ use crate::block::Block;
 use crate::style::palette::{AMBER, MUTED, RED, ROSE, SOFT, TEXT};
 use crate::style::{RAMP, paint, sample};
 use crate::text;
-use crate::widgets::bar;
-
-const LEVELS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+use crate::widgets::{LEVELS, bar};
 
 /// Values as a row of rising blocks, taller ones brighter: `▁▂▄▇▅▃`. A value that isn't a
 /// finite number (NaN, for a reading that's missing) leaves a gap.
