@@ -1849,7 +1849,8 @@ pub(crate) mod tests {
         kept.retain(|t| !t.contains(MARK));
         assert_eq!(ours.len(), 1, "{ours:?}");
         assert!(
-            ours[0].starts_with("thread '<unnamed>' panicked at src/app/mod.rs:"),
+            // file!() and not a written path, which Windows spells with backslashes
+            ours[0].starts_with(&format!("thread '<unnamed>' panicked at {}:", file!())),
             "{ours:?}"
         );
         assert!(ours[0].contains(&format!(":\n{MARK}\n")), "{ours:?}");
