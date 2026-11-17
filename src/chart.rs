@@ -22,7 +22,7 @@ pub fn sparkline(values: &[f64]) -> String {
                 return " ".to_string();
             }
             let t = position(v, lo, hi) as f32;
-            paint(sample(&RAMP, t), LEVELS[((t * 7.0).round() as usize).min(7)])
+            paint(sample(RAMP, t), LEVELS[((t * 7.0).round() as usize).min(7)])
         })
         .collect()
 }
@@ -124,7 +124,7 @@ pub fn histogram(values: &[f64], bins: usize, height: usize) -> Block {
                     " "
                 };
                 let t = (row as f32 + 1.0) / height as f32;
-                paint(sample(&RAMP, t), &cell.repeat(2))
+                paint(sample(RAMP, t), &cell.repeat(2))
             })
             .collect();
         out.push(format!("  {}", line.trim_end()));
