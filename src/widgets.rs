@@ -8,7 +8,8 @@ use crate::term::content_width;
 const ARC: [&str; 6] = ["◜", "◠", "◝", "◞", "◡", "◟"];
 const ORBIT: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 const STARS: [&str; 4] = ["·", "⋆", "✧", "✦"];
-const LEVELS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+/// Eighths of a cell, lowest to full, for bars that rise.
+pub(crate) const LEVELS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 /// Random-looking but repeatable 0..1 noise for a cell at a moment, so glitter flickers
 /// without needing a random number generator.
