@@ -107,6 +107,9 @@ impl History {
     }
 
     pub(crate) fn record(&mut self, key: &str, secs: f64) {
+        if !plausible(secs) {
+            return;
+        }
         let runs = self.runs.entry(clean(key)).or_default();
         runs.push(secs);
         if runs.len() > KEEP {
@@ -258,11 +261,22 @@ fn sanitize(app: &str) -> String {
     }
 }
 
+/// Whether `secs` could be how long a step took. The file is anyone's to edit, and `inf`,
+/// `NaN`, a negative or a time too long for a `Duration` would panic wherever it's shown.
+fn plausible(secs: f64) -> bool {
+    // about 30 years
+    (0.0..1e9).contains(&secs)
+}
+
 fn parse(body: &str) -> BTreeMap<String, Vec<f64>> {
     body.lines()
         .filter_map(|line| {
             let (key, runs) = line.split_once('\t')?;
-            let runs: Vec<f64> = runs.split_whitespace().filter_map(|r| r.parse().ok()).collect();
+            let runs: Vec<f64> = runs
+                .split_whitespace()
+                .filter_map(|r| r.parse().ok())
+                .filter(|&r| plausible(r))
+                .collect();
             Some((key.to_string(), runs))
         })
         .collect()
@@ -303,6 +317,16 @@ mod tests {
         let parsed = parse("deploy › Build\t41.20 39.80\nbroken line\n");
         assert_eq!(parsed["deploy › Build"], vec![41.2, 39.8]);
         assert_eq!(parsed.len(), 1);
+    }
+
+    #[test]
+    fn times_that_cant_be_durations_are_left_out() {
+        let parsed = parse("Build\tinf -1 NaN 1e400 1e300 2.5 -0\n");
+        assert_eq!(parsed["Build"], vec![2.5, -0.0]);
+        let mut h = history();
+        h.record("Build", f64::INFINITY);
+        h.record("Build", -3.0);
+        assert!(h.runs("Build").is_empty());
     }
 
     #[test]
