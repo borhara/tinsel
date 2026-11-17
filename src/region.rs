@@ -253,26 +253,34 @@ impl Region {
         if std::mem::replace(&mut self.closed, true) {
             return;
         }
-        if prints_last_frame(self.mode, self.keep) {
+        // dropped while a panic unwinds: a view that panics again now would abort the program
+        let unwinding = thread::panicking();
+        if prints_last_frame(self.mode, self.keep) && !unwinding {
             return (lock(&self.view))().print();
         }
         if self.mode != Mode::Draw {
             return;
         }
         self.stop.store(true, Ordering::Relaxed);
-        let _ = self.thread.take().map(|handle| {
+        let joined = self.thread.take().map(|handle| {
             handle.thread().unpark();
             handle.join()
         });
-        let lines = if self.keep {
-            (lock(&self.view))().into_lines()
+        // a view that panicked on the drawing thread isn't asked again: it would panic again
+        let view_panicked = matches!(joined, Some(Err(_)));
+        let last = if self.keep && !view_panicked && !unwinding {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (lock(&self.view))().into_lines()))
         } else {
-            Vec::new()
+            Ok(Vec::new())
         };
-        draw(&mut lock(&self.state), &lines, true);
+        // the screen is put right whatever the view did
+        draw(&mut lock(&self.state), last.as_deref().unwrap_or_default(), true);
         crate::display::remove(Arc::as_ptr(&self.state));
-        output::write("\x1b[?25h");
+        output::write("\x1b[?7h\x1b[?25h");
         term::restore_interrupt(self.prev_interrupt.take());
+        if let Err(panic) = last {
+            std::panic::resume_unwind(panic);
+        }
     }
 }
 
@@ -460,5 +468,26 @@ mod tests {
             assert!(lock(&busy.state).abandoned && lock(&poisoned.state).abandoned);
             assert!(!abandon_all());
         });
+    }
+
+    #[test]
+    fn a_view_that_panicked_is_not_asked_again_and_the_cursor_comes_back() {
+        let out = capture(|| {
+            with_terminal(true, || {
+                let mut calls = 0;
+                let region = Region::new(move || {
+                    calls += 1;
+                    if calls > 1 {
+                        panic!("the view broke");
+                    }
+                    Block::from(vec!["v-first".to_string()])
+                })
+                .fps(240)
+                .keep();
+                std::thread::sleep(Duration::from_millis(30));
+                region.finish();
+            })
+        });
+        assert!(out.ends_with("\x1b[?25h"), "{out:?}");
     }
 }
