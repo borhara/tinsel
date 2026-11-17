@@ -361,10 +361,12 @@ impl Waker {
     /// Send the app an [`Event::Wake`]. Wakes that come quicker than the app handles them
     /// arrive as one; a wake before the app starts arrives as it starts.
     pub fn wake(&self) {
+        // under the lock, so an app starting meanwhile either sees this wake or is sent it
+        let wake = WAKE.lock().unwrap_or_else(PoisonError::into_inner);
         if WOKEN.swap(true, Ordering::SeqCst) {
             return;
         }
-        if let Some(tx) = WAKE.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        if let Some(tx) = wake.as_ref() {
             let _ = tx.send(Event::Wake);
         }
     }
@@ -375,10 +377,11 @@ struct Waking;
 
 impl Waking {
     fn listen(tx: mpsc::Sender<Event>) -> Waking {
+        let mut wake = WAKE.lock().unwrap_or_else(PoisonError::into_inner);
         if WOKEN.load(Ordering::SeqCst) {
             let _ = tx.send(Event::Wake);
         }
-        *WAKE.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx);
+        *wake = Some(tx);
         Waking
     }
 }
@@ -1007,8 +1010,12 @@ mod tests {
         assert!(drive(&mut Recorder::default(), &rx, &mut Broken, &mut || (10, 1)).is_err());
     }
 
+    /// Held by tests that wake, since wakes go to whichever app is listening.
+    static WAKES: Mutex<()> = Mutex::new(());
+
     #[test]
     fn wakes_reach_the_app_once_per_burst() {
+        let _wakes = WAKES.lock().unwrap_or_else(PoisonError::into_inner);
         let (tx, rx) = mpsc::channel();
         let waker = Waker::new();
         WOKEN.store(false, Ordering::SeqCst);
@@ -1044,6 +1051,21 @@ mod tests {
         let (tx3, rx3) = mpsc::channel();
         drop(Waking::listen(tx3));
         assert!(rx3.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_wake_as_the_app_starts_is_never_lost() {
+        let _wakes = WAKES.lock().unwrap_or_else(PoisonError::into_inner);
+        for _ in 0..200 {
+            WOKEN.store(false, Ordering::SeqCst);
+            let (tx, rx) = mpsc::channel();
+            let woke = std::thread::spawn(|| Waker::new().wake());
+            let waking = Waking::listen(tx);
+            woke.join().unwrap();
+            assert_eq!(rx.try_iter().count(), 1);
+            drop(waking);
+        }
+        WOKEN.store(false, Ordering::SeqCst);
     }
 
     #[test]
