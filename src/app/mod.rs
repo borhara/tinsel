@@ -203,7 +203,17 @@ fn run_app(app: &mut dyn App) -> io::Result<()> {
     let control = session.control.clone();
     session.reader = Some(std::thread::spawn(move || {
         let mut keyboard = term::Keyboard::default();
-        listen(&mut |buf| keyboard.read(buf), &tx, &control);
+        let resizes = tx.clone();
+        let mut read = |buf: &mut [u8]| {
+            let n = keyboard.read(buf);
+            // reads give up every 0.1s, so a resize is passed on that soon, however slow
+            // the app ticks
+            if term::resized() {
+                let _ = resizes.send(Ok(Event::Resize(term::width(), term::height())));
+            }
+            n
+        };
+        listen(&mut read, &tx, &control);
         control.idle.store(true, Ordering::SeqCst);
     }));
     // caught so the session, and with it the panic hook, is put back while not panicking,
@@ -292,6 +302,10 @@ fn drive(
         for event in first.into_iter().chain(rx.try_iter()) {
             // nothing more can be typed, so the app can't be told to quit: it ends here
             let event = event?;
+            // only a nudge: the size is looked at, and the app told, before the next frame
+            if matches!(event, Event::Resize(..)) {
+                continue;
+            }
             if event == Event::Wake {
                 WOKEN.store(false, Ordering::SeqCst);
             }
@@ -518,6 +532,8 @@ const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
 struct Session {
     control: Arc<Control>,
     reader: Option<std::thread::JoinHandle<()>>,
+    /// The resize handler there was before, to put back.
+    resize: Option<usize>,
     _hook: Hook,
 }
 
@@ -570,6 +586,7 @@ impl Session {
         let session = Session {
             control: Arc::default(),
             reader: None,
+            resize: term::watch_resize(),
             _hook: hook,
         };
         RUNNING.with(|r| {
@@ -597,6 +614,7 @@ impl Drop for Session {
         // first key of whatever reads stdin next
         self.control.stop.store(true, Ordering::SeqCst);
         let _ = self.reader.take().map(std::thread::JoinHandle::join);
+        term::unwatch_resize(self.resize.take());
         leave_screen();
         // out of line mode, unless a suspended closure panicked and it's already there
         RUNNING.with(|r| r.borrow_mut().take());
@@ -831,6 +849,7 @@ mod tests {
         seen: Vec<Event>,
         quit_on: Option<Event>,
         quit_after_ticks: Option<usize>,
+        slow: bool,
     }
 
     impl App for Recorder {
@@ -848,7 +867,7 @@ mod tests {
         }
 
         fn fps(&self) -> u32 {
-            240
+            if self.slow { 1 } else { 240 }
         }
     }
 
@@ -936,6 +955,21 @@ mod tests {
         let mut first = true;
         let mut screen = || if std::mem::take(&mut first) { (5, 5) } else { (9, 9) };
         drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
+        assert_eq!(app.seen, [Event::Resize(9, 9)]);
+
+        // a resize the reader passes on is seen at once, however slowly the app ticks, and
+        // only once, at the size the screen says
+        let mut app = Recorder {
+            quit_on: Some(Event::Resize(9, 9)),
+            slow: true,
+            ..Recorder::default()
+        };
+        let rx = keys(&[Event::Resize(1, 1)]);
+        let mut first = true;
+        let mut screen = || if std::mem::take(&mut first) { (5, 5) } else { (9, 9) };
+        let started = Instant::now();
+        drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500));
         assert_eq!(app.seen, [Event::Resize(9, 9)]);
     }
 

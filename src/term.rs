@@ -191,6 +191,54 @@ impl Drop for RawMode {
     }
 }
 
+/// Set when the window changes size, until [`resized`] is asked.
+static RESIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Note each change of window size (SIGWINCH), for [`resized`] to report, rather than
+/// waiting for the next look at the size. Returns the previous handler, to put back with
+/// [`unwatch_resize`]. A handler someone else set is left in place, and then nothing is noted.
+#[cfg(unix)]
+pub(crate) fn watch_resize() -> Option<usize> {
+    // SAFETY: on_resize only stores to an atomic, which is async-signal-safe
+    let prev = unsafe { signal(SIGWINCH, on_resize as extern "C" fn(i32) as usize) };
+    if prev == SIG_ERR {
+        return None;
+    }
+    if prev != SIG_DFL && prev != SIG_IGN {
+        // SAFETY: prev came from signal() itself, so it is a valid handler value
+        unsafe { signal(SIGWINCH, prev) };
+        return None;
+    }
+    Some(prev)
+}
+
+#[cfg(unix)]
+pub(crate) fn unwatch_resize(prev: Option<usize>) {
+    if let Some(prev) = prev {
+        // SAFETY: prev came from signal() itself, so it is a valid handler value
+        unsafe { signal(SIGWINCH, prev) };
+    }
+}
+
+#[cfg(unix)]
+extern "C" fn on_resize(_: i32) {
+    RESIZED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Windows has no signal for it, so the size is only ever looked at.
+#[cfg(not(unix))]
+pub(crate) fn watch_resize() -> Option<usize> {
+    None
+}
+
+#[cfg(not(unix))]
+pub(crate) fn unwatch_resize(_: Option<usize>) {}
+
+/// Whether the window has changed size since this was last asked.
+pub(crate) fn resized() -> bool {
+    RESIZED.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
+
 /// One byte from the keyboard while in [`RawMode`], or `None` if nothing came within 0.1s.
 pub(crate) fn read_byte() -> io::Result<Option<u8>> {
     let mut b = [0u8; 1];
@@ -679,6 +727,15 @@ const SIGINT: i32 = 2;
 #[cfg(unix)]
 const SIG_ERR: usize = usize::MAX;
 #[cfg(unix)]
+const SIG_DFL: usize = 0;
+#[cfg(unix)]
+const SIG_IGN: usize = 1;
+/// 28 on Linux, macOS and the BSDs, but for Linux on MIPS.
+#[cfg(all(unix, not(any(target_arch = "mips", target_arch = "mips64"))))]
+const SIGWINCH: i32 = 28;
+#[cfg(all(unix, any(target_arch = "mips", target_arch = "mips64")))]
+const SIGWINCH: i32 = 20;
+#[cfg(unix)]
 const TCSANOW: i32 = 0;
 
 #[cfg(unix)]
@@ -845,6 +902,21 @@ mod tests {
         } else {
             assert!(gone.is_ok());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_resize_is_noted_while_watched() {
+        unsafe extern "C" {
+            fn raise(sig: i32) -> i32;
+        }
+        let prev = watch_resize();
+        assert!(prev.is_some());
+        // SAFETY: raise only delivers a signal, to the handler just set
+        unsafe { raise(SIGWINCH) };
+        assert!(resized());
+        assert!(!resized(), "noted once");
+        unwatch_resize(prev);
     }
 
     #[cfg(not(windows))]
