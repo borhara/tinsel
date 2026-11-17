@@ -208,14 +208,20 @@ impl Table {
         }
     }
 
-    /// A cell's lines once its column's limit is applied.
+    /// A cell's lines once its column's limit is applied: tabs become spaces and a newline
+    /// starts another line, as wrapping would.
     fn fit(&self, col: usize, raw: &str) -> Vec<String> {
-        match self.limits.get(col).copied().flatten() {
-            Some((cols, _)) if text::width(raw) <= cols => vec![raw.to_string()],
-            Some((cols, Overflow::Truncate)) => vec![text::truncate(&text::strip_ansi(raw), cols)],
-            Some((cols, Overflow::Wrap)) => text::wrap(&text::strip_ansi(raw), cols),
-            None => vec![raw.to_string()],
-        }
+        let limit = self.limits.get(col).copied().flatten();
+        let raw = text::expand_tabs(raw);
+        raw.split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line))
+            .flat_map(|line| match limit {
+                Some((cols, _)) if text::width(line) <= cols => vec![line.to_string()],
+                Some((cols, Overflow::Truncate)) => vec![text::truncate(&text::strip_ansi(line), cols)],
+                Some((cols, Overflow::Wrap)) => text::wrap(&text::strip_ansi(line), cols),
+                None => vec![line.to_string()],
+            })
+            .collect()
     }
 
     /// The table as lines.
@@ -673,6 +679,21 @@ mod tests {
         assert!(striped.lines().iter().filter(|l| l.contains("\x1b[48;")).count() >= 2);
         assert_eq!(table.to_string(), table.lines().to_string());
         assert!(crate::output::capture(|| table.print()).contains("services"));
+    }
+
+    #[test]
+    fn newlines_and_tabs_in_cells_keep_the_columns_straight() {
+        set_color_mode(ColorMode::None);
+        let plain = Table::new(["name", "notes"])
+            .row(["a\tb", "first\r\nsecond"])
+            .row(["c", "x"])
+            .border(Border::Square)
+            .lines()
+            .plain();
+        let widths: Vec<usize> = plain.lines().map(crate::text::width).collect();
+        assert!(widths.iter().all(|w| *w == widths[0]), "{plain}");
+        assert!(plain.contains("a       b") && plain.contains("second"), "{plain}");
+        assert!(!plain.contains('\t') && !plain.contains('\r'), "{plain}");
     }
 
     #[test]
