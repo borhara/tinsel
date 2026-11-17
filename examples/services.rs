@@ -240,7 +240,7 @@ impl Dashboard {
 
     fn header(&self, frame: &mut Frame, area: app::Rect) {
         let t = frame.time();
-        let title = Line::new().push("✦ ", palette::ROSE).append(shimmer("services", t));
+        let title = Line::new().push(palette::ROSE, "✦ ").append(shimmer("services", t));
         frame.render(area, title);
         let tabs = self.environments();
         // each tab is its title, a mark and a space either side, with a space between tabs
@@ -258,11 +258,11 @@ impl Dashboard {
         let mut tabs = Tabs::new(ENVS).selected(self.env).color(1, palette::RED);
         for i in 0..ENVS.len() {
             tabs = if self.services.is_empty() {
-                tabs.badge(i, "○", palette::MUTED)
+                tabs.badge(i, palette::MUTED, "○")
             } else if down && i == 1 {
-                tabs.badge(i, "✖", palette::RED)
+                tabs.badge(i, palette::RED, "✖")
             } else {
-                tabs.badge(i, "✔", palette::SAGE)
+                tabs.badge(i, palette::SAGE, "✔")
             };
         }
         tabs

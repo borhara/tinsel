@@ -80,7 +80,7 @@ fn colours_survive_the_trip_through_cells() {
     let [stat, rest] = f
         .area()
         .columns([tinsel::app::Size::Fixed(12), tinsel::app::Size::Fill(1)]);
-    f.render(stat, Stat::new("n", "42").note("up", palette::SAGE));
+    f.render(stat, Stat::new("n", "42").note(palette::SAGE, "up"));
     f.render(rest.row(0), Tabs::new(["one", "two"]).selected(0));
     f.render(rest.shrink(0, 1), Plot::new(&[1.0, 2.0, 3.0]).color(palette::AMBER));
     let shown = f.snapshot().to_string();
@@ -190,7 +190,7 @@ fn panel_titles_and_statuses_keep_their_own_colours() {
         f.render(f.area(), panel);
         f.snapshot().lines()[0].clone()
     };
-    let title = tinsel::Line::new().push("● ", palette::RED).push("api", palette::SAGE);
+    let title = tinsel::Line::new().push(palette::RED, "● ").push(palette::SAGE, "api");
     let shown = top(Panel::new(title.to_string()).status("staging"));
     assert!(shown.contains(&rgb(palette::RED)) && shown.contains(&rgb(palette::SAGE)));
     // plain text gets the panel's own colours: a soft title, a muted status
@@ -213,7 +213,7 @@ fn tabs_take_their_own_colours_and_badges() {
     let mut f = Frame::new(40, 1);
     let tabs = Tabs::new(["overview", "errors", "deploy"])
         .color(1, palette::RED)
-        .badge(2, "✔", palette::SAGE)
+        .badge(2, palette::SAGE, "✔")
         .selected(2);
     f.render(f.area(), &tabs);
     let row = f.snapshot().lines()[0].clone();

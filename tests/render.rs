@@ -275,7 +275,7 @@ fn pop_settles() {
 #[test]
 fn badge_and_link_degrade_to_text() {
     plain();
-    assert_eq!(badge("live", palette::ROSE), " live ");
+    assert_eq!(badge(palette::ROSE, "live"), " live ");
     assert_eq!(tinsel::link("docs", "https://docs.rs"), "docs");
 }
 

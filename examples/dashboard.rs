@@ -89,7 +89,7 @@ impl Dashboard {
                 let line = format!(
                     "{}  {}  p95 {}",
                     paint(palette::MUTED, &format!("t+{:>4}", self.ticks)),
-                    badge("slow", palette::AMBER),
+                    badge(palette::AMBER, "slow"),
                     paint(palette::TEXT, &format!("{} took {v:.0}ms", self.services[i].name)),
                 );
                 self.logs.push(line);
@@ -100,7 +100,7 @@ impl Dashboard {
             let line = format!(
                 "{}  {}  {}",
                 paint(palette::MUTED, &format!("t+{:>4}", self.ticks)),
-                badge("ok", palette::SAGE),
+                badge(palette::SAGE, "ok"),
                 paint(palette::SOFT, &format!("deployed build #{}", 1200 + (n * 99.0) as u32)),
             );
             self.logs.push(line);
@@ -121,11 +121,11 @@ impl Dashboard {
         let slow = self.services.iter().filter(|s| self.slow(s)).count();
         let tabs = Tabs::new(TABS).selected(self.tab);
         let tabs = if slow == 0 {
-            tabs.badge(0, "✔", palette::SAGE)
+            tabs.badge(0, palette::SAGE, "✔")
         } else {
-            tabs.badge(0, slow.to_string(), palette::AMBER)
+            tabs.badge(0, palette::AMBER, slow.to_string())
         };
-        tabs.badge(1, self.logs.len().to_string(), palette::MUTED)
+        tabs.badge(1, palette::MUTED, self.logs.len().to_string())
     }
 
     /// A dot for a service: green while it's quick, amber while it's slow.
@@ -141,7 +141,7 @@ impl Dashboard {
         let slow = self.services.iter().filter(|s| self.slow(s)).count();
         let secs = frame.time() as u64;
         let stat = |label: &str, value: String, note: &str, color| {
-            Panel::new("").body(Stat::new(label, value).note(note, color))
+            Panel::new("").body(Stat::new(label, value).note(color, note))
         };
         frame.render(
             cells[0],
@@ -223,7 +223,7 @@ impl App for Dashboard {
         frame.render(header, Sparkles::new().density(0.04));
         let [name, tabs] = header.shrink(2, 1).columns([Fixed(22), Fill(1)]);
         let title = Line::new()
-            .push("✦ ", palette::ROSE)
+            .push(palette::ROSE, "✦ ")
             .append(shimmer("tinsel status", t));
         frame.render(name, title);
         frame.render(tabs, self.tabs());

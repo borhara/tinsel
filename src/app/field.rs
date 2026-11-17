@@ -2,7 +2,7 @@
 
 use super::{Event, Frame, Key, Mods, NamedKey, Rect, Widget};
 use crate::style::palette::{BERRY, MUTED, ROSE, SOFT, TEXT, TRACK};
-use crate::style::{ColorMode, Rgb, color_mode, italic, mix, paint, paint_bg};
+use crate::style::{ColorMode, Rgb, color_mode, italic, mix, paint, paint_on};
 use crate::text::char_width;
 
 /// A box to type into: a filter, a search, a name. Keep one in your app, pass it every
@@ -255,7 +255,7 @@ pub(super) fn caret(c: char) -> String {
     if color_mode() == ColorMode::None {
         return format!("\x1b[7m{c}\x1b[27m");
     }
-    paint_bg(Rgb(40, 30, 36), ROSE, &c.to_string())
+    paint_on(Rgb(40, 30, 36), ROSE, &c.to_string())
 }
 
 #[cfg(test)]
