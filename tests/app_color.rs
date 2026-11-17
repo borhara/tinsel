@@ -253,7 +253,7 @@ fn faded_text_in_the_default_colour_gets_a_real_colour_and_isnt_bold() {
     colour();
     let mut f = Frame::new(4, 1);
     f.print(f.area(), 0, "\x1b[1mab");
-    f.dim(f.area());
+    f.fade(f.area());
     let row = f.snapshot().lines()[0].clone();
     assert!(row.contains("38;2;"), "{row:?}");
     assert!(

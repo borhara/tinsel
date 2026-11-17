@@ -448,7 +448,7 @@ impl Frame {
     }
 
     /// Paint the whole frame in this colour instead of the terminal's. Tinted cells keep their
-    /// tint, [`clear`](Frame::clear) goes back to it and [`dim`](Frame::dim) fades towards it.
+    /// tint, [`clear`](Frame::clear) goes back to it and [`fade`](Frame::fade) fades towards it.
     /// Call it first in [`App::view`](super::App::view). Without colour it does nothing.
     ///
     /// ```
@@ -520,11 +520,11 @@ impl Frame {
     ///
     /// let mut frame = Frame::new(4, 1);
     /// frame.set_background(Rgb(30, 20, 30));
-    /// frame.bare(frame.area());
+    /// frame.transparent(frame.area());
     /// frame.print(frame.area(), 0, "edge");
     /// assert_eq!(frame.snapshot().plain(), "edge");
     /// ```
-    pub fn bare(&mut self, area: Rect) {
+    pub fn transparent(&mut self, area: Rect) {
         let area = area.intersect(self.area());
         for y in area.y..area.y + area.height {
             for x in area.x..area.x + area.width {
@@ -549,32 +549,34 @@ impl Frame {
     }
 
     /// Fade part of the screen into the background, so whatever's drawn on top of it (a
-    /// [`Modal`](super::Modal), say) stands out. Without colour it's left as it is.
+    /// [`Modal`](super::Modal), say) stands out, by mixing every colour towards the
+    /// background; [`dim`](crate::dim) is the terminal's own faint text instead. Without
+    /// colour it's left as it is.
     ///
     /// ```
     /// use tinsel::app::Frame;
     ///
     /// let mut frame = Frame::new(10, 1);
     /// frame.print(frame.area(), 0, "behind");
-    /// frame.dim(frame.area());
+    /// frame.fade(frame.area());
     /// assert_eq!(frame.snapshot().plain(), "behind");
     /// ```
-    pub fn dim(&mut self, area: Rect) {
-        self.dim_by(area, 1.0);
+    pub fn fade(&mut self, area: Rect) {
+        self.fade_by(area, 1.0);
     }
 
-    /// Like [`dim`](Frame::dim), as far as `amount` says: 0 leaves it alone and 1 is the
-    /// same as `dim`. For something that's only a little out of the way, or a fade.
+    /// Like [`fade`](Frame::fade), as far as `amount` says: 0 leaves it alone and 1 is the
+    /// same as `fade`. For something that's only a little out of the way, or a fade.
     ///
     /// ```
     /// use tinsel::app::Frame;
     ///
     /// let mut frame = Frame::new(10, 1);
     /// frame.print(frame.area(), 0, "aside");
-    /// frame.dim_by(frame.area(), 0.3);
+    /// frame.fade_by(frame.area(), 0.3);
     /// assert_eq!(frame.snapshot().plain(), "aside");
     /// ```
-    pub fn dim_by(&mut self, area: Rect, amount: f32) {
+    pub fn fade_by(&mut self, area: Rect, amount: f32) {
         let amount = amount.clamp(0.0, 1.0);
         if crate::style::color_mode() == crate::style::ColorMode::None || amount == 0.0 {
             return;
@@ -998,7 +1000,7 @@ mod tests {
                 "cleared cells take it"
             );
             f.print(f.area(), 0, &crate::paint(Rgb(255, 255, 255), "x"));
-            f.dim(f.area());
+            f.fade(f.area());
             let Ink::Rgb(r, _, _) = f.cells[0].style.fg else {
                 panic!()
             };
@@ -1013,11 +1015,11 @@ mod tests {
     }
 
     #[test]
-    fn bare_cells_show_the_terminal_through_a_background() {
+    fn transparent_cells_show_the_terminal_through_a_background() {
         crate::with_color_mode(crate::ColorMode::TrueColor, || {
             let mut f = Frame::new(2, 1);
             f.set_background(Rgb(30, 20, 30));
-            f.bare(Rect::new(1, 0, 1, 1));
+            f.transparent(Rect::new(1, 0, 1, 1));
             f.print(f.area(), 0, &crate::paint(Rgb(200, 0, 0), "ab"));
             assert_eq!(f.cells[0].style.bg, f.background);
             assert_eq!(f.cells[1].style.bg, Ink::Default);
@@ -1030,12 +1032,12 @@ mod tests {
             let fg = |amount: f32| {
                 let mut f = Frame::new(1, 1);
                 f.print(f.area(), 0, &crate::paint(Rgb(200, 200, 200), "x"));
-                f.dim_by(f.area(), amount);
+                f.fade_by(f.area(), amount);
                 f.cells[0].style.fg
             };
             let mut full = Frame::new(1, 1);
             full.print(full.area(), 0, &crate::paint(Rgb(200, 200, 200), "x"));
-            full.dim(full.area());
+            full.fade(full.area());
             assert_eq!(fg(1.0), full.cells[0].style.fg);
             assert_eq!(fg(0.0), Ink::Rgb(200, 200, 200));
             let (Ink::Rgb(some, ..), Ink::Rgb(all, ..)) = (fg(0.3), fg(1.0)) else {
@@ -1202,7 +1204,7 @@ mod tests {
         crate::style::with_color_mode(crate::ColorMode::TrueColor, || {
             let mut f = Frame::new(4, 1);
             f.print(f.area(), 0, "\x1b[1;31mab\x1b[38;2;10;20;30mcd");
-            f.dim(f.area());
+            f.fade(f.area());
             assert_eq!(f.cells[0].style.attrs, DIM);
             assert_eq!(f.cells[0].style.fg, Ink::Indexed(1));
             assert_ne!(f.cells[2].style.fg, Ink::Rgb(10, 20, 30));
@@ -1217,7 +1219,7 @@ mod tests {
                 with_theme(theme, || {
                     let mut f = Frame::new(2, 1);
                     f.print(f.area(), 0, "ab");
-                    f.dim(f.area());
+                    f.fade(f.area());
                     f.cells[0].style.fg
                 })
             })
