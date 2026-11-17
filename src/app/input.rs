@@ -64,6 +64,72 @@ pub struct Mouse {
     pub y: usize,
 }
 
+/// Bytes as they're read, handed back as events once they're whole. Unlike calling [`parse`]
+/// again on everything, a paste is searched for its end only once, however many pieces it
+/// arrives in.
+pub(crate) struct Decoder {
+    pending: Vec<u8>,
+    /// How much of `pending` has already been turned into events.
+    used: usize,
+    /// Where to carry on looking for the end of a paste.
+    searched: usize,
+}
+
+impl Decoder {
+    pub(crate) fn new() -> Decoder {
+        Decoder {
+            pending: Vec::new(),
+            used: 0,
+            searched: 0,
+        }
+    }
+
+    pub(crate) fn push(&mut self, bytes: &[u8]) {
+        if self.used > 0 {
+            self.pending.drain(..self.used);
+            self.searched = self.searched.saturating_sub(self.used);
+            self.used = 0;
+        }
+        self.pending.extend_from_slice(bytes);
+    }
+
+    /// The next event, as [`parse`] gives it: `None` while what's left could be the start of
+    /// something longer, `Some(None)` for bytes let go. `done` says nothing more is coming
+    /// for now.
+    pub(crate) fn next(&mut self, done: bool) -> Option<Option<super::Event>> {
+        let rest = &self.pending[self.used..];
+        let (event, used) = if rest.starts_with(b"\x1b[") && rest[2..].starts_with(PASTE_START) {
+            self.paste()?
+        } else {
+            parse(rest, done)?
+        };
+        self.used += used;
+        if self.used == self.pending.len() {
+            self.pending.clear();
+            self.used = 0;
+        }
+        Some(event)
+    }
+
+    /// [`paste`], looking only at what came since last time.
+    fn paste(&mut self) -> Option<(Option<super::Event>, usize)> {
+        let start = self.used + 2 + PASTE_START.len();
+        let from = self.searched.max(start);
+        let Some(at) = self.pending[from..]
+            .windows(PASTE_END.len())
+            .position(|w| w == PASTE_END)
+        else {
+            // the end may be split between reads, so its first bytes are looked at again
+            self.searched = self.pending.len().saturating_sub(PASTE_END.len() - 1).max(start);
+            return None;
+        };
+        self.searched = 0;
+        let end = from + at;
+        let text = pasted(&self.pending[start..end]);
+        Some((Some(super::Event::Paste(text)), end + PASTE_END.len() - self.used))
+    }
+}
+
 /// One input event read from the front of `bytes`, and how many bytes it used.
 ///
 /// `None` means the bytes so far could be the start of something longer (an escape sequence,
@@ -198,9 +264,14 @@ const PASTE_END: &[u8] = b"\x1b[201~";
 fn paste(bytes: &[u8]) -> Option<(Option<super::Event>, usize)> {
     let start = 2 + PASTE_START.len();
     let len = bytes[start..].windows(PASTE_END.len()).position(|w| w == PASTE_END)?;
-    let text = String::from_utf8_lossy(&bytes[start..start + len]);
-    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let text = pasted(&bytes[start..start + len]);
     Some((Some(super::Event::Paste(text)), start + len + PASTE_END.len()))
+}
+
+/// Pasted bytes as text, with their line breaks as `\n`.
+fn pasted(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 fn ss3(b: u8) -> Option<Key> {
@@ -426,6 +497,57 @@ mod tests {
         );
         // intermediates come between the parameters and the final byte
         assert_eq!(keys(b"\x1b[2 q"), []);
+    }
+
+    /// Everything a decoder makes of `pieces`, fed in one at a time, with a pause at the end.
+    fn decoded(pieces: &[&[u8]]) -> Vec<Event> {
+        let mut decoder = Decoder::new();
+        let mut out = Vec::new();
+        for (i, piece) in pieces.iter().enumerate() {
+            decoder.push(piece);
+            while let Some(event) = decoder.next(i + 1 == pieces.len()) {
+                out.extend(event);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_decoder_reads_whatever_pieces_bytes_come_in() {
+        let all = b"a\x1b[A\x1b[200~one\r\ntwo\x1b[201~\x1b";
+        let want = [
+            Event::Key(Key::Char('a')),
+            Event::Key(Key::Up),
+            Event::Paste("one\ntwo".into()),
+            Event::Key(Key::Esc),
+        ];
+        assert_eq!(decoded(&[all]), want);
+        // a byte at a time, the end of the paste split between reads included
+        let bytes: Vec<&[u8]> = all.chunks(1).collect();
+        assert_eq!(decoded(&bytes), want);
+        assert_eq!(
+            decoded(&[b"\x1b[200~x\x1b[2", b"01~y"]),
+            [Event::Paste("x".into()), Event::Key(Key::Char('y'))]
+        );
+    }
+
+    #[test]
+    fn a_big_paste_is_read_in_one_pass() {
+        let text = "pasted line\n".repeat(100_000);
+        let mut decoder = Decoder::new();
+        decoder.push(b"\x1b[200~");
+        let started = std::time::Instant::now();
+        for b in text.as_bytes() {
+            decoder.push(std::slice::from_ref(b));
+            assert_eq!(decoder.next(false), None);
+        }
+        decoder.push(PASTE_END);
+        assert_eq!(decoder.next(false), Some(Some(Event::Paste(text))));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
