@@ -125,6 +125,9 @@ fn enabled() -> bool {
     }
 }
 
+/// Who has focus reports on, so they're turned off only when the last watch stops.
+static REPORTING: term::Holders<()> = term::Holders::new(());
+
 pub(crate) struct Watch {
     pub(crate) focus: Arc<Focus>,
     stop: Arc<AtomicBool>,
@@ -140,8 +143,11 @@ impl Watch {
             return None;
         }
         term::remember_terminal();
-        let cbreak = term::Cbreak::enter().ok()?;
-        output::write("\x1b[?1004h");
+        let Ok(cbreak) = term::Cbreak::enter() else {
+            term::forget_terminal();
+            return None;
+        };
+        REPORTING.hold(|()| output::write("\x1b[?1004h"));
 
         let focus = Arc::new(Focus::default());
         let stop = Arc::new(AtomicBool::new(false));
@@ -160,7 +166,9 @@ impl Watch {
         let Some(thread) = self.thread.take() else { return };
         self.stop.store(true, Ordering::Relaxed);
         let _ = thread.join();
-        output::write("\x1b[?1004l");
+        // another watch may still be listening: focus reports and cbreak stay until the last
+        // one stops, and only then is the terminal put back as it was before the first
+        REPORTING.let_go(|()| output::write("\x1b[?1004l"));
         self.cbreak = None;
         term::forget_terminal();
         let typed = std::mem::take(&mut *self.focus.typed.lock().unwrap_or_else(PoisonError::into_inner));

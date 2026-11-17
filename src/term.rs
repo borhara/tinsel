@@ -65,38 +65,95 @@ pub(crate) fn stty(args: &[&str]) -> io::Result<String> {
 }
 
 /// Character-at-a-time input with no echo, read with [`read_some`], for listening to the
-/// terminal while something's drawn. Unlike [`RawMode`], Ctrl-C still interrupts. Undone
-/// when dropped.
-pub(crate) struct Cbreak {
-    #[cfg(not(windows))]
-    saved: String,
-    #[cfg(windows)]
-    saved: win::Saved,
-}
+/// terminal while something's drawn. Unlike [`RawMode`], Ctrl-C still interrupts. Several can
+/// be held at once, by overlapping displays: the first changes the terminal and the last to be
+/// dropped puts it back as it was before the first, whichever order they end in.
+pub(crate) struct Cbreak(());
+
+/// The terminal's settings before cbreak, for whichever [`Cbreak`] is dropped last.
+#[cfg(not(windows))]
+static CBREAK: Holders<Option<String>> = Holders::new(None);
+#[cfg(windows)]
+static CBREAK: Holders<Option<win::Saved>> = Holders::new(None);
 
 impl Cbreak {
     pub(crate) fn enter() -> io::Result<Cbreak> {
-        #[cfg(not(windows))]
-        {
-            let saved = stty(&["-g"])?;
-            stty(&["-icanon", "-echo", "min", "0", "time", "1"])?;
-            Ok(Cbreak { saved })
-        }
-        #[cfg(windows)]
-        {
-            Ok(Cbreak {
-                saved: win::enter(false)?,
-            })
-        }
+        CBREAK.try_hold(|saved| {
+            #[cfg(not(windows))]
+            {
+                let before = stty(&["-g"])?;
+                stty(&["-icanon", "-echo", "min", "0", "time", "1"])?;
+                *saved = Some(before);
+            }
+            #[cfg(windows)]
+            {
+                *saved = Some(win::enter(false)?);
+            }
+            Ok(())
+        })?;
+        Ok(Cbreak(()))
     }
 }
 
 impl Drop for Cbreak {
     fn drop(&mut self) {
-        #[cfg(not(windows))]
-        let _ = stty(&[&self.saved]);
-        #[cfg(windows)]
-        win::leave_raw(&self.saved);
+        CBREAK.let_go(|saved| {
+            let Some(saved) = saved.take() else { return };
+            #[cfg(not(windows))]
+            let _ = stty(&[&saved]);
+            #[cfg(windows)]
+            win::leave_raw(&saved);
+        });
+    }
+}
+
+/// Something process-wide that overlapping displays share, such as the terminal's settings or
+/// the Ctrl-C handler: set up by the first to hold it and undone by the last to let go, in
+/// whatever order they finish.
+pub(crate) struct Holders<T> {
+    held: std::sync::Mutex<(usize, T)>,
+}
+
+impl<T> Holders<T> {
+    pub(crate) const fn new(state: T) -> Holders<T> {
+        Holders {
+            held: std::sync::Mutex::new((0, state)),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, (usize, T)> {
+        self.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Hold it, running `first` if no one else does yet.
+    pub(crate) fn hold(&self, first: impl FnOnce(&mut T)) {
+        let _ = self.try_hold(|state| {
+            first(state);
+            Ok(())
+        });
+    }
+
+    /// [`hold`](Holders::hold), unless `first` fails, which leaves it unheld.
+    pub(crate) fn try_hold(&self, first: impl FnOnce(&mut T) -> io::Result<()>) -> io::Result<()> {
+        let mut held = self.lock();
+        if held.0 == 0 {
+            first(&mut held.1)?;
+        }
+        held.0 += 1;
+        Ok(())
+    }
+
+    /// Let go of it, running `last` if no one else holds it now. Letting go of what isn't held
+    /// does nothing.
+    pub(crate) fn let_go(&self, last: impl FnOnce(&mut T)) {
+        let mut held = self.lock();
+        if held.0 == 0 {
+            return;
+        }
+        held.0 -= 1;
+        if held.0 == 0 {
+            last(&mut held.1);
+        }
     }
 }
 
@@ -211,16 +268,8 @@ static RESIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 #[cfg(unix)]
 pub(crate) fn watch_resize() -> Option<usize> {
     // SAFETY: on_resize only stores to an atomic, which is async-signal-safe
-    let prev = unsafe { signal(SIGWINCH, on_resize as extern "C" fn(i32) as usize) };
-    if prev == SIG_ERR {
-        return None;
-    }
-    if prev != SIG_DFL && prev != SIG_IGN {
-        // SAFETY: prev came from signal() itself, so it is a valid handler value
-        unsafe { signal(SIGWINCH, prev) };
-        return None;
-    }
-    Some(prev)
+    let prev = unsafe { take_signal(SIGWINCH, on_resize, |prev| prev != SIG_DFL && prev != SIG_IGN) }?;
+    Some(prev.handler())
 }
 
 #[cfg(unix)]
@@ -683,10 +732,16 @@ pub(crate) fn push_back_input(_: &[u8]) {}
 
 /// What Ctrl-C does while tinsel draws something live: a spinner, progress bar, steps, a
 /// [`Region`](crate::Region) or the help pager. Set with [`set_ctrl_c`].
+///
+/// On Unix, a Ctrl-C handler the program set before the drawing started (with the `ctrlc`
+/// crate or `tokio::signal`, say) is left in place, whatever this says, as is a Ctrl-C the
+/// program ignores; tinsel only steps in where Ctrl-C would otherwise end the program.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CtrlC {
-    /// Put the terminal back and exit with code 130. The default.
+    /// Put the terminal back and end the program as Ctrl-C would have: on Unix by the signal
+    /// itself, so a shell sees it was interrupted (status 130) and stops a loop running it,
+    /// and on Windows with exit code 130. The default.
     Exit,
     /// The same, printing this line on the way out, so the program can say what was stopped.
     ExitWith(String),
@@ -716,38 +771,62 @@ pub fn set_ctrl_c(how: CtrlC) {
 }
 
 /// While tinsel has the cursor hidden or the terminal in a special mode, Ctrl-C would leave
-/// the user's shell that way. Returns the previous handler so it can be put back afterwards.
+/// the user's shell that way. Overlapping displays share one handler: the first sets it and
+/// the last to finish puts back what was there before. A handler the program set itself, or
+/// a Ctrl-C it ignores, is left alone. Returns something when this display holds the guard,
+/// for [`restore_interrupt`] to let go of.
 #[cfg(unix)]
 pub(crate) fn guard_interrupt() -> Option<usize> {
     if LEAVE_CTRL_C.load(std::sync::atomic::Ordering::SeqCst) {
         return None;
     }
-    // SAFETY: on_interrupt only calls async-signal-safe functions.
-    let prev = unsafe { signal(SIGINT, on_interrupt as extern "C" fn(i32) as usize) };
-    (prev != SIG_ERR).then_some(prev)
+    INTERRUPT.hold(|prev| {
+        // SAFETY: on_interrupt only calls async-signal-safe functions
+        *prev = unsafe { take_signal(SIGINT, on_interrupt, |prev| prev != SIG_DFL) };
+    });
+    Some(0)
 }
 
 #[cfg(unix)]
-pub(crate) fn restore_interrupt(prev: Option<usize>) {
-    if let Some(prev) = prev {
-        // SAFETY: prev came from signal() itself, so it is a valid handler value.
-        unsafe { signal(SIGINT, prev) };
+pub(crate) fn restore_interrupt(held: Option<usize>) {
+    if held.is_none() {
+        return;
     }
+    INTERRUPT.let_go(|prev| {
+        if let Some(prev) = prev.take() {
+            // SAFETY: prev is what sigaction (or signal) gave back, so it is a valid handler
+            unsafe { put_back_signal(SIGINT, &prev) };
+        }
+    });
 }
+
+/// What SIGINT did before tinsel's handler, while any display holds it.
+#[cfg(unix)]
+static INTERRUPT: Holders<Option<Disposition>> = Holders::new(None);
 
 /// Snapshot the terminal's settings so the Ctrl-C handler can restore them. The snapshot is
 /// kept as opaque bytes: tcsetattr is safe to call from a signal handler, `stty` isn't, and
 /// handing back exactly what tcgetattr gave means never needing to know the struct's layout.
-#[cfg(unix)]
+/// Overlapping displays share it: the first takes it, so a later one doesn't mistake an
+/// earlier one's raw mode for how the terminal was, and it's kept until the last lets go.
 pub(crate) fn remember_terminal() {
     restore_at_exit();
-    // SAFETY: the buffer is larger than any platform's termios struct.
-    let ok = unsafe { tcgetattr(0, (&raw mut SAVED_TERMIOS).cast()) } == 0;
-    HAVE_SAVED.store(ok, std::sync::atomic::Ordering::SeqCst);
+    TERMINAL.hold(|()| save_terminal());
 }
 
 pub(crate) fn forget_terminal() {
-    HAVE_SAVED.store(false, std::sync::atomic::Ordering::SeqCst);
+    TERMINAL.let_go(|()| HAVE_SAVED.store(false, std::sync::atomic::Ordering::SeqCst));
+}
+
+/// Who holds the saved terminal settings.
+static TERMINAL: Holders<()> = Holders::new(());
+
+#[cfg(unix)]
+fn save_terminal() {
+    // SAFETY: the buffer is larger than any platform's termios struct, and HAVE_SAVED is
+    // false while no one holds it, so no handler is reading it
+    let ok = unsafe { tcgetattr(0, (&raw mut SAVED_TERMIOS).cast()) } == 0;
+    HAVE_SAVED.store(ok, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Put back the settings [`remember_terminal`] saved, if any, and stop focus reports.
@@ -763,8 +842,6 @@ pub(crate) fn restore_saved_terminal() {
 #[cfg(unix)]
 const SIGINT: i32 = 2;
 #[cfg(unix)]
-const SIG_ERR: usize = usize::MAX;
-#[cfg(unix)]
 const SIGHUP: i32 = 1;
 #[cfg(unix)]
 const SIGTERM: i32 = 15;
@@ -779,6 +856,35 @@ const SIGWINCH: i32 = 28;
 const SIGWINCH: i32 = 20;
 #[cfg(unix)]
 const TCSANOW: i32 = 0;
+/// 1 on Linux, but for MIPS and SPARC; 2 on macOS and the BSDs.
+#[cfg(all(
+    target_os = "linux",
+    not(any(
+        target_arch = "mips",
+        target_arch = "mips64",
+        target_arch = "sparc",
+        target_arch = "sparc64"
+    ))
+))]
+const SIG_UNBLOCK: i32 = 1;
+#[cfg(all(
+    unix,
+    not(all(
+        target_os = "linux",
+        not(any(
+            target_arch = "mips",
+            target_arch = "mips64",
+            target_arch = "sparc",
+            target_arch = "sparc64"
+        ))
+    ))
+))]
+const SIG_UNBLOCK: i32 = 2;
+
+/// A sigset_t, as big as any platform's (Linux's 1024 bits; macOS uses the first 32), a
+/// signal's bit at `sig - 1` counting from the low bit of the first word.
+#[cfg(unix)]
+type SigSet = [usize; 1024 / usize::BITS as usize];
 
 #[cfg(unix)]
 static mut SAVED_TERMIOS: [u8; 256] = [0; 256];
@@ -786,8 +892,9 @@ static HAVE_SAVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// The console's input mode, saved for Ctrl-C to put back.
 #[cfg(windows)]
 static SAVED_MODE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-/// What Ctrl-C writes on its way out: focus reports off, the cursor back, line wrapping on.
-const RESTORE: &[u8] = b"\x1b[?1004l\x1b[?25h\x1b[?7h";
+/// What Ctrl-C writes on its way out: focus reports off, the cursor back, line wrapping on,
+/// and bracketed paste off, which a prompt may have turned on (harmless if it hadn't).
+const RESTORE: &[u8] = b"\x1b[?1004l\x1b[?25h\x1b[?7h\x1b[?2004l";
 
 #[cfg(unix)]
 unsafe extern "C" {
@@ -795,9 +902,213 @@ unsafe extern "C" {
     fn write(fd: i32, buf: *const std::ffi::c_void, count: usize) -> isize;
     fn _exit(code: i32) -> !;
     fn raise(sig: i32) -> i32;
+    fn pthread_sigmask(how: i32, set: *const SigSet, old: *mut SigSet) -> i32;
     fn tcgetattr(fd: i32, termios: *mut u8) -> i32;
     fn tcsetattr(fd: i32, action: i32, termios: *const u8) -> i32;
     fn atexit(f: extern "C" fn()) -> i32;
+}
+
+// MARK: - Signal handlers, kept whole
+
+/// struct sigaction as the C library takes it, where its layout is known: handler, mask and
+/// flags, so a handler can be put back exactly as it was. Elsewhere only `signal` is used,
+/// which keeps the handler but not its flags.
+#[cfg(target_vendor = "apple")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SigAction {
+    handler: usize,
+    mask: u32,
+    flags: i32,
+}
+
+/// Linux's generic layout, which glibc and musl share on these architectures (MIPS, SPARC and
+/// s390x order theirs differently).
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "powerpc",
+        target_arch = "powerpc64",
+        target_arch = "loongarch64"
+    )
+))]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SigAction {
+    handler: usize,
+    mask: SigSet,
+    flags: i32,
+    restorer: usize,
+}
+
+#[cfg(target_vendor = "apple")]
+const SA_RESTART: i32 = 0x0002;
+#[cfg(target_os = "linux")]
+const SA_RESTART: i32 = 0x1000_0000;
+
+#[cfg(any(
+    target_vendor = "apple",
+    all(
+        target_os = "linux",
+        any(
+            target_arch = "x86",
+            target_arch = "x86_64",
+            target_arch = "arm",
+            target_arch = "aarch64",
+            target_arch = "riscv64",
+            target_arch = "powerpc",
+            target_arch = "powerpc64",
+            target_arch = "loongarch64"
+        )
+    )
+))]
+mod disposition {
+    use super::{SA_RESTART, SigAction};
+
+    unsafe extern "C" {
+        fn sigaction(sig: i32, act: *const SigAction, old: *mut SigAction) -> i32;
+    }
+
+    /// What a signal does: its handler, mask and flags.
+    pub(super) type Disposition = SigAction;
+
+    impl SigAction {
+        pub(super) fn handler(&self) -> usize {
+            self.handler
+        }
+    }
+
+    /// See [`super::take_signal`].
+    pub(super) unsafe fn take(sig: i32, handler: usize, keep: impl Fn(usize) -> bool) -> Option<SigAction> {
+        // SAFETY: zeroed is a valid sigaction (SIG_DFL, nothing masked, no flags)
+        let mut prev: SigAction = unsafe { std::mem::zeroed() };
+        // looked at before anything's set, so the program's own handler is never displaced,
+        // even for a moment
+        // SAFETY: sigaction writes one struct sigaction through the pointer
+        if unsafe { sigaction(sig, std::ptr::null(), &mut prev) } != 0 || keep(prev.handler) {
+            return None;
+        }
+        let ours = SigAction {
+            handler,
+            flags: SA_RESTART,
+            // SAFETY: as above
+            ..unsafe { std::mem::zeroed() }
+        };
+        // SAFETY: the caller vouches for the handler
+        (unsafe { sigaction(sig, &ours, std::ptr::null_mut()) } == 0).then_some(prev)
+    }
+
+    pub(super) unsafe fn put_back(sig: i32, prev: &SigAction) {
+        // SAFETY: prev came from sigaction itself, so it is a valid disposition
+        unsafe { sigaction(sig, prev, std::ptr::null_mut()) };
+    }
+
+    /// What `sig` does now, for tests to look at.
+    #[cfg(test)]
+    pub(super) fn now(sig: i32) -> SigAction {
+        // SAFETY: zeroed is a valid sigaction, and sigaction writes one through the pointer
+        unsafe {
+            let mut now: SigAction = std::mem::zeroed();
+            sigaction(sig, std::ptr::null(), &mut now);
+            now
+        }
+    }
+
+    /// Set `sig`'s handler and flags, for tests.
+    #[cfg(test)]
+    pub(super) unsafe fn set(sig: i32, handler: usize, flags: i32) {
+        // SAFETY: zeroed is a valid sigaction; the caller vouches for the handler
+        unsafe {
+            let act = SigAction {
+                handler,
+                flags,
+                ..std::mem::zeroed()
+            };
+            sigaction(sig, &act, std::ptr::null_mut());
+        }
+    }
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_vendor = "apple",
+        all(
+            target_os = "linux",
+            any(
+                target_arch = "x86",
+                target_arch = "x86_64",
+                target_arch = "arm",
+                target_arch = "aarch64",
+                target_arch = "riscv64",
+                target_arch = "powerpc",
+                target_arch = "powerpc64",
+                target_arch = "loongarch64"
+            )
+        )
+    ))
+))]
+mod disposition {
+    use super::signal;
+
+    const SIG_ERR: usize = usize::MAX;
+
+    /// What a signal does: only its handler, here.
+    #[derive(Clone, Copy)]
+    pub(super) struct Disposition(usize);
+
+    impl Disposition {
+        pub(super) fn handler(&self) -> usize {
+            self.0
+        }
+    }
+
+    pub(super) unsafe fn take(sig: i32, handler: usize, keep: impl Fn(usize) -> bool) -> Option<Disposition> {
+        // SAFETY: the caller vouches for the handler
+        let prev = unsafe { signal(sig, handler) };
+        if prev == SIG_ERR {
+            return None;
+        }
+        if keep(prev) {
+            // SAFETY: prev came from signal() itself, so it is a valid handler value
+            unsafe { signal(sig, prev) };
+            return None;
+        }
+        Some(Disposition(prev))
+    }
+
+    pub(super) unsafe fn put_back(sig: i32, prev: &Disposition) {
+        // SAFETY: prev came from signal() itself, so it is a valid handler value
+        unsafe { signal(sig, prev.0) };
+    }
+}
+
+#[cfg(unix)]
+use disposition::Disposition;
+
+/// Set `handler` for `sig`, unless `keep` says the handler already there (or SIG_DFL or
+/// SIG_IGN) should stay, and then it does, flags and all. Returns what was there, if replaced,
+/// for [`put_back_signal`].
+///
+/// # Safety
+/// `handler` may only call async-signal-safe functions.
+#[cfg(unix)]
+unsafe fn take_signal(sig: i32, handler: extern "C" fn(i32), keep: impl Fn(usize) -> bool) -> Option<Disposition> {
+    // SAFETY: passed on from the caller
+    unsafe { disposition::take(sig, handler as usize, keep) }
+}
+
+/// # Safety
+/// `prev` must have come from [`take_signal`] for the same signal.
+#[cfg(unix)]
+unsafe fn put_back_signal(sig: i32, prev: &Disposition) {
+    // SAFETY: passed on from the caller
+    unsafe { disposition::put_back(sig, prev) }
 }
 
 /// Put the terminal back if the program ends with [`std::process::exit`] while something is
@@ -832,44 +1143,51 @@ extern "C" fn on_exit() {
 }
 
 /// What a full-screen app writes on its way out, for [`on_terminate`] to write too.
+#[cfg(unix)]
 static LEAVING: std::sync::atomic::AtomicPtr<u8> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+#[cfg(unix)]
 static LEAVING_LEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Hangups (the window closed) and kills (SIGTERM) end the program at once, which would leave
 /// the terminal in raw mode on the alternate screen. While guarded, they put the terminal
 /// back and write `leave` first, then end the program as they would have. Only signals with
-/// no handler of their own are guarded; the previous handlers are returned for
-/// [`unguard_termination`].
+/// no handler of their own are guarded. Overlapping holders (a question asked inside an app,
+/// say) share the guard: the first sets it, and its `leave` is the one written, and the last
+/// to finish puts the handlers back. Returns a token for [`unguard_termination`].
 #[cfg(unix)]
 pub(crate) fn guard_termination(leave: &'static str) -> [Option<usize>; 2] {
     use std::sync::atomic::Ordering::SeqCst;
-    LEAVING_LEN.store(leave.len(), SeqCst);
-    LEAVING.store(leave.as_ptr().cast_mut(), SeqCst);
-    [SIGHUP, SIGTERM].map(|sig| {
-        // SAFETY: on_terminate only calls async-signal-safe functions
-        let prev = unsafe { signal(sig, on_terminate as extern "C" fn(i32) as usize) };
-        if prev == SIG_ERR {
-            return None;
-        }
-        if prev != SIG_DFL {
+    TERMINATION.hold(|prev| {
+        LEAVING_LEN.store(leave.len(), SeqCst);
+        LEAVING.store(leave.as_ptr().cast_mut(), SeqCst);
+        *prev = [SIGHUP, SIGTERM].map(|sig| {
             // ignored, or the program's own: either way, it stays
-            // SAFETY: prev came from signal() itself, so it is a valid handler value
-            unsafe { signal(sig, prev) };
-            return None;
-        }
-        Some(prev)
-    })
+            // SAFETY: on_terminate only calls async-signal-safe functions
+            unsafe { take_signal(sig, on_terminate, |prev| prev != SIG_DFL) }
+        });
+    });
+    [Some(SIG_DFL), None]
 }
 
 #[cfg(unix)]
-pub(crate) fn unguard_termination(prev: [Option<usize>; 2]) {
-    for (sig, prev) in [SIGHUP, SIGTERM].into_iter().zip(prev) {
-        if let Some(prev) = prev {
-            // SAFETY: prev came from signal() itself, so it is a valid handler value
-            unsafe { signal(sig, prev) };
-        }
+pub(crate) fn unguard_termination(held: [Option<usize>; 2]) {
+    if held == [None, None] {
+        return;
     }
+    TERMINATION.let_go(|prev| {
+        for (sig, prev) in [SIGHUP, SIGTERM].into_iter().zip(std::mem::take(prev)) {
+            if let Some(prev) = prev {
+                // SAFETY: prev is what take_signal gave back for this signal
+                unsafe { put_back_signal(sig, &prev) };
+            }
+        }
+        LEAVING.store(std::ptr::null_mut(), std::sync::atomic::Ordering::SeqCst);
+    });
 }
+
+/// What SIGHUP and SIGTERM did before tinsel's handler, while anyone holds the guard.
+#[cfg(unix)]
+static TERMINATION: Holders<[Option<Disposition>; 2]> = Holders::new([None, None]);
 
 #[cfg(unix)]
 extern "C" fn on_terminate(sig: i32) {
@@ -900,8 +1218,8 @@ pub(crate) fn unguard_termination(_: [Option<usize>; 2]) {}
 
 #[cfg(unix)]
 extern "C" fn on_interrupt(_: i32) {
-    // SAFETY: write, tcsetattr and _exit are all async-signal-safe, and SAVED_TERMIOS is only
-    // written before HAVE_SAVED is set.
+    // SAFETY: write, tcsetattr, signal, pthread_sigmask, raise and _exit are all
+    // async-signal-safe, and SAVED_TERMIOS is only written before HAVE_SAVED is set.
     unsafe {
         if HAVE_SAVED.load(std::sync::atomic::Ordering::SeqCst) {
             tcsetattr(0, TCSANOW, (&raw const SAVED_TERMIOS).cast());
@@ -913,29 +1231,47 @@ extern "C" fn on_interrupt(_: i32) {
         if !line.is_null() {
             write(fd, (*line).as_ptr().cast(), (*line).len());
         }
+        // end by the signal itself, as Ctrl-C would have, so a shell running this in a loop
+        // sees it was interrupted and stops. It's held back while this handler runs, so it's
+        // let through at once; exiting with 130 is only for if that somehow didn't end it
+        signal(SIGINT, SIG_DFL);
+        raise(SIGINT);
+        let mut only_sigint: SigSet = [0; 1024 / usize::BITS as usize];
+        only_sigint[0] = 1 << (SIGINT - 1);
+        pthread_sigmask(SIG_UNBLOCK, &only_sigint, std::ptr::null_mut());
         _exit(130)
     }
 }
 
 /// On Windows Ctrl-C is a call to a handler on a thread of its own, not a signal, so the
-/// handler can do as it likes. Returns something only so [`restore_interrupt`] knows to undo it.
+/// handler can do as it likes. Overlapping displays share it, as on Unix. Returns something
+/// only so [`restore_interrupt`] knows to let go of it.
 #[cfg(windows)]
 pub(crate) fn guard_interrupt() -> Option<usize> {
     if LEAVE_CTRL_C.load(std::sync::atomic::Ordering::SeqCst) {
         return None;
     }
-    win::handle_ctrl_c(true).then_some(0)
+    INTERRUPT.hold(|set| *set = win::handle_ctrl_c(true));
+    Some(0)
 }
 
 #[cfg(windows)]
-pub(crate) fn restore_interrupt(prev: Option<usize>) {
-    if prev.is_some() {
-        win::handle_ctrl_c(false);
+pub(crate) fn restore_interrupt(held: Option<usize>) {
+    if held.is_some() {
+        INTERRUPT.let_go(|set| {
+            if std::mem::take(set) {
+                win::handle_ctrl_c(false);
+            }
+        });
     }
 }
 
+/// Whether tinsel's console handler is set, while any display holds it.
 #[cfg(windows)]
-pub(crate) fn remember_terminal() {
+static INTERRUPT: Holders<bool> = Holders::new(false);
+
+#[cfg(windows)]
+fn save_terminal() {
     if let Some(mode) = win::input_mode() {
         SAVED_MODE.store(mode, std::sync::atomic::Ordering::SeqCst);
         HAVE_SAVED.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -974,13 +1310,10 @@ fn interrupted() -> ! {
 #[cfg(test)]
 pub(crate) fn press_ctrl_c() {
     #[cfg(unix)]
-    {
-        unsafe extern "C" {
-            fn raise(sig: i32) -> i32;
-        }
-        // SAFETY: raise only delivers a signal, to whichever handler is set
-        unsafe { raise(SIGINT) };
-    }
+    // SAFETY: raise only delivers a signal, to whichever handler is set
+    unsafe {
+        raise(SIGINT)
+    };
     #[cfg(windows)]
     // SAFETY: as the console calls it, with Ctrl-C
     unsafe {
@@ -997,7 +1330,7 @@ pub(crate) fn guard_interrupt() -> Option<usize> {
 pub(crate) fn restore_interrupt(_: Option<usize>) {}
 
 #[cfg(not(any(unix, windows)))]
-pub(crate) fn remember_terminal() {}
+fn save_terminal() {}
 
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn restore_saved_terminal() {
@@ -1066,18 +1399,130 @@ mod tests {
         unwatch_resize(prev);
     }
 
-    #[cfg(unix)]
     #[test]
-    fn hangups_and_kills_are_guarded_unless_the_program_handles_them() {
+    fn whatever_is_shared_is_set_up_by_the_first_and_undone_by_the_last() {
+        let shared = Holders::new(Vec::new());
+        shared.hold(|log| log.push("set up"));
+        shared.hold(|log| log.push("set up again"));
+        // the first lets go before the second: nothing's undone yet
+        shared.let_go(|log| log.push("undone"));
+        assert_eq!(*shared.lock(), (1, vec!["set up"]));
+        shared.let_go(|log| log.push("undone"));
+        assert_eq!(*shared.lock(), (0, vec!["set up", "undone"]));
+        // letting go of what isn't held does nothing
+        shared.let_go(|log| log.push("undone again"));
+        assert_eq!(shared.lock().1.len(), 2);
+        // a set-up that fails leaves it unheld, to be tried again by the next
+        assert!(shared.try_hold(|_| Err(io::Error::other("no"))).is_err());
+        assert_eq!(shared.lock().0, 0);
+        shared.hold(|log| log.push("set up"));
+        assert_eq!(*shared.lock(), (1, vec!["set up", "undone", "set up"]));
+    }
+
+    #[cfg(any(
+        target_vendor = "apple",
+        all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))
+    ))]
+    const CHILD: &str = "TINSEL_TERM_CHILD";
+
+    /// The child's half of [`ctrl_c_is_shared_kept_off_others_and_ends_by_the_signal`]: run
+    /// on its own, so the handlers it sets can't touch other tests.
+    #[cfg(any(
+        target_vendor = "apple",
+        all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))
+    ))]
+    #[test]
+    #[ignore = "run by ctrl_c_is_shared_kept_off_others_and_ends_by_the_signal"]
+    fn ctrl_c_child() {
+        if std::env::var_os(CHILD).is_none() {
+            return;
+        }
         extern "C" fn own(_: i32) {}
         let own = own as extern "C" fn(i32) as usize;
-        // SAFETY: `own` does nothing, and each handler is put back as it was
-        unsafe {
-            let (hup, term) = (signal(SIGHUP, own), signal(SIGTERM, SIG_DFL));
-            assert_eq!(guard_termination("bye"), [None, Some(SIG_DFL)]);
-            assert_eq!(signal(SIGHUP, hup), own, "the program's own handler stays");
-            assert_eq!(signal(SIGTERM, term), on_terminate as extern "C" fn(i32) as usize);
-        }
+        let ours = on_interrupt as extern "C" fn(i32) as usize;
+        const SA_SIGINFO: i32 = if cfg!(target_vendor = "apple") { 0x40 } else { 4 };
+
+        // the program's own handler stays, flags and all, and comes through untouched
+        // SAFETY: `own` does nothing
+        unsafe { disposition::set(SIGINT, own, SA_SIGINFO) };
+        let held = guard_interrupt();
+        assert!(held.is_some());
+        let now = disposition::now(SIGINT);
+        assert_eq!((now.handler, now.flags & SA_SIGINFO), (own, SA_SIGINFO));
+        restore_interrupt(held);
+        let now = disposition::now(SIGINT);
+        assert_eq!((now.handler, now.flags & SA_SIGINFO), (own, SA_SIGINFO));
+
+        // two displays ending out of order: the handler stays until the last has finished
+        // SAFETY: back to the default
+        unsafe { disposition::set(SIGINT, SIG_DFL, 0) };
+        let (first, second) = (guard_interrupt(), guard_interrupt());
+        assert_eq!(disposition::now(SIGINT).handler, ours);
+        restore_interrupt(first);
+        assert_eq!(disposition::now(SIGINT).handler, ours, "the second still draws");
+        restore_interrupt(second);
+        assert_eq!(disposition::now(SIGINT).handler, SIG_DFL);
+
+        // the same for the terminal's settings: kept while anyone holds them
+        remember_terminal();
+        remember_terminal();
+        HAVE_SAVED.store(true, std::sync::atomic::Ordering::SeqCst);
+        forget_terminal();
+        assert!(HAVE_SAVED.load(std::sync::atomic::Ordering::SeqCst));
+        forget_terminal();
+        assert!(!HAVE_SAVED.load(std::sync::atomic::Ordering::SeqCst));
+
+        // hangups and kills: guarded only where the program has no handler of its own, and
+        // the outermost holder's way out is the one written
+        // SAFETY: `own` does nothing
+        unsafe { disposition::set(SIGHUP, own, SA_SIGINFO) };
+        let outer = guard_termination("outer");
+        let inner = guard_termination("inner");
+        let theirs = on_terminate as extern "C" fn(i32) as usize;
+        assert_eq!(disposition::now(SIGHUP).handler, own, "the program's own handler stays");
+        assert_eq!(disposition::now(SIGTERM).handler, theirs);
+        assert_eq!(LEAVING_LEN.load(std::sync::atomic::Ordering::SeqCst), "outer".len());
+        unguard_termination(outer);
+        assert_eq!(
+            disposition::now(SIGTERM).handler,
+            theirs,
+            "the inner one still holds it"
+        );
+        unguard_termination(inner);
+        assert_eq!(disposition::now(SIGTERM).handler, SIG_DFL);
+        assert_eq!(disposition::now(SIGHUP).flags & SA_SIGINFO, SA_SIGINFO);
+        unguard_termination([None, None]);
+
+        println!("[checked]");
+        let _ = io::stdout().flush();
+        let _held = guard_interrupt();
+        press_ctrl_c();
+        // the handler ends the process; carrying on fails the test
+        std::thread::sleep(Duration::from_secs(20));
+    }
+
+    #[cfg(any(
+        target_vendor = "apple",
+        all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))
+    ))]
+    #[test]
+    fn ctrl_c_is_shared_kept_off_others_and_ends_by_the_signal() {
+        use std::os::unix::process::ExitStatusExt;
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["term::tests::ctrl_c_child", "--exact", "--ignored", "--nocapture"])
+            .env(CHILD, "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let seen = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(seen.contains("[checked]"), "{seen}");
+        // killed by SIGINT, which is what makes a shell stop a loop, rather than exiting 130
+        assert_eq!(out.status.signal(), Some(SIGINT), "{} {seen}", out.status);
+        assert!(seen.contains("\x1b[?25h"), "{seen}");
     }
 
     #[cfg(not(windows))]
