@@ -262,7 +262,7 @@ pub fn live_waveform(fraction: f32, width: usize, t: f32) -> Line {
 }
 
 fn wave(fraction: f32, width: usize, t: Option<f32>) -> Line {
-    let head = fraction.clamp(0.0, 1.0) * width as f32;
+    let head = self::fraction(fraction) * width as f32;
     (0..width).fold(Line::new(), |line, i| {
         let x = i as f32;
         let mut h = wave_height(i);
@@ -567,6 +567,12 @@ mod tests {
         let later = BarStyle::Waveform.draw(0.5, 20, 0.3).to_string();
         assert_eq!(crate::text::width(&early), 20);
         assert_ne!(early, later);
+    }
+
+    #[test]
+    fn a_waveform_of_nan_has_played_nothing() {
+        let draw = |f| crate::style::with_color_mode(crate::ColorMode::TrueColor, || waveform(f, 12).to_string());
+        assert_eq!(draw(f32::NAN), draw(0.0));
     }
 
     #[test]
