@@ -426,7 +426,11 @@ mod tests {
         plain();
         let out = capture(|| {
             with_terminal(true, || {
-                assert_eq!(spin("s-ok", || std::thread::sleep(Duration::from_millis(30))), ());
+                let slept = spin("s-ok", || {
+                    std::thread::sleep(Duration::from_millis(30));
+                    "slept"
+                });
+                assert_eq!(slept, "slept");
                 let failed: Result<(), &str> = try_spin("s-fail", || Err("it broke"));
                 assert!(failed.is_err());
             })
