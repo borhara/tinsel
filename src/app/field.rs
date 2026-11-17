@@ -190,18 +190,27 @@ impl Widget for Input {
             return;
         }
 
-        // scrolled so the cursor (one column past the end, at the end) stays in view
-        let col = |i: usize| self.value[..i].iter().map(|&c| char_width(c)).sum::<usize>();
-        let cursor_at = col(self.at);
-        let mut start = 0;
-        while start < self.at && cursor_at - col(start) + 1 > room {
-            start += 1;
+        // scrolled so the cursor (one column past the end, at the end) stays in view, wide
+        // character and all: back from the cursor as far as fits, one character at a time
+        let under = self.value.get(self.at).map_or(1, |&c| char_width(c).max(1));
+        let mut start = self.at;
+        let mut x = 0;
+        while start > 0 && x + char_width(self.value[start - 1]) + under <= room {
+            start -= 1;
+            x += char_width(self.value[start]);
         }
-        let shown: String = self.value[start..].iter().collect();
+        // only as much as fits, so a long value costs no more than a short one
+        let mut used = 0;
+        let shown: String = self.value[start..]
+            .iter()
+            .take_while(|&&c| {
+                used += char_width(c);
+                used <= room
+            })
+            .collect();
         frame.print(field, 0, &paint(if self.focused { TEXT } else { SOFT }, &shown));
         if self.focused {
             let under = self.value.get(self.at).copied().unwrap_or(' ');
-            let x = cursor_at - col(start);
             frame.print(
                 Rect::new(field.x + x, field.y, room.saturating_sub(x), 1),
                 0,
@@ -285,6 +294,13 @@ mod tests {
         input.focus(false);
         assert_eq!(drawn(&input, 20), "› abcdefghij");
         assert_eq!(drawn(&Input::new(), 0), "");
+
+        // wide characters scroll a whole one at a time, and a long value shows only its end
+        input.focus(true);
+        input.set_value(&("x".repeat(20_000) + "日本語"));
+        assert_eq!(drawn(&input, 10), "› x日本語 ");
+        typed(&mut input, &[Key::Left]);
+        assert_eq!(drawn(&input, 10), "› xx日本語");
     }
 
     #[test]
