@@ -140,9 +140,8 @@ pub use panic::install_panic_hook;
 pub use region::Region;
 pub use spin::{Progress, ProgressIterator, WithProgress, spin, try_spin};
 pub use style::{
-    Accent, ColorMode, Line, RAMP, Rgb, Theme, blink, bold, color_mode, dim, gradient, italic, mix, paint, paint_bg,
-    paint_on, palette, sample, set_accent, set_color_mode, set_theme, theme, underline, with_accent, with_color_mode,
-    with_theme,
+    Accent, ColorMode, Line, Rgb, Theme, bold, color_mode, dim, italic, mix, paint, paint_bg, paint_on, palette,
+    set_accent, set_color_mode, set_theme, theme, underline, with_accent, with_color_mode, with_theme,
 };
 pub use table::{Align, Border, Table};
 pub use term::width as terminal_width;
