@@ -444,6 +444,29 @@ impl Frame {
         self.cursor_color = Some(crate::style::shown(rgb));
     }
 
+    /// Let the terminal's own background show behind part of the screen, keeping whatever's
+    /// written there: for an edge that should meet the terminal's window padding, which is
+    /// drawn in that colour and not the frame's [`background`](Frame::set_background).
+    ///
+    /// ```
+    /// use tinsel::Rgb;
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(4, 1);
+    /// frame.set_background(Rgb(30, 20, 30));
+    /// frame.bare(frame.area());
+    /// frame.print(frame.area(), 0, "edge");
+    /// assert_eq!(frame.snapshot().plain(), "edge");
+    /// ```
+    pub fn bare(&mut self, area: Rect) {
+        let area = area.intersect(self.area());
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                self.cells[y * self.width + x].style.bg = Ink::Default;
+            }
+        }
+    }
+
     /// Paint the cells behind part of the screen, keeping whatever's written there.
     pub fn tint(&mut self, area: Rect, bg: Rgb) {
         if crate::style::color_mode() == crate::style::ColorMode::None {
@@ -841,6 +864,18 @@ mod tests {
             let mut f = Frame::new(2, 1);
             f.set_background(Rgb(30, 20, 30));
             assert_eq!(f.background(), None);
+        });
+    }
+
+    #[test]
+    fn bare_cells_show_the_terminal_through_a_background() {
+        crate::with_color_mode(crate::ColorMode::TrueColor, || {
+            let mut f = Frame::new(2, 1);
+            f.set_background(Rgb(30, 20, 30));
+            f.bare(Rect::new(1, 0, 1, 1));
+            f.print(f.area(), 0, &crate::paint(Rgb(200, 0, 0), "ab"));
+            assert_eq!(f.cells[0].style.bg, f.background);
+            assert_eq!(f.cells[1].style.bg, Ink::Default);
         });
     }
 
