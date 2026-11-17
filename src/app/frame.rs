@@ -527,6 +527,43 @@ impl Frame {
         self.write(area.x, area.y + row, area.x + area.width, text, skip)
     }
 
+    /// Like [`print`](Frame::print), against the right edge of `area` instead of the left.
+    /// Text too wide for it loses its start, so its end still meets the edge. Returns how
+    /// many columns it took.
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(10, 1);
+    /// frame.print_right(frame.area(), 0, "12:04");
+    /// assert_eq!(frame.snapshot().plain(), "     12:04");
+    /// ```
+    pub fn print_right(&mut self, area: Rect, row: usize, text: &str) -> usize {
+        let area = area.intersect(self.area());
+        let w = crate::text::width(text);
+        let fits = w.min(area.width);
+        let at = Rect::new(area.x + area.width - fits, area.y, fits, area.height);
+        self.print_from(at, row, text, w - fits)
+    }
+
+    /// Like [`print`](Frame::print), in the middle of `area`'s row, a column nearer the left
+    /// when it can't be exactly. Text too wide for it is cut off at the right. Returns how
+    /// many columns it took.
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(9, 1);
+    /// frame.print_center(frame.area(), 0, "tvim");
+    /// assert_eq!(frame.snapshot().plain(), "  tvim");
+    /// ```
+    pub fn print_center(&mut self, area: Rect, row: usize, text: &str) -> usize {
+        let area = area.intersect(self.area());
+        let w = crate::text::width(text).min(area.width);
+        let at = Rect::new(area.x + (area.width - w) / 2, area.y, w, area.height);
+        self.print(at, row, text)
+    }
+
     /// Write each line of a block into `area`, one per row, from the top.
     pub fn lines(&mut self, area: Rect, block: &Block) {
         for (row, line) in block.lines().iter().take(area.height).enumerate() {
@@ -786,6 +823,30 @@ impl Frame {
         let screen = self.area();
         self.render(screen, modal);
         modal.inner_at(screen, self.time)
+    }
+
+    /// [`fade`](Frame::fade) everything but `keep`, so it's what the eye goes to: a
+    /// column of text while the rest of the screen falls away.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Rect};
+    ///
+    /// let mut frame = Frame::new(10, 3);
+    /// frame.fade_outside(Rect::new(2, 1, 4, 1));
+    /// ```
+    pub fn fade_outside(&mut self, keep: Rect) {
+        let all = self.area();
+        let keep = keep.intersect(all);
+        let below = keep.y + keep.height;
+        let right = keep.x + keep.width;
+        for r in [
+            Rect::new(all.x, all.y, all.width, keep.y - all.y),
+            Rect::new(all.x, below, all.width, all.height.saturating_sub(below)),
+            Rect::new(all.x, keep.y, keep.x - all.x, keep.height),
+            Rect::new(right, keep.y, all.width.saturating_sub(right), keep.height),
+        ] {
+            self.fade(r);
+        }
     }
 
     fn fill(&mut self, area: Rect, cell: Cell) {
@@ -1400,5 +1461,39 @@ mod tests {
             matches!(faded, (Ink::Rgb(dark, ..), Ink::Rgb(light, ..)) if light > dark),
             "{faded:?}"
         );
+    }
+
+    #[test]
+    fn text_sits_against_the_right_or_in_the_middle() {
+        let mut f = Frame::new(8, 3);
+        assert_eq!(f.print_right(f.area(), 0, "abc"), 3);
+        f.print_right(f.area(), 1, "a long line");
+        f.print_center(Rect::new(2, 2, 5, 1), 0, "xy");
+        assert_eq!(f.snapshot().plain(), "     abc\nong line\n   xy");
+        // nothing to fit into
+        assert_eq!(f.print_right(Rect::new(0, 0, 0, 1), 0, "x"), 0);
+        assert_eq!(f.print_center(Rect::new(0, 0, 3, 1), 4, "x"), 0);
+    }
+
+    #[test]
+    fn fading_outside_leaves_the_middle_alone() {
+        crate::with_color_mode(crate::ColorMode::TrueColor, || {
+            let draw = |keep: Option<Rect>| {
+                let mut f = Frame::new(6, 3);
+                for row in 0..3 {
+                    f.print(f.area(), row, &crate::paint(Rgb(200, 100, 150), "xxxxxx"));
+                }
+                if let Some(keep) = keep {
+                    f.fade_outside(keep);
+                }
+                f
+            };
+            let (plain, faded) = (draw(None), draw(Some(Rect::new(1, 1, 2, 1))));
+            assert_eq!(plain.cells[7], faded.cells[7], "kept");
+            assert_eq!(plain.cells[8], faded.cells[8], "kept");
+            for i in [0, 5, 6, 9, 17] {
+                assert_ne!(plain.cells[i], faded.cells[i], "cell {i}");
+            }
+        });
     }
 }
