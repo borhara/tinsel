@@ -216,8 +216,8 @@ fn shiny_bar(fraction: f32, width: usize, t: Option<f32>) -> Line {
     })
 }
 
-/// How a progress bar is drawn, for [`Live::with_bar`](crate::Live::with_bar) and
-/// [`Progress::with_bar`](crate::Progress::with_bar).
+/// How a progress bar is drawn, for [`Live::bar`](crate::Live::bar) and
+/// [`Progress::bar`](crate::Progress::bar).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BarStyle {

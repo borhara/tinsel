@@ -92,7 +92,7 @@ fn draws_on_a_terminal_and_leaves_the_last_frame() {
                 .no_history()
                 .no_focus()
                 .fps(240)
-                .with_spinner(Spinner::Dots);
+                .spinner(Spinner::Dots);
             run_every_state(&live);
             std::thread::sleep(Duration::from_millis(30));
             live.finish_with_timeline();
@@ -356,7 +356,7 @@ fn every_state_has_a_name() {
 #[test]
 fn options_that_change_nothing_on_screen_still_take() {
     let live = Live::headless("o", "x")
-        .with_bar(BarStyle::Waveform)
+        .bar(BarStyle::Waveform)
         .notify_after(Duration::from_secs(1))
         .remember_as("ignored when headless");
     assert_eq!(live.notify_after, Some(Duration::from_secs(1)));

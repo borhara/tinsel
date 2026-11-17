@@ -98,7 +98,7 @@ by hand")`, or `release.wait("waiting for approval")` until someone says go, the
 `release.start()`. A failed step can `start()` again, and its timer starts over.
 
 Progress bars can be a thin line (the default) or a waveform that lights up as it plays
-through, like an audio track: `Live::new(…).with_bar(BarStyle::Waveform)`.
+through, like an audio track: `Live::new(…).bar(BarStyle::Waveform)`.
 
 **Run real commands as steps.** The latest line of output shows as the step's detail; if
 it fails, its last lines stay under it:

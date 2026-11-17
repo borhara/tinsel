@@ -451,7 +451,7 @@ fn bar_section() {
         )
     });
     println!();
-    hint("Live::with_bar(BarStyle::Waveform), or Progress::with_bar for a standalone bar");
+    hint("Live::bar(BarStyle::Waveform), or Progress::bar for a standalone bar");
 }
 
 fn messages_section() {
@@ -1058,8 +1058,8 @@ fn demo(fail: bool, spinner: Spinner, bar: tinsel::BarStyle) {
     // a lower notification threshold than the default 10s, so switching away during the
     // ~10s demo reliably shows one
     let live = Live::new("deploy", "my-app → production · eu-west-2")
-        .with_spinner(spinner)
-        .with_bar(bar)
+        .spinner(spinner)
+        .bar(bar)
         .notify_after(Duration::from_secs(5));
     let [config, build, upload, role, function, url, register, schedule] = [
         "Resolve config",
