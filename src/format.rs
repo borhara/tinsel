@@ -77,6 +77,103 @@ pub fn ago(d: Duration) -> String {
     }
 }
 
+/// `3 minutes ago`, `1 hour ago`, `2 weeks ago`: like [`ago`], in words, for a sentence
+/// rather than a column. Under a minute is `just now`.
+///
+/// ```
+/// use std::time::Duration;
+///
+/// assert_eq!(tinsel::format::ago_long(Duration::from_secs(7_200)), "2 hours ago");
+/// ```
+pub fn ago_long(d: Duration) -> String {
+    let s = d.as_secs();
+    let (n, unit) = match s {
+        0..60 => return "just now".into(),
+        60..3_600 => (s / 60, "minute"),
+        3_600..86_400 => (s / 3_600, "hour"),
+        86_400..604_800 => (s / 86_400, "day"),
+        // a month and a year as their average lengths
+        604_800..2_629_800 => (s / 604_800, "week"),
+        2_629_800..31_557_600 => (s / 2_629_800, "month"),
+        _ => (s / 31_557_600, "year"),
+    };
+    format!("{} ago", plural(n, unit))
+}
+
+/// `1,234,567`: a whole number with its thousands marked off, for counts read in full.
+///
+/// ```
+/// assert_eq!(tinsel::format::grouped(1_234_567), "1,234,567");
+/// assert_eq!(tinsel::format::grouped(999), "999");
+/// ```
+pub fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// The time of day on this computer's clock, in its time zone, as `21:04`: for a clock in
+/// a status bar. Where the time zone can't be found (outside Unix), it's UTC.
+///
+/// ```
+/// let now = tinsel::format::local_clock();
+/// assert_eq!(now.len(), 5);
+/// assert_eq!(&now[2..3], ":");
+/// ```
+pub fn local_clock() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    clock_at(now, local::utc_offset(now))
+}
+
+/// `secs` since 1970 as the time of day, `offset` seconds ahead of UTC.
+fn clock_at(secs: i64, offset: i64) -> String {
+    let mins = (secs + offset).rem_euclid(86_400) / 60;
+    format!("{:02}:{:02}", mins / 60, mins % 60)
+}
+
+#[cfg(unix)]
+mod local {
+    /// How far ahead of UTC local time is at `secs` since 1970, from the C library's idea of
+    /// the time zone.
+    // c_long is i32 on 32-bit targets
+    #[allow(clippy::useless_conversion)]
+    pub(super) fn utc_offset(secs: i64) -> i64 {
+        #[repr(C)]
+        struct Tm {
+            fields: [i32; 9],
+            gmtoff: std::ffi::c_long,
+            zone: *const std::ffi::c_char,
+        }
+        unsafe extern "C" {
+            fn localtime_r(time: *const i64, out: *mut Tm) -> *mut Tm;
+        }
+        let mut tm = Tm {
+            fields: [0; 9],
+            gmtoff: 0,
+            zone: std::ptr::null(),
+        };
+        // SAFETY: localtime_r fills one struct tm, whose leading fields have this layout on
+        // macOS and Linux; on failure it returns null and gmtoff stays 0
+        unsafe { localtime_r(&secs, &mut tm) };
+        i64::from(tm.gmtoff)
+    }
+}
+
+#[cfg(not(unix))]
+mod local {
+    pub(super) fn utc_offset(_: i64) -> i64 {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +223,35 @@ mod tests {
         assert_eq!(duration(Duration::from_millis(59_940)), "59.9s");
         assert_eq!(duration(Duration::from_millis(119_600)), "2m00s");
         assert_eq!(duration(Duration::from_millis(3_599_600)), "1h00m");
+    }
+
+    #[test]
+    fn long_ages_read_as_words() {
+        let ago = |s| ago_long(Duration::from_secs(s));
+        assert_eq!(ago(5), "just now");
+        assert_eq!(ago(60), "1 minute ago");
+        assert_eq!(ago(7_200), "2 hours ago");
+        assert_eq!(ago(86_400 * 3), "3 days ago");
+        assert_eq!(ago(86_400 * 8), "1 week ago");
+        assert_eq!(ago(86_400 * 70), "2 months ago");
+        assert_eq!(ago(86_400 * 800), "2 years ago");
+    }
+
+    #[test]
+    fn thousands_are_marked_off() {
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(1_000), "1,000");
+        assert_eq!(grouped(123_456), "123,456");
+        assert_eq!(grouped(u64::MAX), "18,446,744,073,709,551,615");
+    }
+
+    #[test]
+    fn the_clock_reads_the_time_of_day_in_a_zone() {
+        assert_eq!(clock_at(0, 0), "00:00");
+        assert_eq!(clock_at(86_400 + 3_600 * 13 + 60 * 7 + 59, 0), "13:07");
+        assert_eq!(clock_at(0, -3_600), "23:00", "the day before, an hour west");
+        assert_eq!(clock_at(0, 5 * 3_600 + 1_800), "05:30");
+        let offset = local::utc_offset(0);
+        assert!(offset.abs() <= 14 * 3_600);
     }
 }
