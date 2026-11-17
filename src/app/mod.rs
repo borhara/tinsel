@@ -142,7 +142,7 @@ pub enum Event {
     /// [`Frame::redraw_in`] or [`Frame::redraw_at`] is due, and is drawn straight after.
     /// None arrive while nothing asks.
     Tick,
-    /// The terminal changed size.
+    /// The terminal changed size; also sent once as the app starts, before its first frame.
     Resize {
         /// Its width now, in columns.
         width: usize,
@@ -289,6 +289,15 @@ fn drive(
     let now = || start.elapsed().as_secs_f64();
     let mut ambient = schedule::Ambient::default();
     let mut size = screen();
+    let _size = Measured::start(size);
+    // told before the first frame, so an app can lay itself out before it's drawn
+    if app.event(&Event::Resize {
+        width: size.0,
+        height: size.1,
+    }) == Flow::Quit
+    {
+        return Ok(());
+    }
     let mut shown: Option<Frame> = None;
     // the frame before last, whose cells the next frame reuses
     let mut spare: Option<Frame> = None;
@@ -327,6 +336,7 @@ fn drive(
         let now_size = screen();
         if now_size != size {
             size = now_size;
+            SIZE.with(|s| s.set(Some(size)));
             shown = None;
             if app.event(&Event::Resize {
                 width: size.0,
@@ -497,6 +507,36 @@ impl Drop for Waking {
 
 thread_local! {
     static STARTED: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+    static SIZE: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+/// The running app's screen size, for [`size`]; forgotten however the loop ends.
+struct Measured;
+
+impl Measured {
+    fn start(size: (usize, usize)) -> Measured {
+        SIZE.with(|s| s.set(Some(size)));
+        Measured
+    }
+}
+
+impl Drop for Measured {
+    fn drop(&mut self) {
+        SIZE.with(|s| s.set(None));
+    }
+}
+
+/// The running app's screen, as `(width, height)` in columns and rows: the size its frames
+/// are drawn at, for working out a page's height in [`App::event`]. Outside a running app,
+/// the terminal's size (80×24 when there's no terminal).
+///
+/// ```
+/// let (width, height) = tinsel::app::size();
+/// assert!(width > 0 && height > 0);
+/// ```
+pub fn size() -> (usize, usize) {
+    SIZE.with(std::cell::Cell::get)
+        .unwrap_or_else(|| (term::width(), term::height()))
 }
 
 /// The running app's clock, for [`time`]; stopped however the loop ends.
@@ -1018,9 +1058,16 @@ mod tests {
         let mut out = Vec::new();
         drive(&mut app, &rx, &mut out, &mut || (20, 2)).unwrap();
         // the app sees Ctrl-C, which quits even so, and nothing after it is handled
-        assert_eq!(app.seen, [Event::Key(Key::Char('x')), Event::Key(Key::Ctrl('c'))]);
+        assert_eq!(
+            app.seen,
+            [
+                Event::Resize { width: 20, height: 2 },
+                Event::Key(Key::Char('x')),
+                Event::Key(Key::Ctrl('c'))
+            ]
+        );
         let out = String::from_utf8(out).unwrap();
-        assert!(out.contains("seen 0") && out.starts_with("\x1b[?2026h"), "{out:?}");
+        assert!(out.contains("seen 1") && out.starts_with("\x1b[?2026h"), "{out:?}");
     }
 
     #[test]
@@ -1077,7 +1124,13 @@ mod tests {
         let mut first = true;
         let mut screen = || if std::mem::take(&mut first) { (5, 5) } else { (9, 9) };
         drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
-        assert_eq!(app.seen, [Event::Resize { width: 9, height: 9 }]);
+        assert_eq!(
+            app.seen,
+            [
+                Event::Resize { width: 5, height: 5 },
+                Event::Resize { width: 9, height: 9 }
+            ]
+        );
 
         // a resize the reader passes on is seen at once, however slowly the app ticks, and
         // only once, at the size the screen says
@@ -1092,7 +1145,13 @@ mod tests {
         let started = Instant::now();
         drive(&mut app, &rx, &mut Vec::new(), &mut screen).unwrap();
         assert!(started.elapsed() < Duration::from_millis(500));
-        assert_eq!(app.seen, [Event::Resize { width: 9, height: 9 }]);
+        assert_eq!(
+            app.seen,
+            [
+                Event::Resize { width: 5, height: 5 },
+                Event::Resize { width: 9, height: 9 }
+            ]
+        );
     }
 
     #[test]
@@ -1129,7 +1188,14 @@ mod tests {
         let rx = keys(&[Event::Key(Key::Ctrl('c')), Event::Key(Key::Char('q'))]);
         let mut app = Keeps(Vec::new());
         drive(&mut app, &rx, &mut Vec::new(), &mut || (10, 1)).unwrap();
-        assert_eq!(app.0, [Event::Key(Key::Ctrl('c')), Event::Key(Key::Char('q'))]);
+        assert_eq!(
+            app.0,
+            [
+                Event::Resize { width: 10, height: 1 },
+                Event::Key(Key::Ctrl('c')),
+                Event::Key(Key::Char('q'))
+            ]
+        );
     }
 
     #[test]
@@ -1233,7 +1299,8 @@ mod tests {
         drop(tx);
         let mut app = Recorder::default();
         drive(&mut app, &rx, &mut Vec::new(), &mut || (10, 1)).unwrap();
-        assert!(app.seen.is_empty());
+        // told its size before the first frame, and nothing after
+        assert_eq!(app.seen, [Event::Resize { width: 10, height: 1 }]);
 
         // or when the reader says the terminal has gone, even with wakes still possible
         let (tx, rx) = mpsc::channel();
@@ -1242,7 +1309,10 @@ mod tests {
         let mut app = Recorder::default();
         let err = drive(&mut app, &rx, &mut Vec::new(), &mut || (10, 1)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
-        assert_eq!(app.seen, [Event::Key(Key::Char('x'))]);
+        assert_eq!(
+            app.seen,
+            [Event::Resize { width: 10, height: 1 }, Event::Key(Key::Char('x'))]
+        );
         drop(tx);
     }
 
@@ -1431,7 +1501,7 @@ mod tests {
                 if *event == Event::Key(Key::Char('s')) {
                     REDRAW.with(|r| r.set(true));
                 }
-                self.0 += 1;
+                self.0 += usize::from(!matches!(event, Event::Resize { .. }));
                 if self.0 == 2 { Flow::Quit } else { Flow::Continue }
             }
             fn fps(&self) -> u32 {
@@ -1714,5 +1784,26 @@ mod tests {
             // to start, once settled, and on coming back; not for the key or for leaving
             assert_eq!(out.matches("\x1b]11;").count(), 3, "{out:?}");
         });
+    }
+
+    #[test]
+    fn the_size_is_known_from_the_start_and_forgotten_after() {
+        struct Sizes(Vec<(usize, usize)>);
+        impl App for Sizes {
+            fn view(&self, _: &mut Frame) {}
+            fn event(&mut self, event: &Event) -> Flow {
+                self.0.push(size());
+                if matches!(event, Event::Key(_)) {
+                    Flow::Quit
+                } else {
+                    Flow::Continue
+                }
+            }
+        }
+        let mut app = Sizes(Vec::new());
+        let rx = keys(&[Event::Key(Key::Char('x'))]);
+        drive(&mut app, &rx, &mut Vec::new(), &mut || (12, 3)).unwrap();
+        assert_eq!(app.0, [(12, 3), (12, 3)]);
+        assert!(SIZE.with(std::cell::Cell::get).is_none());
     }
 }
