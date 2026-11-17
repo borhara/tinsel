@@ -504,22 +504,30 @@ pub fn snapshot<A: App + ?Sized>(app: &A, width: usize, height: usize) -> Block 
 /// assert_eq!(selected, 2);
 /// ```
 pub fn navigate(selected: &mut usize, len: usize, event: &Event) -> bool {
-    let last = len.saturating_sub(1);
-    let to = match event {
-        Event::Key(Key::Up | Key::Char('k')) => selected.saturating_sub(1),
-        Event::Key(Key::Down | Key::Char('j')) => *selected + 1,
-        Event::Key(Key::PageUp) => selected.saturating_sub(10),
-        Event::Key(Key::PageDown) => *selected + 10,
-        Event::Key(Key::Home | Key::Char('g')) => 0,
-        Event::Key(Key::End | Key::Char('G')) => last,
-        Event::Mouse(m) if m.kind == MouseKind::ScrollUp => selected.saturating_sub(1),
-        Event::Mouse(m) if m.kind == MouseKind::ScrollDown => *selected + 1,
-        _ => return false,
+    let Some((to, _)) = step(*selected, len.saturating_sub(1), 10, 1, event) else {
+        return false;
     };
-    let to = to.min(last);
     let moved = to != *selected;
     *selected = to;
     moved
+}
+
+/// Where the keys [`navigate`] knows, and the wheel, take position `at` in `0..=last`: a
+/// page at a time `page` apart, a turn of the wheel `wheel`. Gives the new position, and
+/// whether the way was back towards the start, or nothing for any other event.
+fn step(at: usize, last: usize, page: usize, wheel: usize, event: &Event) -> Option<(usize, bool)> {
+    let (to, back) = match event {
+        Event::Key(Key::Up | Key::Char('k')) => (at.saturating_sub(1), true),
+        Event::Key(Key::Down | Key::Char('j')) => (at + 1, false),
+        Event::Key(Key::PageUp) => (at.saturating_sub(page), true),
+        Event::Key(Key::PageDown) => (at + page, false),
+        Event::Key(Key::Home | Key::Char('g')) => (0, true),
+        Event::Key(Key::End | Key::Char('G')) => (last, false),
+        Event::Mouse(m) if m.kind == MouseKind::ScrollUp => (at.saturating_sub(wheel), true),
+        Event::Mouse(m) if m.kind == MouseKind::ScrollDown => (at + wheel, false),
+        _ => return None,
+    };
+    Some((to.min(last), back))
 }
 
 // MARK: - The terminal
