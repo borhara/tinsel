@@ -32,14 +32,14 @@ fn steps_show_their_state_and_time() {
             "deploy my-app",
             "",
             "● Build 1.2s",
-            "▲ Upload 0.3s",
+            "▲ Upload 300ms",
             "retried once",
             "○ Notify"
         ]
     );
     notify.start();
     notify.fail("webhook 500");
-    assert_eq!(squashed(&live)[6..], ["✕ Notify 0.0s", "webhook 500"]);
+    assert_eq!(squashed(&live)[6..], ["✕ Notify 0ms", "webhook 500"]);
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn sub_steps_that_had_trouble_stay_visible() {
     mac.start();
     mac.warn("signing slow");
     build.done();
-    assert_eq!(squashed(&live)[3..], ["● Build 0.0s", "▲ macos 0.0s", "signing slow"]);
+    assert_eq!(squashed(&live)[3..], ["● Build 0ms", "▲ macos 0ms", "signing slow"]);
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn steps_can_be_skipped_cancelled_or_waiting() {
         [
             "– Lint skipped",
             "nothing changed",
-            "⊘ Test 0.8s",
+            "⊘ Test 800ms",
             "stopped by hand",
             "◌ Approve 3.0s",
             "waiting for approval",
@@ -190,7 +190,7 @@ fn a_waiting_step_can_start_once_someone_says_so() {
     approve.start();
     live.advance(Duration::from_millis(400));
     approve.done();
-    assert_eq!(squashed(&live)[3..], ["● Approve 0.4s"]);
+    assert_eq!(squashed(&live)[3..], ["● Approve 400ms"]);
 }
 
 #[test]
@@ -205,9 +205,9 @@ fn a_finished_step_can_run_again_with_a_fresh_timer() {
     live.advance(Duration::from_millis(500));
     let running = squashed(&live);
     assert_eq!(running.len(), 4, "{running:?}");
-    assert!(running[3].ends_with("Upload 0.5s"), "{running:?}");
+    assert!(running[3].ends_with("Upload 500ms"), "{running:?}");
     upload.done();
-    assert_eq!(squashed(&live)[3..], ["● Upload 0.5s"]);
+    assert_eq!(squashed(&live)[3..], ["● Upload 500ms"]);
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn skipped_sub_steps_fold_away_but_cancelled_ones_stay() {
     api.done();
     docs.skip("");
     build.done();
-    assert_eq!(squashed(&live)[3..], ["● Build 0.0s"]);
+    assert_eq!(squashed(&live)[3..], ["● Build 0ms"]);
 
     let ship = live.step("Ship");
     let (web, worker) = (ship.step("web"), ship.step("worker"));
@@ -230,10 +230,7 @@ fn skipped_sub_steps_fold_away_but_cancelled_ones_stay() {
     web.done();
     worker.cancel("");
     ship.done();
-    assert_eq!(
-        squashed(&live)[4..],
-        ["● Ship 0.0s", "● web 0.0s", "⊘ worker cancelled"]
-    );
+    assert_eq!(squashed(&live)[4..], ["● Ship 0ms", "● web 0ms", "⊘ worker cancelled"]);
 }
 
 #[test]
