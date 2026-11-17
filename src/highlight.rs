@@ -146,22 +146,22 @@ pub(crate) fn line(src: &str, lang: Lang, dim: bool) -> String {
     let key_end = config_key(&chars, lang);
     // shell: the first word is the command
     let mut command_pending = lang == Lang::Shell;
+    let first = first_non_space(&chars);
 
     while i < chars.len() {
         let c = chars[i];
-        let rest: String = chars[i..].iter().collect();
 
-        if let Some(end) = key_end.filter(|_| i == first_non_space(&chars)) {
+        if let Some(end) = key_end.filter(|_| i == first) {
             out += &paint(tone(BLUSH), &take(i, end));
             i = end;
             continue;
         }
-        if lang.comment().is_some_and(|m| rest.starts_with(m)) {
-            out += &paint(tone(MUTED), &rest);
+        if lang.comment().is_some_and(|m| starts_with(&chars[i..], m)) {
+            out += &paint(tone(MUTED), &take(i, chars.len()));
             break;
         }
-        if lang == Lang::Toml && c == '[' && i == first_non_space(&chars) {
-            out += &paint(tone(ROSE), &rest);
+        if lang == Lang::Toml && c == '[' && i == first {
+            out += &paint(tone(ROSE), &take(i, chars.len()));
             break;
         }
         if c == '"' || c == '`' || (c == '\'' && !is_lifetime(&chars, i, lang)) {
@@ -222,7 +222,7 @@ pub(crate) fn line(src: &str, lang: Lang, dim: bool) -> String {
         }
         // stop before anything that starts a token of its own: a flag, in a shell
         let end = scan(&chars, i + 1, |c| {
-            !is_word(c) && !"\"'`#$/".contains(c) && !c.is_ascii_digit() && !(lang == Lang::Shell && c == '-')
+            !(is_word(c) || "\"'`#$/".contains(c) || c.is_ascii_digit() || (lang == Lang::Shell && c == '-'))
         });
         let end = end.max(i + 1);
         let punct = take(i, end);
@@ -233,6 +233,12 @@ pub(crate) fn line(src: &str, lang: Lang, dim: bool) -> String {
         i = end;
     }
     out
+}
+
+/// Whether `chars` begins with `prefix`, without building a string from them.
+fn starts_with(chars: &[char], prefix: &str) -> bool {
+    let mut chars = chars.iter();
+    prefix.chars().all(|p| chars.next() == Some(&p))
 }
 
 fn is_word(c: char) -> bool {
@@ -309,6 +315,19 @@ mod tests {
                 assert_eq!(strip_ansi(&line(src, lang, true)), src, "{lang:?}");
             }
         });
+    }
+
+    #[test]
+    fn a_long_line_takes_linear_time() {
+        let src = "a + ".repeat(40_000);
+        let started = std::time::Instant::now();
+        let out = crate::style::with_color_mode(crate::ColorMode::None, || line(&src, Lang::Rust, false));
+        assert_eq!(out, src);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
