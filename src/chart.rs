@@ -9,21 +9,19 @@ use crate::widgets::bar;
 const LEVELS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 /// Values as a row of rising blocks, taller ones brighter: `▁▂▄▇▅▃`. A value that isn't a
-/// number (NaN, for a reading that's missing) leaves a gap.
+/// finite number (NaN, for a reading that's missing) leaves a gap.
 ///
 /// ```
 /// tinsel::set_color_mode(tinsel::ColorMode::None);
 /// assert_eq!(tinsel::sparkline(&[1.0, f64::NAN, 3.0]), "▁ █");
 /// ```
 pub fn sparkline(values: &[f64]) -> String {
-    let (lo, hi) = values
-        .iter()
-        .fold((f64::MAX, f64::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    let (lo, hi) = range(values.iter()).unwrap_or((0.0, 0.0));
     let span = (hi - lo).max(f64::EPSILON);
     values
         .iter()
         .map(|&v| {
-            if v.is_nan() {
+            if !v.is_finite() {
                 return " ".to_string();
             }
             let t = ((v - lo) / span) as f32;
@@ -85,6 +83,7 @@ pub fn meter(label: &str, value: f64, max: f64, width: usize) -> String {
 }
 
 /// How values are spread: `bins` columns, `height` rows tall, with the range underneath.
+/// Values that aren't finite numbers are left out.
 ///
 /// ```
 /// let latencies = [12.0, 14.0, 15.0, 15.5, 16.0, 18.0, 22.0, 41.0];
@@ -92,15 +91,12 @@ pub fn meter(label: &str, value: f64, max: f64, width: usize) -> String {
 /// ```
 pub fn histogram(values: &[f64], bins: usize, height: usize) -> Block {
     let (bins, height) = (bins.max(1), height.max(1));
-    if values.is_empty() {
+    let Some((lo, hi)) = range(values.iter()) else {
         return Block::new();
-    }
-    let (lo, hi) = values
-        .iter()
-        .fold((f64::MAX, f64::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    };
     let span = (hi - lo).max(f64::EPSILON);
     let mut counts = vec![0usize; bins];
-    for &v in values {
+    for &v in values.iter().filter(|v| v.is_finite()) {
         counts[(((v - lo) / span) * bins as f64).min(bins as f64 - 1.0) as usize] += 1;
     }
     let tallest = *counts.iter().max().unwrap_or(&1) as f64;
@@ -138,7 +134,8 @@ pub fn histogram(values: &[f64], bins: usize, height: usize) -> Block {
 }
 
 /// A grid of values as shaded cells, darkest for the smallest: activity by day, load by hour.
-/// Each row is a label and its values; all rows share one scale.
+/// Each row is a label and its values; all rows share one scale. A value that isn't a
+/// finite number leaves its cell empty.
 ///
 /// ```
 /// tinsel::heatmap(&[
@@ -148,10 +145,7 @@ pub fn histogram(values: &[f64], bins: usize, height: usize) -> Block {
 /// ```
 pub fn heatmap(rows: &[(&str, &[f64])]) -> Block {
     const SHADES: [&str; 5] = [" ", "░", "▒", "▓", "█"];
-    let (lo, hi) = rows
-        .iter()
-        .flat_map(|(_, vs)| vs.iter())
-        .fold((f64::MAX, f64::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    let (lo, hi) = range(rows.iter().flat_map(|(_, vs)| vs.iter())).unwrap_or((0.0, 0.0));
     let span = (hi - lo).max(f64::EPSILON);
     let label_w = rows.iter().map(|(l, _)| text::width(l)).max().unwrap_or(0);
     let plain = crate::style::color_mode() == crate::style::ColorMode::None;
@@ -167,7 +161,9 @@ pub fn heatmap(rows: &[(&str, &[f64])]) -> Block {
                 .iter()
                 .map(|&v| {
                     let t = ((v - lo) / span) as f32;
-                    if plain {
+                    if !v.is_finite() {
+                        "  ".to_string()
+                    } else if plain {
                         SHADES[((t * 4.0).round() as usize).min(4)].repeat(2)
                     } else {
                         paint(sample(&ramp, t), "██")
@@ -177,6 +173,17 @@ pub fn heatmap(rows: &[(&str, &[f64])]) -> Block {
             format!("  {}  {cells}", paint(SOFT, &text::pad(label, label_w)))
         })
         .collect()
+}
+
+/// The smallest and largest of the finite values, if there are any.
+fn range<'a>(values: impl Iterator<Item = &'a f64>) -> Option<(f64, f64)> {
+    values
+        .copied()
+        .filter(|v| v.is_finite())
+        .fold(None, |range, v| match range {
+            None => Some((v, v)),
+            Some((lo, hi)) => Some((v.min(lo), v.max(hi))),
+        })
 }
 
 /// A number short enough for an axis label.
@@ -200,6 +207,17 @@ mod tests {
         let shown = bars(&[("a", 2.0), ("b", f64::NAN)], 4).plain();
         assert!(shown.ends_with("b  ━━━━  –"), "{shown}");
         assert_eq!(text::strip_ansi(&sparkline(&[f64::NAN])), " ");
+        assert_eq!(sparkline(&[1.0, f64::INFINITY, 3.0]), "▁ █");
+    }
+
+    #[test]
+    fn values_that_arent_numbers_are_left_out_of_histograms_and_heatmaps() {
+        plain();
+        assert!(histogram(&[f64::NAN, f64::INFINITY], 4, 4).is_empty());
+        let with = histogram(&[1.0, 2.0, f64::NAN, 3.0, f64::NAN, f64::NAN], 3, 3).plain();
+        assert_eq!(with, histogram(&[1.0, 2.0, 3.0], 3, 3).plain());
+        let row: &[f64] = &[0.0, f64::NAN, 1.0];
+        assert!(heatmap(&[("cpu", row)]).plain().ends_with("cpu      ██"));
     }
 
     fn plain() {
