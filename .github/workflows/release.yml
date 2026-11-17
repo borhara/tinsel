@@ -1,19 +1,24 @@
 name: Release
 
+# runs once CI has passed on main, so nothing is released from a red build
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
 
 jobs:
   # Publishes to crates.io, tags and makes a GitHub release when Cargo.toml has a version
   # that isn't published yet, i.e. once a release PR is merged.
   release:
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -27,6 +32,7 @@ jobs:
   # Opens or updates a PR bumping the version and changelog from the commits since the last
   # release.
   release-pr:
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -37,6 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
