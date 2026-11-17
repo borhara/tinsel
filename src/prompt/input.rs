@@ -179,12 +179,12 @@ impl<'a> Input<'a> {
     ///
     /// ```no_run
     /// let region = tinsel::prompt::Input::new("Region")
-    ///     .suggestions(&["eu-west-1", "eu-west-2", "us-east-1"])
+    ///     .suggestions(["eu-west-1", "eu-west-2", "us-east-1"])
     ///     .ask()?;
     /// # Ok::<(), tinsel::prompt::Error>(())
     /// ```
-    pub fn suggestions(self, options: &[&str]) -> Self {
-        let options: Vec<String> = options.iter().map(|s| s.to_string()).collect();
+    pub fn suggestions<S: Into<String>>(self, options: impl IntoIterator<Item = S>) -> Self {
+        let options: Vec<String> = options.into_iter().map(Into::into).collect();
         self.complete(move |typed| {
             let typed = typed.to_lowercase();
             options

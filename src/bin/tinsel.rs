@@ -953,7 +953,7 @@ fn prompts() {
     let chosen = prompt::multiselect("Environments", &environments, &[0, 1]).unwrap_or_else(|e| quit(e));
     let live_on = prompt::date("Go live on", None).unwrap_or_else(|e| quit(e));
     let runtime = prompt::Input::new("Runtime (tab completes)")
-        .suggestions(&["node", "python", "go", "rust", "java"])
+        .suggestions(["node", "python", "go", "rust", "java"])
         .ask()
         .unwrap_or_else(|e| quit(e));
     let config = prompt::Input::new("Config file (tab completes paths)")
@@ -973,7 +973,7 @@ fn prompts() {
                 .disabled(services[1], "deploys paused")
                 .heading("Backend")
                 .options([services[2], services[3]])
-                .default(2)
+                .selected(2)
                 .ask()
                 .map(|i| service = i),
             1 => prompt::MultiSelect::new("Restart after")
@@ -1005,7 +1005,7 @@ fn prompts() {
                         .option(format!("v1.{minor}.0"))
                         .note(format!("{} weeks ago", 12 - minor));
                 }
-                tags.default(2).allow_custom().back().ask().map(|v| version = v)
+                tags.selected(2).allow_custom().back().ask().map(|v| version = v)
             }
         };
         match asked {

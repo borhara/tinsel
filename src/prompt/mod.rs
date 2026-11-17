@@ -42,6 +42,9 @@
 //! Lists have builders too: [`Select`] and [`MultiSelect`] add groups under headings,
 //! options that can't be picked (and why), a hint and validation, and [`Dropdown`] is for
 //! long lists like versions, with notes and badges and room to type an answer of your own.
+//! [`Select`] and [`MultiSelect`] answer with the numbers of the options chosen, so the same
+//! label can appear twice; [`Dropdown`] answers with the text, since an answer typed in
+//! has no number. All three start on the options given to `selected`.
 //!
 //! # Testing a flow of questions
 //!
