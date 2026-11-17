@@ -138,15 +138,24 @@ fn csi(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, usize)> {
             _ => None,
         };
     }
-    let Some(end) = bytes.iter().skip(2).position(|b| (0x40..=0x7E).contains(b)) else {
+    // parameters, then intermediates, then the final byte; anything else means this wasn't a
+    // sequence after all
+    let mut end = 2;
+    while bytes.get(end).is_some_and(|b| (0x30..=0x3F).contains(b)) {
+        end += 1;
+    }
+    while bytes.get(end).is_some_and(|b| (0x20..=0x2F).contains(b)) {
+        end += 1;
+    }
+    match bytes.get(end) {
+        Some(0x40..=0x7E) => {}
         // a pause halfway through: give up on it as Esc, and read the rest as typed
-        return if done {
-            Some((Some(Event::Key(Key::Esc)), 1))
-        } else {
-            None
-        };
-    };
-    let end = end + 2;
+        None if done => return Some((Some(Event::Key(Key::Esc)), 1)),
+        None => return None,
+        // broken off by something that can't be in one (another Esc, say): an Esc, and the
+        // rest read again from the byte that broke it
+        Some(_) => return Some((Some(Event::Key(Key::Esc)), end)),
+    }
     let params = std::str::from_utf8(&bytes[2..end]).unwrap_or("");
     let n = end + 1;
     let key = match (bytes[end], params) {
@@ -405,6 +414,18 @@ mod tests {
             parse(b"\x1b[200~\x1b[201~", true),
             Some((Some(Event::Paste(String::new())), 12))
         );
+    }
+
+    #[test]
+    fn a_sequence_broken_off_is_esc_and_what_follows_is_read_again() {
+        assert_eq!(keys(b"\x1b[\x1b[A"), [Event::Key(Key::Esc), Event::Key(Key::Up)]);
+        assert_eq!(keys(b"\x1b[1;\x1b[B"), [Event::Key(Key::Esc), Event::Key(Key::Down)]);
+        assert_eq!(
+            keys(b"\x1b[1\rx"),
+            [Event::Key(Key::Esc), Event::Key(Key::Enter), Event::Key(Key::Char('x'))]
+        );
+        // intermediates come between the parameters and the final byte
+        assert_eq!(keys(b"\x1b[2 q"), []);
     }
 
     #[test]
