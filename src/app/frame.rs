@@ -557,6 +557,8 @@ impl Frame {
 
     /// Paint the whole frame in this colour instead of the terminal's. Tinted cells keep their
     /// tint, [`clear`](Frame::clear) goes back to it and [`fade`](Frame::fade) fades towards it.
+    /// The terminal's window padding around the frame takes it too, as
+    /// [`set_window_color`](Frame::set_window_color) would, unless that says otherwise.
     /// Call it first in [`App::view`](super::App::view). Without colour it does nothing.
     ///
     /// ```
@@ -574,6 +576,7 @@ impl Frame {
         let mut style = Style::default();
         style.apply(&crate::style::sgr(rgb, 48));
         self.background = style.bg;
+        self.window_color.get_or_insert(crate::style::shown(rgb));
         for cell in &mut self.cells {
             if cell.style.bg == Ink::Default {
                 cell.style.bg = style.bg;
@@ -602,8 +605,9 @@ impl Frame {
     }
 
     /// Colour the terminal's own background, where the terminal allows it: what shows in its
-    /// window padding around the frame, so bars at the edges can run into it. It goes back to
-    /// the terminal's own when the app ends.
+    /// window padding around the frame, so bars at the edges can run into it. It's sent again
+    /// shortly after the app starts and whenever the terminal regains focus, for terminals
+    /// that lose it, and goes back to the terminal's own when the app ends.
     ///
     /// ```
     /// use tinsel::Rgb;
