@@ -75,7 +75,8 @@
 //! [`Sparkles`], a [`Spinner`](crate::Spinner) and [`Grid`] while it loads) ask for their
 //! own frames. When a frame that was asked for comes due, the app is sent an [`Event::Tick`]
 //! first, for polling whatever a dashboard shows. Work done on other threads can wake the
-//! app the moment it's ready with a [`Waker`], so it needn't poll at all.
+//! app the moment it's ready with a [`Waker`], so it needn't poll at all; a [`Job`] runs
+//! work on a thread of its own and wakes the app with its result.
 //!
 //! # Typing
 //!
@@ -98,6 +99,7 @@ mod field;
 mod frame;
 mod grid;
 mod input;
+mod job;
 mod keys;
 mod layout;
 mod notation;
@@ -116,6 +118,7 @@ pub use field::TextInput;
 pub use frame::{CursorShape, Frame, TerminalCursor};
 pub use grid::{Grid, GridState};
 pub use input::{Key, Mods, Mouse, MouseKind, NamedKey};
+pub use job::Job;
 pub use keys::Keys;
 pub use layout::{Rect, Size};
 pub use notation::ParseKeyError;
@@ -997,7 +1000,7 @@ fn listen(read: &mut dyn FnMut(&mut [u8]) -> io::Result<usize>, tx: &mpsc::Sende
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Remembers every event, and quits when told to.
@@ -1339,7 +1342,7 @@ mod tests {
     }
 
     /// Held by tests that wake, since wakes go to whichever app is listening.
-    static WAKES: Mutex<()> = Mutex::new(());
+    pub(crate) static WAKES: Mutex<()> = Mutex::new(());
 
     #[test]
     fn wakes_reach_the_app_once_per_burst() {
