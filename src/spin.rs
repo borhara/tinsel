@@ -110,7 +110,7 @@ struct Spinning<'a> {
 
 impl<'a> Spinning<'a> {
     fn start(label: &'a str) -> Spinning<'a> {
-        let drawn = !output::json() && !output::quiet() && output::is_terminal();
+        let drawn = !output::json() && !output::quiet() && crate::display::animated();
         let ticker = drawn.then(|| {
             let owned = label.to_string();
             Ticker::start(move |t| format!("  {}  {}", Spinner::default().frame(t), shimmer(&owned, t)))
@@ -203,7 +203,7 @@ impl Progress {
             bar: BarStyle::default(),
         }));
         let start = Instant::now();
-        let drawn = output::output() == output::Output::Pretty && output::is_terminal();
+        let drawn = output::output() == output::Output::Pretty && crate::display::animated();
         let ticker = drawn.then(|| {
             let (counts, label) = (counts.clone(), label.clone());
             Ticker::start(move |t| progress_line(&label, &lock(&counts), start.elapsed(), t))
