@@ -8,7 +8,7 @@ use crate::style::palette::{BERRY, MUTED, SOFT, TEXT, TRACK};
 use crate::style::{italic, mix, paint};
 use crate::text::char_width;
 
-/// A box to type several lines into: a message, notes, a description. Like [`Input`](super::Input),
+/// A box to type several lines into: a message, notes, a description. Like [`TextInput`](super::TextInput),
 /// keep one in your app, pass it every event while it has focus, and read what's typed with
 /// [`value`](TextArea::value). Enter starts a new line, pasted text keeps its line breaks,
 /// long lines wrap, and the box scrolls to keep the cursor in view.

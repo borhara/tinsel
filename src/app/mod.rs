@@ -45,7 +45,7 @@
 //! tinsel prints ([`Table`](crate::Table), [`Tree`](crate::Tree), [`Card`](crate::Card),
 //! any [`Block`]) is a widget already; on top of those there's [`Panel`], [`List`],
 //! [`Grid`] (a table with a cursor), [`ScrollView`] (lines to scroll through, or follow as they
-//! grow), [`Input`] (a box to type into) and [`TextArea`] (several lines of it), [`Tabs`], [`Plot`], [`Stat`], [`Loading`] (a spinner, and a bar once there's progress), [`big`] text, [`hints`]
+//! grow), [`TextInput`] (a box to type into) and [`TextArea`] (several lines of it), [`Tabs`], [`Plot`], [`Stat`], [`Loading`] (a spinner, and a bar once there's progress), [`big`] text, [`hints`]
 //! for the footer and [`Sparkles`] for the background.
 //!
 //! # Time
@@ -88,7 +88,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
-pub use field::Input;
+pub use field::TextInput;
 pub use frame::{CursorShape, Frame};
 pub use grid::{Cursor, Grid};
 pub use input::{Key, Mods, Mouse, MouseKind, NamedKey};
@@ -109,7 +109,7 @@ pub enum Event {
     /// A key was pressed.
     Key(Key),
     /// Text was pasted, all at once, with its line breaks as `\n`: a newline in it is part
-    /// of the text, not a press of Enter. [`Input`] takes it as typed. Terminals that can't
+    /// of the text, not a press of Enter. [`TextInput`] takes it as typed. Terminals that can't
     /// say what's pasted (older ones, Windows consoles outside Windows Terminal) send it as
     /// keys instead.
     Paste(String),
