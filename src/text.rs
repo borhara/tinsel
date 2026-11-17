@@ -4,6 +4,8 @@
 
 mod tables;
 
+pub use crate::term::content_width;
+
 /// A piece of text as the terminal takes it: an escape sequence, which shows nothing, or one
 /// cluster (a character with the marks, selectors and joiners that build on it) and the
 /// columns it takes up.
