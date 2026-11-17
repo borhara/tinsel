@@ -59,10 +59,10 @@ fn scenario() {
     run();
 }
 
-/// tinsel leaves on Ctrl-C with `_exit`, which skips everything registered to run at exit,
-/// including writing coverage counters. In the unit tests alone, `_exit` leaves through
-/// `exit` instead, so a run measured for coverage counts the handler too. The status is the
-/// same either way.
+/// tinsel ends on Ctrl-C by the signal itself, falling back to `_exit` only if that somehow
+/// returns; `_exit` skips everything registered to run at exit, including writing coverage
+/// counters. In the unit tests alone, `_exit` leaves through `exit` instead, so a run
+/// measured for coverage counts that fallback too. The status is the same either way.
 #[cfg(unix)]
 #[unsafe(no_mangle)]
 pub extern "C" fn _exit(code: i32) -> ! {
@@ -334,7 +334,12 @@ fn ctrl_c_puts_the_terminal_back_and_says_why() {
     t.wait_for("[running]");
     t.type_in("\x03");
     let (status, seen) = t.finish();
-    assert_eq!(status.code(), Some(130), "{seen}");
+    // ended by Ctrl-C itself, so a shell loop running it stops too
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&status),
+        Some(2),
+        "{seen}"
+    );
     assert!(
         seen.contains("\x1b[?25h") && seen.contains("stopped by the test"),
         "{seen}"
@@ -348,7 +353,12 @@ fn ctrl_c_with_nothing_to_say_and_no_terminal_settings_saved() {
     t.wait_for("[running]");
     t.type_in("\x03");
     let (status, seen) = t.finish();
-    assert_eq!(status.code(), Some(130), "{seen}");
+    // ended by Ctrl-C itself, so a shell loop running it stops too
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&status),
+        Some(2),
+        "{seen}"
+    );
 }
 
 #[cfg(unix)]
@@ -371,6 +381,13 @@ fn ctrl_c_puts_things_back_and_says_why_without_a_terminal_too() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    #[cfg(unix)]
+    assert_eq!(
+        std::os::unix::process::ExitStatusExt::signal(&out.status),
+        Some(2),
+        "{seen}"
+    );
+    #[cfg(windows)]
     assert_eq!(out.status.code(), Some(130), "{seen}");
     assert!(
         seen.contains("\x1b[?25h") && seen.contains("stopped by the test"),
