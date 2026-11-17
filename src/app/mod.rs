@@ -644,6 +644,28 @@ pub fn navigate(selected: &mut usize, len: usize, event: &Event, keymap: Keymap)
     moved
 }
 
+/// The first row to show of a list scrolled to `top`, `rows` tall, so that `selected` is
+/// in view, scrolling as little as it can: for a list whose selection moves by more than
+/// the keys [`navigate`] knows, or that changes under it as a filter is typed.
+///
+/// ```
+/// use tinsel::app::keep_in_view;
+///
+/// assert_eq!(keep_in_view(0, 3, 10), 0, "already showing");
+/// assert_eq!(keep_in_view(0, 12, 10), 3, "just far enough to show it at the bottom");
+/// assert_eq!(keep_in_view(8, 2, 10), 2, "or at the top");
+/// ```
+pub fn keep_in_view(top: usize, selected: usize, rows: usize) -> usize {
+    let rows = rows.max(1);
+    if selected < top {
+        selected
+    } else if selected >= top + rows {
+        selected + 1 - rows
+    } else {
+        top
+    }
+}
+
 /// Where the keys `keymap` names, and the wheel, take position `at` in `0..=last`: a page at
 /// a time `page` apart, a turn of the wheel `wheel`. Gives the new position, and whether the
 /// way was back towards the start, or nothing for any other event.
