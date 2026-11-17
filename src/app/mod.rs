@@ -180,7 +180,7 @@ pub trait App {
 /// Run an app full-screen until it quits, then hand it back, so you can read what was chosen.
 ///
 /// The screen is put back as it was afterwards, whether the app quits, returns an error or
-/// panics. When stdout isn't a terminal, one frame is printed instead, at the terminal's
+/// panics. If the terminal goes away (its window closed), that's the error. When stdout isn't a terminal, one frame is printed instead, at the terminal's
 /// size (or 80×24), and the app is returned straight away.
 pub fn run<A: App>(mut app: A) -> io::Result<A> {
     run_app(&mut app)?;
@@ -202,7 +202,8 @@ fn run_app(app: &mut dyn App) -> io::Result<()> {
     let _waking = Waking::listen(tx.clone());
     let control = session.control.clone();
     session.reader = Some(std::thread::spawn(move || {
-        listen(&mut term::read_some, &tx, &control);
+        let mut keyboard = term::Keyboard::default();
+        listen(&mut |buf| keyboard.read(buf), &tx, &control);
         control.idle.store(true, Ordering::SeqCst);
     }));
     drive(app, &rx, &mut io::stdout(), &mut || (term::width(), term::height()))?;
@@ -210,12 +211,15 @@ fn run_app(app: &mut dyn App) -> io::Result<()> {
     Ok(())
 }
 
+/// What the key reader sends: an event, or why there'll be no more (the terminal closed).
+type Typed = io::Result<Event>;
+
 /// The loop itself: draw, wait for an event or the next tick, and go round again until the app
 /// quits, Ctrl-C is pressed or the events stop. Kept apart from the terminal so it can be
 /// tested with any events, output and screen size.
 fn drive(
     app: &mut dyn App,
-    rx: &mpsc::Receiver<Event>,
+    rx: &mpsc::Receiver<Typed>,
     out: &mut dyn Write,
     screen: &mut dyn FnMut() -> (usize, usize),
 ) -> io::Result<()> {
@@ -279,6 +283,8 @@ fn drive(
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         };
         for event in first.into_iter().chain(rx.try_iter()) {
+            // nothing more can be typed, so the app can't be told to quit: it ends here
+            let event = event?;
             if event == Event::Wake {
                 WOKEN.store(false, Ordering::SeqCst);
             }
@@ -299,7 +305,7 @@ fn drive(
 }
 
 /// Where wakes go while an app is running.
-static WAKE: Mutex<Option<mpsc::Sender<Event>>> = Mutex::new(None);
+static WAKE: Mutex<Option<mpsc::Sender<Typed>>> = Mutex::new(None);
 /// Whether an [`Event::Wake`] is on its way and not yet handled, so a burst of wakes sends one.
 static WOKEN: AtomicBool = AtomicBool::new(false);
 
@@ -367,7 +373,7 @@ impl Waker {
             return;
         }
         if let Some(tx) = wake.as_ref() {
-            let _ = tx.send(Event::Wake);
+            let _ = tx.send(Ok(Event::Wake));
         }
     }
 }
@@ -376,10 +382,10 @@ impl Waker {
 struct Waking;
 
 impl Waking {
-    fn listen(tx: mpsc::Sender<Event>) -> Waking {
+    fn listen(tx: mpsc::Sender<Typed>) -> Waking {
         let mut wake = WAKE.lock().unwrap_or_else(PoisonError::into_inner);
         if WOKEN.load(Ordering::SeqCst) {
-            let _ = tx.send(Event::Wake);
+            let _ = tx.send(Ok(Event::Wake));
         }
         *wake = Some(tx);
         Waking
@@ -724,8 +730,9 @@ mod interrupt {
 }
 
 /// Read keys and mouse reports until told to stop, sending each as an event. `read` fills
-/// some of the buffer, or gives 0 after a short pause with nothing typed.
-fn listen(read: &mut dyn FnMut(&mut [u8]) -> io::Result<usize>, tx: &mpsc::Sender<Event>, control: &Control) {
+/// some of the buffer, or gives 0 after a short pause with nothing typed. If reading fails,
+/// that's sent too, so the app ends rather than running on with no keyboard.
+fn listen(read: &mut dyn FnMut(&mut [u8]) -> io::Result<usize>, tx: &mpsc::Sender<Typed>, control: &Control) {
     let mut decoder = input::Decoder::new();
     let mut buf = [0u8; 4096];
     while !control.stop.load(Ordering::SeqCst) {
@@ -740,12 +747,15 @@ fn listen(read: &mut dyn FnMut(&mut [u8]) -> io::Result<usize>, tx: &mpsc::Sende
         // reads give up after 0.1s, so `stop` is checked often and a pause can end a sequence
         let n = match read(&mut buf) {
             Ok(n) => n,
-            Err(_) => return,
+            Err(e) => {
+                let _ = tx.send(Err(e));
+                return;
+            }
         };
         decoder.push(&buf[..n]);
         while let Some(event) = decoder.next(n == 0) {
             if let Some(event) = event {
-                if tx.send(event).is_err() {
+                if tx.send(Ok(event)).is_err() {
                     return;
                 }
             }
@@ -794,10 +804,10 @@ mod tests {
         }
     }
 
-    fn keys(rx_events: &[Event]) -> mpsc::Receiver<Event> {
+    fn keys(rx_events: &[Event]) -> mpsc::Receiver<Typed> {
         let (tx, rx) = mpsc::channel();
         for e in rx_events {
-            tx.send(e.clone()).unwrap();
+            tx.send(Ok(e.clone())).unwrap();
         }
         // kept open, so the loop waits on ticks rather than seeing the events stop
         std::mem::forget(tx);
@@ -992,6 +1002,16 @@ mod tests {
         let mut app = Recorder::default();
         drive(&mut app, &rx, &mut Vec::new(), &mut || (10, 1)).unwrap();
         assert!(app.seen.is_empty());
+
+        // or when the reader says the terminal has gone, even with wakes still possible
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(Event::Key(Key::Char('x')))).unwrap();
+        tx.send(Err(io::ErrorKind::UnexpectedEof.into())).unwrap();
+        let mut app = Recorder::default();
+        let err = drive(&mut app, &rx, &mut Vec::new(), &mut || (10, 1)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        assert_eq!(app.seen, [Event::Key(Key::Char('x'))]);
+        drop(tx);
     }
 
     #[test]
@@ -1008,6 +1028,10 @@ mod tests {
         }
         let rx = keys(&[]);
         assert!(drive(&mut Recorder::default(), &rx, &mut Broken, &mut || (10, 1)).is_err());
+    }
+
+    fn events(rx: &mpsc::Receiver<Typed>) -> Vec<Event> {
+        rx.try_iter().map(Result::unwrap).collect()
     }
 
     /// Held by tests that wake, since wakes go to whichever app is listening.
@@ -1029,7 +1053,7 @@ mod tests {
         })
         .join()
         .unwrap();
-        assert_eq!(rx.try_iter().collect::<Vec<_>>(), [Event::Wake]);
+        assert_eq!(events(&rx), [Event::Wake]);
 
         // once handled, the next wake is sent again
         let mut app = Recorder {
@@ -1037,10 +1061,10 @@ mod tests {
             ..Recorder::default()
         };
         let (tx2, rx2) = mpsc::channel();
-        tx2.send(Event::Wake).unwrap();
+        tx2.send(Ok(Event::Wake)).unwrap();
         drive(&mut app, &rx2, &mut Vec::new(), &mut || (10, 1)).unwrap();
         waker.wake();
-        assert_eq!(rx.try_iter().collect::<Vec<_>>(), [Event::Wake]);
+        assert_eq!(events(&rx), [Event::Wake]);
         drop(waking);
         WOKEN.store(false, Ordering::SeqCst);
         waker.wake();
@@ -1079,11 +1103,15 @@ mod tests {
         ]);
         let (tx, rx) = mpsc::channel();
         listen(&mut script, &tx, &Control::default());
-        let got: Vec<Event> = rx.try_iter().collect();
+        let got: Vec<Typed> = rx.try_iter().collect();
+        let (closed, got) = got.split_last().unwrap();
+        let got: Vec<&Event> = got.iter().map(|e| e.as_ref().unwrap()).collect();
         assert_eq!(
             got,
-            [Event::Key(Key::Char('a')), Event::Key(Key::Esc), Event::Key(Key::Up)]
+            [&Event::Key(Key::Char('a')), &Event::Key(Key::Esc), &Event::Key(Key::Up)]
         );
+        // and then says it can read no more
+        assert_eq!(closed.as_ref().unwrap_err().to_string(), "closed");
     }
 
     #[test]
@@ -1130,7 +1158,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         assert!(rx.try_recv().is_err(), "nothing read while paused");
         control.pause.store(false, Ordering::SeqCst);
-        assert_eq!(rx.recv().unwrap(), Event::Key(Key::Char('x')));
+        assert_eq!(rx.recv().unwrap().unwrap(), Event::Key(Key::Char('x')));
         control.stop.store(true, Ordering::SeqCst);
         reader.join().unwrap();
     }
@@ -1211,7 +1239,7 @@ mod tests {
     fn the_reader_waits_out_a_pause_and_stops_when_no_one_listens() {
         let control = Arc::new(Control::default());
         control.pause.store(true, Ordering::SeqCst);
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::channel::<Typed>();
         let unpause = control.clone();
         let lifted = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
@@ -1225,7 +1253,10 @@ mod tests {
             &mut |buf: &mut [u8]| {
                 let next = script.next().ok_or(io::Error::other("done"))?;
                 if next == b"b" {
-                    assert_eq!(rx.take().unwrap().try_recv().unwrap(), Event::Key(Key::Char('a')));
+                    assert_eq!(
+                        rx.take().unwrap().try_recv().unwrap().unwrap(),
+                        Event::Key(Key::Char('a'))
+                    );
                 }
                 buf[..next.len()].copy_from_slice(next);
                 Ok(next.len())
