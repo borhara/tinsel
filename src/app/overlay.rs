@@ -31,14 +31,20 @@ const ENTRANCE: f32 = 0.18;
 pub struct Modal<'a> {
     body: Box<dyn Widget + 'a>,
     size: Option<(usize, usize)>,
+    at: Option<Rect>,
     opened: Option<f64>,
+    background: Option<Rgb>,
+    dim: bool,
 }
 
 impl std::fmt::Debug for Modal<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Modal")
             .field("size", &self.size)
+            .field("at", &self.at)
             .field("opened", &self.opened)
+            .field("background", &self.background)
+            .field("dim", &self.dim)
             .finish_non_exhaustive()
     }
 }
@@ -49,7 +55,10 @@ impl<'a> Modal<'a> {
         Modal {
             body: Box::new(body),
             size: None,
+            at: None,
             opened: None,
+            background: None,
+            dim: true,
         }
     }
 
@@ -60,16 +69,68 @@ impl<'a> Modal<'a> {
         self
     }
 
+    /// Put it exactly here, rather than in the middle of the screen: high up, say, so what
+    /// it's about shows below it. Kept on the screen.
+    ///
+    /// ```
+    /// use tinsel::app::{Modal, Rect};
+    ///
+    /// let screen = Rect::new(0, 0, 40, 20);
+    /// let placed = Modal::new("hi").at(Rect::new(5, 2, 30, 6));
+    /// assert_eq!(placed.area(screen), Rect::new(5, 2, 30, 6));
+    /// ```
+    #[must_use]
+    pub fn at(mut self, rect: Rect) -> Self {
+        self.at = Some(rect);
+        self
+    }
+
     /// When it was opened, from [`app::time`](super::time) (or [`Frame::time`]), so it can
-    /// rise gently into place instead of appearing all at once.
+    /// rise gently into place, with what's behind it fading as it comes, instead of
+    /// appearing all at once. It asks for the frames it needs to.
     #[must_use]
     pub fn opened(mut self, seconds: f64) -> Self {
         self.opened = Some(seconds);
         self
     }
 
+    /// Fill it in this colour, as [`Panel::background`](super::Panel::background) does a
+    /// panel, so it stands apart from what's behind.
+    #[must_use]
+    pub fn background(mut self, color: Rgb) -> Self {
+        self.background = Some(color);
+        self
+    }
+
+    /// Whether what's behind fades back. Yes unless changed; a small popup that shouldn't
+    /// take over the screen says no.
+    #[must_use]
+    pub fn dim(mut self, dim: bool) -> Self {
+        self.dim = dim;
+        self
+    }
+
+    /// How far it has come into place at `t` seconds, from 0 as it opens to 1 once settled:
+    /// 1 throughout unless it was [`opened`](Modal::opened).
+    pub fn shown(&self, t: f64) -> f32 {
+        let Some(opened) = self.opened else { return 1.0 };
+        let p = ((t - opened) as f32 / ENTRANCE).clamp(0.0, 1.0);
+        1.0 - (1.0 - p).powi(3)
+    }
+
+    /// Where it is when drawn over `screen` at `t` seconds, rising into place.
+    fn placed(&self, screen: Rect, t: f64) -> Rect {
+        let mut at = self.area(screen);
+        let rise = (1.0 - self.shown(t)) * 2.0;
+        at.y = (at.y + rise.round() as usize).min((screen.y + screen.height).saturating_sub(at.height));
+        at
+    }
+
     /// Where it goes when drawn over `screen`, once it's settled: for clicks.
     pub fn area(&self, screen: Rect) -> Rect {
+        if let Some(at) = self.at {
+            return at.intersect(screen);
+        }
         let (w, h) = self
             .size
             .or_else(|| self.body.size())
@@ -86,37 +147,32 @@ impl<'a> Modal<'a> {
 
 impl Widget for Modal<'_> {
     fn render(&self, area: Rect, frame: &mut Frame) {
-        let mut at = self.area(area);
-        frame.fade(area);
-        if let Some(opened) = self.opened {
-            let p = ((frame.time() - opened) as f32 / ENTRANCE).clamp(0.0, 1.0);
-            if p < 1.0 {
-                frame.animate();
-            }
-            let rise = (1.0 - p).powi(3) * 2.0;
-            at.y = (at.y + rise.round() as usize).min((area.y + area.height).saturating_sub(at.height));
+        let shown = self.shown(frame.time());
+        if shown < 1.0 {
+            frame.animate();
         }
-        // a soft shadow below and to the right
-        for under in [
-            Rect::new(at.x + 2, at.y + at.height, at.width, 1),
-            Rect::new(at.x + at.width, at.y + 1, 2, at.height),
-        ] {
-            shadow(frame, under.intersect(area));
+        let at = self.placed(area, frame.time());
+        if self.dim {
+            frame.fade_by(area, shown);
         }
+        frame.shadow_by(at, shown);
         frame.clear(at);
+        if let Some(bg) = self.background {
+            frame.tint(at, bg);
+        }
         self.body.render(at, frame);
+    }
+
+    fn inner(&self, area: Rect) -> Rect {
+        self.body.inner(area)
     }
 }
 
-/// A gentle shadow over `area`, which has already been faded: what's there stays, a shade
-/// fainter again, rather than being blanked out. On a dark background that's all (a block
-/// of near-black over the terminal's own background reads as a hole, not a shadow); on a
-/// light one the cells also turn a pale grey, which is what a shadow on paper looks like.
-fn shadow(frame: &mut Frame, area: Rect) {
-    frame.fade(area);
-    if crate::style::theme() == crate::style::Theme::Light {
-        // redrawn for the light background, near-black becomes a pale grey
-        frame.tint(area, Rgb(8, 6, 7));
+impl Modal<'_> {
+    /// Where what's inside goes when drawn over `screen` at `t` seconds, for
+    /// [`Frame::modal`].
+    pub(super) fn inner_at(&self, screen: Rect, t: f64) -> Rect {
+        self.body.inner(self.placed(screen, t))
     }
 }
 
@@ -398,6 +454,40 @@ mod tests {
         let modal = Modal::new("hi").opened(1.0);
         assert!(asks(1.1, &modal).0);
         assert_eq!(asks(2.0, &modal), (false, false, None));
+    }
+
+    #[test]
+    fn a_modal_can_be_placed_filled_and_left_undimmed() {
+        crate::with_color_mode(crate::ColorMode::TrueColor, || {
+            let drawn = |modal: &Modal, t: f64| {
+                let mut f = Frame::new(20, 8).at(t);
+                f.print(f.area(), 7, "behind");
+                let inner = f.modal(modal);
+                (inner, f.html_pre())
+            };
+            let plain = |m: Modal| {
+                let mut f = Frame::new(20, 8);
+                f.print(f.area(), 7, "behind");
+                f.render(f.area(), m);
+                f.html_pre()
+            };
+            let placed = Modal::new(Panel::new("x")).at(Rect::new(1, 1, 10, 4));
+            let (inner, _) = drawn(&placed, 0.0);
+            assert_eq!(inner, Rect::new(3, 2, 6, 2));
+            // left as it was behind, or faded back
+            let kept = plain(Modal::new("hi").at(Rect::new(0, 0, 4, 1)).dim(false));
+            let faded = plain(Modal::new("hi").at(Rect::new(0, 0, 4, 1)));
+            assert_ne!(kept, faded);
+            let filled = plain(Modal::new("hi").at(Rect::new(0, 0, 4, 1)).background(Rgb(9, 8, 7)));
+            assert!(filled.contains("background:#090807"), "{filled}");
+            // rising in, it's lower down and what's behind is only partly faded
+            let opening = Modal::new(Panel::new("x")).at(Rect::new(1, 1, 10, 4)).opened(1.0);
+            let (rising, partly) = drawn(&opening, 1.02);
+            let (settled, fully) = drawn(&opening, 2.0);
+            assert!(rising.y > settled.y);
+            assert_ne!(partly, fully);
+            assert!(opening.shown(1.02) < 1.0 && opening.shown(2.0) == 1.0);
+        });
     }
 
     #[test]

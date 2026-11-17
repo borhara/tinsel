@@ -736,6 +736,58 @@ impl Frame {
         }
     }
 
+    /// The soft shadow a box at `of` casts, below it and to its right, as a
+    /// [`Modal`](super::Modal) has: what's there stays, faded, rather than being blanked out.
+    /// On a dark background that's all (a block of near-black over the terminal's own
+    /// background reads as a hole, not a shadow); on a light one the cells also turn a pale
+    /// grey, which is what a shadow on paper looks like.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Rect};
+    ///
+    /// tinsel::set_color_mode(tinsel::ColorMode::None);
+    /// let mut frame = Frame::new(10, 4);
+    /// frame.print(frame.area(), 3, "under");
+    /// frame.shadow(Rect::new(0, 0, 6, 3));
+    /// assert_eq!(frame.snapshot().plain().lines().last(), Some("under"));
+    /// ```
+    pub fn shadow(&mut self, of: Rect) {
+        self.shadow_by(of, 1.0);
+    }
+
+    /// [`shadow`](Frame::shadow), only as dark as `amount` says, for one fading in.
+    pub(super) fn shadow_by(&mut self, of: Rect, amount: f32) {
+        for under in [
+            Rect::new(of.x + 2, of.y + of.height, of.width, 1),
+            Rect::new(of.x + of.width, of.y + 1, 2, of.height),
+        ] {
+            let under = under.intersect(self.area());
+            self.fade_by(under, amount);
+            if amount >= 0.5 && crate::style::theme() == crate::style::Theme::Light {
+                // redrawn for the light background, near-black becomes a pale grey
+                self.tint(under, Rgb(8, 6, 7));
+            }
+        }
+    }
+
+    /// Draw a [`Modal`](super::Modal) over the whole screen and give back where what's
+    /// inside it goes, so it can be drawn there: inside the border of a
+    /// [`Panel`](super::Panel) it holds, say.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Modal, Panel, Rect};
+    ///
+    /// let mut frame = Frame::new(30, 10);
+    /// let inner = frame.modal(&Modal::new(Panel::new("pick")).at(Rect::new(5, 2, 20, 6)));
+    /// assert_eq!(inner, Rect::new(7, 3, 16, 4));
+    /// frame.print(inner, 0, "› first");
+    /// ```
+    pub fn modal(&mut self, modal: &super::Modal<'_>) -> Rect {
+        let screen = self.area();
+        self.render(screen, modal);
+        modal.inner_at(screen, self.time)
+    }
+
     fn fill(&mut self, area: Rect, cell: Cell) {
         let area = area.intersect(self.area());
         if area.is_empty() {
