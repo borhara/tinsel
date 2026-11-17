@@ -253,6 +253,9 @@ impl Code {
             if let Some((col, len, label)) = &self.caret {
                 // measured in columns, so wide characters before the carets keep them in place
                 let before: String = line.chars().take(col - 1).collect();
+                let under: String = line.chars().skip(col - 1).take(*len).collect();
+                // past the end of the line, a character is taken as one column
+                let carets = text::width(&under) + len - under.chars().count();
                 let label = if label.is_empty() {
                     String::new()
                 } else {
@@ -263,7 +266,7 @@ impl Code {
                     " ".repeat(if self.numbers { w + 1 } else { 0 }),
                     paint(LINE, "│"),
                     " ".repeat(text::width(&before)),
-                    paint(ROSE, &format!("{}{label}", "^".repeat(*len)))
+                    paint(ROSE, &format!("{}{label}", "^".repeat(carets.max(1))))
                 ));
             }
         }
@@ -328,6 +331,15 @@ mod tests {
         assert!(out.lines().last().unwrap().trim_end().ends_with('^'), "{out}");
         assert_eq!(code.to_string(), code.lines().to_string());
         assert!(crate::output::capture(|| code.print()).contains("let x = 1;"));
+    }
+
+    #[test]
+    fn carets_underline_wide_characters_in_full() {
+        crate::set_color_mode(ColorMode::None);
+        let out = Code::new("名前 = 1").highlight(1).caret(1, 2, "").lines().plain();
+        assert!(out.lines().last().unwrap().ends_with("│ ^^^^"), "{out}");
+        let out = Code::new("ab").highlight(1).caret(2, 3, "").lines().plain();
+        assert!(out.lines().last().unwrap().ends_with("│  ^^^"), "{out}");
     }
 
     #[test]
