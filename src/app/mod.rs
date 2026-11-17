@@ -1263,14 +1263,12 @@ pub(crate) mod tests {
         let mut out = Vec::new();
         drive(&mut Typing(0), &rx, &mut out, &mut || (10, 1)).unwrap();
         let out = String::from_utf8(out).unwrap();
-        // shown in its shape, moved without the shape again, then hidden
+        // shown in its shape, moved without the shape again, then hidden, each frame sending
+        // only the letter it added
         assert!(out.contains("\x1b[1;1H\x1b[2 q\x1b[?25h"), "{out:?}");
         assert!(out.contains("\x1b[1;2H\x1b[6 q\x1b[?25h"), "{out:?}");
         assert!(out.contains("\x1b[1;3H\x1b[?25h"), "{out:?}");
-        assert!(
-            out.ends_with("\x1b[?25l\x1b[1;1H\x1b[0mxxx\x1b[K\x1b[?2026l"),
-            "{out:?}"
-        );
+        assert!(out.ends_with("\x1b[?25l\x1b[1;3H\x1b[0mx\x1b[?2026l"), "{out:?}");
     }
 
     #[test]

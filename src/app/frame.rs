@@ -1192,21 +1192,87 @@ impl Frame {
         if self.width == 0 {
             return out;
         }
+        let mut whole = String::new();
         for y in 0..self.height {
             let span = y * self.width..(y + 1) * self.width;
-            if prev.is_some_and(|p| p.cells[span.clone()] == self.cells[span]) {
+            let Some(prev) = prev else {
+                self.push_whole_row(y, &mut out);
+                continue;
+            };
+            if prev.cells[span.clone()] == self.cells[span.clone()] {
                 continue;
             }
-            let _ = write!(out, "\x1b[{};1H\x1b[0m", y + 1);
-            self.push_row(y, &mut out);
-            // with wrapping off, a full row leaves the cursor on its last cell, which erasing
-            // to the end of the line would take with it
-            let last = self.cells[(y + 1) * self.width - 1];
-            if last.ch == ' ' && last.style.blank() {
-                out.push_str("\x1b[K");
+            // a few changed cells are sent on their own, unless the whole row is shorter
+            let start = out.len();
+            self.push_changes(y, &prev.cells[span], &mut out);
+            whole.clear();
+            self.push_whole_row(y, &mut whole);
+            if whole.len() <= out.len() - start {
+                out.truncate(start);
+                out.push_str(&whole);
             }
         }
         out
+    }
+
+    fn push_whole_row(&self, y: usize, out: &mut String) {
+        let _ = write!(out, "\x1b[{};1H\x1b[0m", y + 1);
+        self.push_row(y, out);
+        // with wrapping off, a full row leaves the cursor on its last cell, which erasing
+        // to the end of the line would take with it
+        let last = self.cells[(y + 1) * self.width - 1];
+        if last.ch == ' ' && last.style.blank() {
+            out.push_str("\x1b[K");
+        }
+    }
+
+    /// Send just the runs of row `y` that differ from `before`. Runs a few cells apart are
+    /// joined, as rewriting a short gap costs less than moving the cursor over it, and a run
+    /// never starts or ends halfway through a wide character.
+    fn push_changes(&self, y: usize, before: &[Cell], out: &mut String) {
+        const GAP: usize = 6;
+        let row = &self.cells[y * self.width..(y + 1) * self.width];
+        let mut x = 0;
+        while x < row.len() {
+            if row[x] == before[x] {
+                x += 1;
+                continue;
+            }
+            let mut start = x;
+            while start > 0 && row[start].ch == '\0' {
+                start -= 1;
+            }
+            let mut end = x + 1;
+            let mut same = 0;
+            while end < row.len() && same <= GAP {
+                if row[end] == before[end] {
+                    same += 1;
+                } else {
+                    same = 0;
+                }
+                end += 1;
+            }
+            end -= same;
+            while end < row.len() && row[end].ch == '\0' {
+                end += 1;
+            }
+            let _ = write!(out, "\x1b[{};{}H\x1b[0m", y + 1, start + 1);
+            let mut style = Style::default();
+            for cell in &row[start..end] {
+                if cell.ch == '\0' {
+                    continue;
+                }
+                if cell.style != style {
+                    cell.style.sgr(out);
+                    style = cell.style;
+                }
+                cell.push_to(out);
+            }
+            if style != Style::default() {
+                out.push_str("\x1b[0m");
+            }
+            x = end;
+        }
     }
 
     /// The escape that colours the cursor, if this frame wants a colour other than `shown`.
@@ -1498,6 +1564,90 @@ mod tests {
         let diff = b.diff(Some(&a));
         assert!(diff.contains("\x1b[3;1H") && !diff.contains("\x1b[1;1H"));
         assert_eq!(b.diff(Some(&b)), "");
+    }
+
+    /// Plays escapes onto a screen of text: cursor moves, erasing to the end of the line and
+    /// characters, with colours skipped and a wide character filling two cells.
+    fn play(screen: &mut [Vec<char>], escapes: &str) {
+        let (mut x, mut y) = (0, 0);
+        let mut chars = escapes.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                chars.next();
+                let mut args = String::new();
+                let end = loop {
+                    let c = chars.next().unwrap();
+                    if c.is_ascii_alphabetic() {
+                        break c;
+                    }
+                    args.push(c);
+                };
+                match end {
+                    'H' => {
+                        let mut it = args.split(';').map(|n| n.parse::<usize>().unwrap());
+                        y = it.next().unwrap() - 1;
+                        x = it.next().unwrap() - 1;
+                    }
+                    'K' => screen[y][x..].fill(' '),
+                    _ => {}
+                }
+            } else if char_width(c) > 0 {
+                screen[y][x] = c;
+                if char_width(c) == 2 {
+                    screen[y][x + 1] = '\0';
+                }
+                x += char_width(c);
+            }
+        }
+    }
+
+    fn screen_of(f: &Frame) -> Vec<Vec<char>> {
+        f.cells
+            .chunks(f.width)
+            .map(|row| row.iter().map(|c| c.ch).collect())
+            .collect()
+    }
+
+    #[test]
+    fn sends_only_the_cells_that_changed_in_a_row() {
+        let mut a = Frame::new(40, 1);
+        a.print(a.area(), 0, "the quick brown fox jumps over the dog");
+        let mut b = a.clone();
+        b.print(Rect::new(4, 0, 5, 1), 0, "slow ");
+        let diff = b.diff(Some(&a));
+        assert!(diff.starts_with("\x1b[1;5H") && !diff.contains("fox"), "{diff:?}");
+        let mut screen = screen_of(&a);
+        play(&mut screen, &diff);
+        assert_eq!(screen, screen_of(&b));
+    }
+
+    #[test]
+    fn changes_far_apart_are_sent_apart_and_close_ones_together() {
+        let mut a = Frame::new(40, 1);
+        a.print(a.area(), 0, &"·".repeat(40));
+        let mut b = a.clone();
+        b.print(Rect::new(1, 0, 1, 1), 0, "a");
+        b.print(Rect::new(4, 0, 1, 1), 0, "b");
+        b.print(Rect::new(30, 0, 1, 1), 0, "c");
+        let diff = b.diff(Some(&a));
+        assert_eq!(diff.matches('H').count(), 2, "{diff:?}");
+        let mut screen = screen_of(&a);
+        play(&mut screen, &diff);
+        assert_eq!(screen, screen_of(&b));
+    }
+
+    #[test]
+    fn a_change_inside_a_wide_character_redraws_all_of_it() {
+        let mut a = Frame::new(30, 2);
+        a.print(a.area(), 0, "日本語 and some text after it");
+        a.print(a.area(), 1, "plain text to be made wide");
+        let mut b = a.clone();
+        b.print(Rect::new(2, 0, 2, 1), 0, "x");
+        b.print(Rect::new(5, 1, 4, 1), 0, "語日");
+        let diff = b.diff(Some(&a));
+        let mut screen = screen_of(&a);
+        play(&mut screen, &diff);
+        assert_eq!(screen, screen_of(&b), "{diff:?}");
     }
 
     #[test]
