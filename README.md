@@ -237,13 +237,13 @@ impl App for Dash {
 app::run(Dash { latency: vec![84.0, 90.0, 120.0, 340.0, 95.0] })?;   // q or Esc quits
 ```
 
-![A full-screen dashboard drawn with tinsel: four big-number stats, a list of services with the worker chosen, a latency chart, resource meters and a table of regions](docs/dashboard.png)
+![A full-screen dashboard drawn with tinsel: four big-number stats, a list of services with the worker chosen, a latency chart, resource meters and a table of regions](https://raw.githubusercontent.com/borhara/tinsel/main/docs/dashboard.png)
 
 `Grid` is a table with a cursor, for lists you move through: rows can sit under group
 headings, a panel can say where its data came from on its top border, and tabs can carry
 their own colour and a mark:
 
-![A services dashboard drawn with tinsel: groups on the left, a table of services grouped under core, data and edge with one row chosen, staging and production tabs, and details for the chosen service](docs/services.png)
+![A services dashboard drawn with tinsel: groups on the left, a table of services grouped under core, data and edge with one row chosen, staging and production tabs, and details for the chosen service](https://raw.githubusercontent.com/borhara/tinsel/main/docs/services.png)
 
 Anything tinsel draws (tables, trees, cards, any `Block`) goes straight into a panel, next to
 `List`, `Tabs`, `Plot`, `Stat`, `big` text, `hints` and twinkling `Sparkles`.
