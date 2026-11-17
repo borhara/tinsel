@@ -147,8 +147,8 @@ pub(super) fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
     let label = one_row(&st.label);
     let plain = |glyph: &str, glyph_color: Rgb, label_color: Rgb| {
         (
-            centred(Line::new().push(glyph, glyph_color)),
-            Line::new().push(&label, label_color),
+            centred(Line::new().push(glyph_color, glyph)),
+            Line::new().push(label_color, &label),
         )
     };
     // a note's first line says what happened; any more (a failed command's last output) are quieter
@@ -206,8 +206,8 @@ pub(super) fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
             }
             let mark = widgets::pop(age)
                 .filter(|_| !f.settled)
-                .unwrap_or_else(|| Line::new().push("●", ROSE));
-            out.push(row(centred(mark), Line::new().push(&label, TEXT), MUTED));
+                .unwrap_or_else(|| Line::new().push(ROSE, "●"));
+            out.push(row(centred(mark), Line::new().push(TEXT, &label), MUTED));
         }
         State::Warn => {
             let (g, l) = plain("▲", AMBER, TEXT);

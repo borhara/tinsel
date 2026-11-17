@@ -94,7 +94,7 @@ use std::io::{self, IsTerminal, Write};
 use std::str::FromStr;
 
 use crate::style::palette::{BLUSH, MUTED, RED, ROSE, SOFT, TEXT, TRACK};
-use crate::style::{bold, italic, mix, paint, paint_bg, underline};
+use crate::style::{bold, italic, mix, paint, paint_on, underline};
 use crate::term::{RawMode, read_byte};
 use crate::text;
 

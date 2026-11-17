@@ -5,7 +5,7 @@ use std::fmt;
 use crate::block::Block;
 use crate::highlight::{self, Lang};
 use crate::style::palette::{BLUSH, LINE, MUTED, RED, ROSE, SAGE, SOFT, TEXT, TRACK};
-use crate::style::{ColorMode, Rgb, color_mode, mix, paint, paint_bg, underline};
+use crate::style::{ColorMode, Rgb, color_mode, mix, paint, paint_on, underline};
 use crate::term::content_width;
 use crate::text;
 
@@ -13,10 +13,10 @@ use crate::text;
 ///
 /// ```
 /// use tinsel::{badge, palette};
-/// println!("{} {}", badge("live", palette::ROSE), badge("beta", palette::AMBER));
+/// println!("{} {}", badge(palette::ROSE, "live"), badge(palette::AMBER, "beta"));
 /// ```
-pub fn badge(label: &str, color: Rgb) -> String {
-    paint_bg(color, mix(TRACK, color, 0.28), &format!(" {label} "))
+pub fn badge(color: Rgb, label: &str) -> String {
+    paint_on(color, mix(TRACK, color, 0.28), &format!(" {label} "))
 }
 
 /// A clickable link in terminals that support them (OSC 8); just the label elsewhere.

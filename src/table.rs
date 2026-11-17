@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::block::Block;
 use crate::style::palette::{BLUSH, LINE, MUTED, ROSE, TEXT, TRACK};
-use crate::style::{Rgb, bold, mix, on_bg, paint};
+use crate::style::{Rgb, bold, mix, paint, paint_bg};
 use crate::text;
 
 /// Which side of a column cells hug.
@@ -301,10 +301,10 @@ impl Table {
         let wrap = |lead: &str, inside: String, band: Option<Rgb>| {
             if boxed {
                 let inside = format!("{lead}{}  ", text::pad(&inside, inner));
-                let inside = band.map_or_else(|| inside.clone(), |b| on_bg(b, &inside));
+                let inside = band.map_or_else(|| inside.clone(), |b| paint_bg(b, &inside));
                 format!("  {} {inside}{}", frame("│"), frame("│"))
             } else if let Some(b) = band {
-                format!("{lead}{}", on_bg(b, &text::pad(&inside, inner)))
+                format!("{lead}{}", paint_bg(b, &text::pad(&inside, inner)))
             } else {
                 format!("{lead}{}", inside.trim_end())
             }
@@ -375,7 +375,7 @@ impl Table {
         let sep = format!(" {} ", inner("│"));
         let row = |line: String, band: Option<Rgb>| {
             let inside = format!(" {line} ");
-            let inside = band.map_or_else(|| inside.clone(), |b| on_bg(b, &inside));
+            let inside = band.map_or_else(|| inside.clone(), |b| paint_bg(b, &inside));
             format!("  {}{inside}{}", frame("│"), frame("│"))
         };
         let rule = |left: &str, mid: &str, right: &str, line: &str, paint_it: &dyn Fn(&str) -> String| {

@@ -93,12 +93,12 @@ impl Spinner {
                     let b = ((t * SPEED[i] + PHASE[i]).sin() + 1.0) / 2.0;
                     // squared so each star rests dim and only briefly flares
                     let b = b * b;
-                    line.push(STARS[((b * 4.0) as usize).min(3)], sample(&[rest, ROSE, SHINE], b))
+                    line.push(sample(&[rest, ROSE, SHINE], b), STARS[((b * 4.0) as usize).min(3)])
                 })
             }
             Spinner::Dots => (0..3).fold(Line::new(), |line, i| {
                 let v = (t * 5.0 - i as f32 * 0.9).sin().max(0.0).powi(2);
-                line.push("•", sample(&[rest, ROSE, PETAL], v))
+                line.push(sample(&[rest, ROSE, PETAL], v), "•")
             }),
             Spinner::Wave => (0..5).fold(Line::new(), |line, i| {
                 let x = i as f32;
@@ -106,8 +106,8 @@ impl Spinner {
                 let h = 0.5 + 0.3 * (t * 6.0 - x * 0.9).sin() + 0.2 * (t * 9.7 + x * 1.7).sin();
                 let h = h.clamp(0.0, 1.0);
                 line.push(
-                    LEVELS[((h * 7.0).round() as usize).min(7)],
                     sample(&[rest, ROSE, SHINE], h * h),
+                    LEVELS[((h * 7.0).round() as usize).min(7)],
                 )
             }),
             Spinner::Comet => {
@@ -133,13 +133,13 @@ impl Spinner {
                     } else {
                         "·"
                     };
-                    line.push(glyph, sample(&[rest, ROSE, SHINE], v))
+                    line.push(sample(&[rest, ROSE, SHINE], v), glyph)
                 })
             }
-            Spinner::Arc => Line::new().push(ARC[(t * 12.0) as usize % ARC.len()], ROSE),
+            Spinner::Arc => Line::new().push(ROSE, ARC[(t * 12.0) as usize % ARC.len()]),
             Spinner::Orbit => {
                 let drift = ((t * 0.8).sin() + 1.0) / 2.0;
-                Line::new().push(ORBIT[(t * 12.0) as usize % ORBIT.len()], sample(&RAMP, drift))
+                Line::new().push(sample(&RAMP, drift), ORBIT[(t * 12.0) as usize % ORBIT.len()])
             }
             Spinner::Pulse => {
                 let v = ((t * 3.2).sin() + 1.0) / 2.0;
@@ -152,7 +152,7 @@ impl Spinner {
                 } else {
                     "∙"
                 };
-                Line::new().push(glyph, sample(&[BERRY, ROSE, SHINE], v))
+                Line::new().push(sample(&[BERRY, ROSE, SHINE], v), glyph)
             }
         }
     }
@@ -168,7 +168,7 @@ pub fn shimmer(label: &str, t: f32) -> Line {
         let k = (-(j as f32 - pos).powi(2) / 12.0).exp();
         let glitter = noise(j as u32, tick) < 0.015 + 0.2 * k;
         let color = if glitter { SHINE } else { mix(SOFT, PETAL, k) };
-        line.push(c.encode_utf8(&mut [0; 4]), color)
+        line.push(color, c.encode_utf8(&mut [0; 4]))
     })
 }
 
@@ -182,7 +182,7 @@ pub fn pop(age: f32) -> Option<Line> {
         a if a < 0.46 => ("✧", BLUSH),
         _ => return None,
     };
-    Some(Line::new().push(glyph, color))
+    Some(Line::new().push(color, glyph))
 }
 
 /// A thin line that fills berry → blush, with half-cell precision.
@@ -209,9 +209,9 @@ fn shiny_bar(fraction: f32, width: usize, t: Option<f32>) -> Line {
         let base = sample(&RAMP, i as f32 / width.saturating_sub(1).max(1) as f32);
         let c = glint.map_or(base, |g| mix(base, SHINE, (-(i as f32 - g).powi(2) / 3.0).exp() * 0.75));
         match halves.saturating_sub(i * 2) {
-            0 => line.push("━", TRACK),
-            1 => line.push("╸", c),
-            _ => line.push("━", c),
+            0 => line.push(TRACK, "━"),
+            1 => line.push(c, "╸"),
+            _ => line.push(c, "━"),
         }
     })
 }
@@ -278,12 +278,12 @@ fn wave(fraction: f32, width: usize, t: Option<f32>) -> Line {
         }
         let glyph = LEVELS[((h * 7.0).round() as usize).min(7)];
         if played <= 0.0 {
-            return line.push(glyph, TRACK);
+            return line.push(TRACK, glyph);
         }
         let base = sample(&RAMP, x / width.saturating_sub(1).max(1) as f32);
         let lit = mix(TRACK, base, played);
         let glow = t.map_or(0.0, |_| (-(head - x - 0.5).abs() / 0.8).exp() * 0.7);
-        line.push(glyph, mix(lit, SHINE, glow))
+        line.push(mix(lit, SHINE, glow), glyph)
     })
 }
 
@@ -330,12 +330,12 @@ impl Card {
 
     /// A card headed `● headline` in rose.
     pub fn success(headline: &str) -> Self {
-        Card::new().headline(Line::new().push("● ", ROSE).push(headline, TEXT))
+        Card::new().headline(Line::new().push(ROSE, "● ").push(TEXT, headline))
     }
 
     /// A card headed `✕ headline` in red.
     pub fn failure(headline: &str) -> Self {
-        Card::new().headline(Line::new().push("✕ ", RED).push(headline, TEXT))
+        Card::new().headline(Line::new().push(RED, "✕ ").push(TEXT, headline))
     }
 
     /// Use any line as the headline. A blank line separates it from the rows below.
@@ -347,7 +347,7 @@ impl Card {
     /// Quieter text after the headline, like how long something took.
     pub fn aside(mut self, text: &str) -> Self {
         let headline = self.headline.take().unwrap_or_default();
-        self.headline = Some(headline.push(&format!(" {text}"), MUTED));
+        self.headline = Some(headline.push(MUTED, &format!(" {text}")));
         self
     }
 
@@ -364,12 +364,12 @@ impl Card {
 
     /// A `key  value` row with the key muted.
     pub fn kv(self, key: &str, value: &str) -> Self {
-        self.kv_with(key, value, TEXT)
+        self.kv_with(TEXT, key, value)
     }
 
     /// A `key  value` row with the value in a colour of your choosing.
-    pub fn kv_with(self, key: &str, value: &str, color: Rgb) -> Self {
-        self.line(Line::kv(key, value, color))
+    pub fn kv_with(self, color: Rgb, key: &str, value: &str) -> Self {
+        self.line(Line::kv(color, key, value))
     }
 
     /// Columns wide, border included (default: as wide as what's inside, when printed).
@@ -583,7 +583,7 @@ mod tests {
         crate::set_color_mode(crate::ColorMode::None);
         let card = Card::new()
             .title(String::from("owned"))
-            .footer(Line::new().push("styled", ROSE))
+            .footer(Line::new().push(ROSE, "styled"))
             .border(crate::palette::SAGE)
             .kv("a", "1")
             .blank()

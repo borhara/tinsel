@@ -495,7 +495,7 @@ pub(super) fn small_badge(label: &str) -> String {
     if crate::style::color_mode() == crate::ColorMode::None {
         format!("[{label}]")
     } else {
-        crate::badge(label, ROSE)
+        crate::badge(ROSE, label)
     }
 }
 
