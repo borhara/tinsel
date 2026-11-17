@@ -856,8 +856,9 @@ impl Line {
 
     /// A muted, aligned key followed by a value - the row shape cards are built from.
     pub fn kv(color: Rgb, key: &str, value: &str) -> Self {
-        // a column of 10 for the keys, and always a space after a longer one
-        let key = Line::new().push(palette::MUTED, &format!("{key:<9} "));
+        // a column of 10 for the keys, and always a space after a longer one, measured in
+        // columns so wide keys line up too
+        let key = Line::new().push(palette::MUTED, &format!("{} ", crate::text::pad(key, 9)));
         let hang = key.width;
         Line {
             hang,
@@ -995,6 +996,17 @@ impl fmt::Display for Line {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kv_keys_line_up_by_columns() {
+        let at = |key: &str| {
+            let line = Line::kv(palette::TEXT, key, "v");
+            (line.hang, crate::text::strip_ansi(&line.to_string()))
+        };
+        assert_eq!(at("名前"), (10, "名前      v".to_string()));
+        assert_eq!(at("name"), (10, "name      v".to_string()));
+        assert_eq!(at("a long key"), (11, "a long key v".to_string()));
+    }
 
     #[test]
     fn hsl_round_trips() {

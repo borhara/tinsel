@@ -93,17 +93,16 @@ pub fn wrapped(src: &str, width: usize) -> Block {
 
         // tables: a header row, a row of dashes, then rows
         if trimmed.starts_with('|') && lines.get(i + 1).is_some_and(|l| is_table_rule(l)) {
-            let cells = |l: &str| -> Vec<String> {
-                l.trim()
-                    .trim_matches('|')
-                    .split('|')
-                    .map(|c| inline(c.trim(), TEXT))
-                    .collect()
-            };
-            let mut table = Table::new(cells(line));
+            let cells = |l: &str| -> Vec<String> { split_row(l).iter().map(|c| inline(c.trim(), TEXT)).collect() };
+            let headers = cells(line);
+            let n = headers.len();
+            let mut table = Table::new(headers);
             let mut j = i + 2;
             while j < lines.len() && lines[j].trim().starts_with('|') {
-                table = table.row(cells(lines[j]));
+                // cells past the header's are dropped, as GFM has it
+                let mut row = cells(lines[j]);
+                row.truncate(n);
+                table = table.row(row);
                 j += 1;
             }
             gap(&mut out);
@@ -230,6 +229,54 @@ fn list_item(line: &str) -> Option<(usize, Marker, &str)> {
     None
 }
 
+/// A table row's cells, split at its pipes but not at `\|` or at a pipe inside `` `code` ``.
+fn split_row(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let chars: Vec<char> = t.chars().collect();
+    let mut cells = vec![String::new()];
+    // whether the row ended on a pipe, which closes the last cell rather than opening one
+    let mut closed = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let cell = cells.last_mut().expect("there's always a cell");
+        closed = false;
+        match chars[i] {
+            // an escape is kept for the inline markup to take out
+            '\\' if i + 1 < chars.len() => {
+                cell.push('\\');
+                cell.push(chars[i + 1]);
+                i += 2;
+            }
+            '`' => match chars[i + 1..].iter().position(|&c| c == '`') {
+                Some(p) => {
+                    // code keeps its backslashes, but `\|` is still a pipe
+                    let code: String = chars[i..i + p + 2].iter().collect();
+                    cell.push_str(&code.replace("\\|", "|"));
+                    i += p + 2;
+                }
+                None => {
+                    cell.push('`');
+                    i += 1;
+                }
+            },
+            '|' => {
+                cells.push(String::new());
+                closed = true;
+                i += 1;
+            }
+            c => {
+                cell.push(c);
+                i += 1;
+            }
+        }
+    }
+    if closed {
+        cells.pop();
+    }
+    cells
+}
+
 fn is_table_rule(line: &str) -> bool {
     let t = line.trim();
     t.starts_with('|') && t.contains('-') && t.chars().all(|c| "|-: ".contains(c))
@@ -284,6 +331,17 @@ fn words(src: &str, base: Rgb) -> Vec<Word> {
 /// Split inline markup into runs of text with one style each, plus a link target.
 fn spans(src: &str) -> Vec<(String, Style, Option<String>)> {
     let chars: Vec<char> = src.chars().collect();
+    // where each closing bracket, paren and backtick next comes, worked out once so that
+    // looking for one is quick however many openers go unclosed
+    let next = |want: char| {
+        let mut at = vec![None; chars.len() + 1];
+        for k in (0..chars.len()).rev() {
+            at[k] = if chars[k] == want { Some(k) } else { at[k + 1] };
+        }
+        at
+    };
+    let (next_bracket, next_paren, next_tick) = (next(']'), next(')'), next('`'));
+    let closers = Closers::new(&chars);
     let mut out = Vec::new();
     let mut style = Style::default();
     let mut buf = String::new();
@@ -302,7 +360,7 @@ fn spans(src: &str) -> Vec<(String, Style, Option<String>)> {
                 i += 2;
             }
             '`' => {
-                let end = chars[i + 1..].iter().position(|&c| c == '`').map(|p| i + 1 + p);
+                let end = next_tick[i + 1];
                 if let Some(end) = end {
                     flush(&mut buf, style, &mut out);
                     let code: String = chars[i + 1..end].iter().collect();
@@ -313,7 +371,7 @@ fn spans(src: &str) -> Vec<(String, Style, Option<String>)> {
                     i += 1;
                 }
             }
-            '*' | '_' if next == Some(c) && toggles(&chars, i, 2, style.bold) => {
+            '*' | '_' if next == Some(c) && closers.toggles(&chars, i, 2, style.bold) => {
                 flush(&mut buf, style, &mut out);
                 style.bold = !style.bold;
                 i += 2;
@@ -323,15 +381,15 @@ fn spans(src: &str) -> Vec<(String, Style, Option<String>)> {
                 buf.push(c);
                 i += 1;
             }
-            '*' | '_' if next != Some(c) && toggles(&chars, i, 1, style.italic) => {
+            '*' | '_' if next != Some(c) && closers.toggles(&chars, i, 1, style.italic) => {
                 flush(&mut buf, style, &mut out);
                 style.italic = !style.italic;
                 i += 1;
             }
             '[' => {
-                let close = chars[i..].iter().position(|&c| c == ']').map(|p| i + p);
+                let close = next_bracket[i];
                 let paren = close.filter(|&c| chars.get(c + 1) == Some(&'('));
-                let end = paren.and_then(|c| chars[c..].iter().position(|&x| x == ')').map(|p| c + p));
+                let end = paren.and_then(|c| next_paren[c]);
                 if let (Some(close), Some(end)) = (paren, end) {
                     flush(&mut buf, style, &mut out);
                     let label: String = chars[i + 1..close].iter().collect();
@@ -353,19 +411,36 @@ fn spans(src: &str) -> Vec<(String, Style, Option<String>)> {
     out
 }
 
-/// Whether the run of `len` emphasis marks at `i` opens emphasis (when `on` is false) or
-/// closes it. It opens only before text, with a closing run to come, and closes only after
-/// text, so the `*` in `2 * 3` is just a star.
-fn toggles(chars: &[char], i: usize, len: usize, on: bool) -> bool {
-    let after_text = i > 0 && !chars[i - 1].is_whitespace();
-    if on {
-        return after_text;
+/// Where the last run of each kind of emphasis mark that could close (one that comes after
+/// text) starts, found once so each opening mark needn't look along the rest of the line.
+struct Closers {
+    /// For `*`, `**`, `_` and `__`, in that order.
+    last: [Option<usize>; 4],
+}
+
+impl Closers {
+    fn new(chars: &[char]) -> Self {
+        let mut last = [None; 4];
+        for (slot, (mark, len)) in [('*', 1), ('*', 2), ('_', 1), ('_', 2)].into_iter().enumerate() {
+            last[slot] = (1..chars.len().saturating_sub(len - 1))
+                .rev()
+                .find(|&k| chars[k..k + len].iter().all(|&c| c == mark) && !chars[k - 1].is_whitespace());
+        }
+        Closers { last }
     }
-    let before_text = chars.get(i + len).is_some_and(|c| !c.is_whitespace());
-    let run = &chars[i..i + len];
-    before_text
-        && (i + len + 1..chars.len().saturating_sub(len - 1))
-            .any(|k| &chars[k..k + len] == run && !chars[k - 1].is_whitespace())
+
+    /// Whether the run of `len` emphasis marks at `i` opens emphasis (when `on` is false) or
+    /// closes it. It opens only before text, with a closing run to come, and closes only
+    /// after text, so the `*` in `2 * 3` is just a star.
+    fn toggles(&self, chars: &[char], i: usize, len: usize, on: bool) -> bool {
+        let after_text = i > 0 && !chars[i - 1].is_whitespace();
+        if on {
+            return after_text;
+        }
+        let before_text = chars.get(i + len).is_some_and(|c| !c.is_whitespace());
+        let slot = usize::from(chars[i] == '_') * 2 + len - 1;
+        before_text && self.last[slot].is_some_and(|k| k > i + len)
+    }
 }
 
 /// Inline markup as one styled string, for table cells.
@@ -523,6 +598,54 @@ mod tests {
     fn links_link_in_colour() {
         let out = crate::style::with_color_mode(crate::ColorMode::TrueColor, || markdown("[docs](https://docs.rs)"));
         assert!(out.lines()[0].contains("\x1b]8;;https://docs.rs"), "{out:?}");
+    }
+
+    #[test]
+    fn table_rows_take_the_header_count() {
+        let out = plain("| a | b |\n|---|---|\n| 1 | 2 | 3 |\n| 4 |");
+        assert_eq!(out, ["  a   b", "  ┈┈┈┈┈", "  1   2", "  4   ·"].join("\n"));
+    }
+
+    #[test]
+    fn table_cells_keep_escaped_pipes_and_pipes_in_code() {
+        assert_eq!(
+            split_row(r"| a \| b | `c | d` | e |"),
+            [r" a \| b ", " `c | d` ", " e "]
+        );
+        assert_eq!(split_row(r"| `x \| y` | z"), [" `x | y` ", " z"]);
+        assert_eq!(split_row("| a || b |"), [" a ", "", " b "]);
+        let out = plain("| op | means |\n|---|---|\n| `a | b` | either \\| or |");
+        assert!(out.ends_with("a | b   either | or"), "{out}");
+    }
+
+    #[test]
+    fn unclosed_marks_stay_quick() {
+        // each of these used to look along the rest of the line from every mark
+        for unit in ["*a ", "_a ", "**a ", "[a](", "[[", "a`"] {
+            let src = unit.repeat(40_000);
+            assert!(plain(&src).len() >= src.len() / 2, "{unit}");
+        }
+        // no star follows text, so none of them is emphasis
+        assert_eq!(plain(&"*a ".repeat(40_000)).matches('*').count(), 40_000);
+        assert_eq!(
+            plain(&format!("{}b*", "*a ".repeat(40_000))).matches('*').count(),
+            40_000 - 1
+        );
+    }
+
+    #[test]
+    fn fenced_code_expands_tabs() {
+        assert_eq!(plain("```\n\tx\n```"), "  │         x");
+    }
+
+    #[test]
+    fn markdown_links_cannot_run_commands() {
+        let out = crate::style::with_color_mode(crate::ColorMode::TrueColor, || {
+            markdown("[docs](https://x\x1b\\\x1b]0;PWNED\x07\x1b[2J)")
+        });
+        let line = &out.lines()[0];
+        assert!(!line.contains('\x07') && !line.contains("\x1b[2J"), "{line:?}");
+        assert_eq!(text::strip_ansi(line).trim(), "docs");
     }
 
     #[test]
