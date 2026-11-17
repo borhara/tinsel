@@ -1,65 +1,208 @@
 //! Measuring and shaping text by what the terminal shows, not by bytes or chars:
-//! escape codes count for nothing, CJK and emoji count for two columns.
+//! escape codes count for nothing, CJK and emoji count for two columns, and a character
+//! with the marks, variation selectors and joiners that build on it counts as one.
+
+mod tables;
+
+/// Where tabs stop, as on almost every terminal.
+const TAB: usize = 8;
+
+/// A piece of text as the terminal takes it: an escape sequence, which shows nothing, or one
+/// cluster (a character with the marks, selectors and joiners that build on it) and the
+/// columns it takes up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Token<'a> {
+    /// A colour, cursor move, hyperlink or other escape sequence.
+    Escape(&'a str),
+    /// One cluster of visible text, and its width in columns.
+    Text(&'a str, usize),
+}
+
+/// The text as [`Token`]s, measured from the start of a line: a tab reaches the next tab stop,
+/// and a newline starts counting again.
+pub(crate) fn tokens(s: &str) -> Tokens<'_> {
+    Tokens { s, at: 0, col: 0 }
+}
+
+/// What [`tokens`] gives.
+pub(crate) struct Tokens<'a> {
+    s: &'a str,
+    at: usize,
+    col: usize,
+}
+
+impl<'a> Iterator for Tokens<'a> {
+    type Item = Token<'a>;
+
+    fn next(&mut self) -> Option<Token<'a>> {
+        let rest = &self.s[self.at..];
+        if rest.is_empty() {
+            return None;
+        }
+        if rest.starts_with('\x1b') {
+            let len = escape_len(rest);
+            self.at += len;
+            return Some(Token::Escape(&rest[..len]));
+        }
+        let (len, width) = cluster(rest, self.col);
+        self.at += len;
+        self.col = if rest.starts_with('\n') { 0 } else { self.col + width };
+        Some(Token::Text(&rest[..len], width))
+    }
+}
+
+/// How long the escape sequence at the start of `s` is.
+fn escape_len(s: &str) -> usize {
+    let bytes = s.as_bytes();
+    match bytes.get(1) {
+        // CSI: parameters, then one final byte in @..~
+        Some(b'[') => bytes[2..]
+            .iter()
+            .position(|b| (b'@'..=b'~').contains(b))
+            .map_or(s.len(), |i| i + 3),
+        // OSC (hyperlinks, titles): ends at BEL or ESC \
+        Some(b']') => {
+            let mut i = 2;
+            while i < bytes.len() {
+                match bytes[i] {
+                    0x07 => return i + 1,
+                    0x1b if bytes.get(i + 1) == Some(&b'\\') => return i + 2,
+                    _ => i += 1,
+                }
+            }
+            s.len()
+        }
+        // ESC and one character
+        Some(_) => 1 + s[1..].chars().next().map_or(0, char::len_utf8),
+        None => 1,
+    }
+}
+
+const ZWJ: char = '\u{200D}';
+const VS16: char = '\u{FE0F}';
+
+/// The cluster at the start of `s` (which isn't an escape), as its length in bytes and its
+/// width in columns, starting at column `col`.
+fn cluster(s: &str, col: usize) -> (usize, usize) {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else { return (0, 0) };
+    if first == '\t' {
+        return (1, TAB - col % TAB);
+    }
+    if first.is_control() {
+        return (first.len_utf8(), 0);
+    }
+    let mut len = first.len_utf8();
+    let mut width = char_width(first);
+    // a pair of regional indicators is a flag
+    if is_regional(first) {
+        if let Some(second) = chars.next().filter(|&c| is_regional(c)) {
+            return (len + second.len_utf8(), 2);
+        }
+        return (len, width);
+    }
+    let emoji = is_pictographic(first);
+    let mut joined = false;
+    for c in chars {
+        if joined {
+            // the emoji after a joiner is drawn as part of the one before it
+            joined = false;
+            if emoji && is_pictographic(c) {
+                len += c.len_utf8();
+                continue;
+            }
+            break;
+        }
+        if c == ZWJ {
+            joined = true;
+        } else if c == VS16 {
+            // asks for an emoji's picture, which takes two columns
+            width = width.max(2);
+        } else if emoji && is_skin_tone(c) {
+            // a skin tone colours the emoji before it
+        } else if !is_zero_width(c) {
+            break;
+        }
+        len += c.len_utf8();
+    }
+    (len, width)
+}
+
+fn is_regional(c: char) -> bool {
+    ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)
+}
+
+fn is_skin_tone(c: char) -> bool {
+    ('\u{1F3FB}'..='\u{1F3FF}').contains(&c)
+}
+
+/// Characters that can be drawn as emoji, and so joined into one with a ZWJ: close to
+/// Unicode's Extended_Pictographic.
+fn is_pictographic(c: char) -> bool {
+    matches!(c as u32,
+        0x00A9 | 0x00AE | 0x203C | 0x2049 | 0x2122 | 0x2139 | 0x2194..=0x21AA | 0x231A..=0x23FF
+        | 0x24C2 | 0x25AA..=0x25FE | 0x2600..=0x27BF | 0x2934 | 0x2935 | 0x2B05..=0x2B55
+        | 0x3030 | 0x303D | 0x3297 | 0x3299 | 0x1F000..=0x1F1E5 | 0x1F200..=0x1FAFF
+        | 0x1FC00..=0x1FFFD)
+}
+
+fn in_table(table: &[(u32, u32)], c: char) -> bool {
+    let c = c as u32;
+    table
+        .binary_search_by(|&(lo, hi)| {
+            if hi < c {
+                std::cmp::Ordering::Less
+            } else if lo > c {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
+fn is_zero_width(c: char) -> bool {
+    (c as u32) >= 0x300 && in_table(tables::ZERO, c)
+}
 
 /// The text with every terminal escape (colours, cursor moves, hyperlinks) removed.
 pub fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\x1b' {
-            out.push(c);
-            continue;
-        }
-        match chars.next() {
-            // CSI: parameters, then one final byte in @..~
-            Some('[') => {
-                for c in chars.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        break;
-                    }
-                }
-            }
-            // OSC (hyperlinks, titles): ends at BEL or ESC \
-            Some(']') => {
-                while let Some(c) = chars.next() {
-                    if c == '\x07' {
-                        break;
-                    }
-                    if c == '\x1b' && chars.peek() == Some(&'\\') {
-                        chars.next();
-                        break;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    out
+    tokens(s)
+        .filter_map(|t| match t {
+            Token::Text(t, _) => Some(t),
+            Token::Escape(_) => None,
+        })
+        .collect()
 }
 
-/// Columns a single character takes up.
+/// Columns a single character takes up, by Unicode 17's tables: two for wide (CJK and
+/// emoji), none for combining marks, joiners, variation selectors and control characters
+/// (a tab included: [`width`] takes it to the next tab stop), one for the rest. Text is
+/// better measured with [`width`], which knows that a character and what builds on it, such
+/// as a flag's two letters or a family joined into one emoji, are drawn as one.
 pub fn char_width(c: char) -> usize {
-    match c as u32 {
-        0 => 0,
-        // combining marks, zero-width joiners and variation selectors
-        0x0300..=0x036F | 0x200B..=0x200F | 0xFE00..=0xFE0F => 0,
-        0x1100..=0x115F
-        | 0x2E80..=0xA4CF
-        | 0xAC00..=0xD7A3
-        | 0xF900..=0xFAFF
-        | 0xFE30..=0xFE4F
-        | 0xFF00..=0xFF60
-        | 0xFFE0..=0xFFE6
-        | 0x1F300..=0x1F64F
-        | 0x1F900..=0x1F9FF
-        | 0x20000..=0x3FFFD => 2,
-        _ => 1,
+    let n = c as u32;
+    if n < 0x20 || (0x7F..0xA0).contains(&n) {
+        0
+    } else if n < 0x300 {
+        1
+    } else if in_table(tables::ZERO, c) {
+        0
+    } else if in_table(tables::WIDE, c) {
+        2
+    } else {
+        1
     }
 }
 
 /// Columns the text takes up on screen, ignoring escape codes.
 pub fn width(s: &str) -> usize {
-    strip_ansi(s).chars().map(char_width).sum()
+    tokens(s)
+        .map(|t| match t {
+            Token::Text(_, w) => w,
+            Token::Escape(_) => 0,
+        })
+        .sum()
 }
 
 /// Pad on the right to `cols` visible columns. Styled text is fine.
@@ -72,52 +215,73 @@ pub fn pad_left(s: &str, cols: usize) -> String {
     format!("{}{s}", " ".repeat(cols.saturating_sub(width(s))))
 }
 
-/// Cut plain text to at most `cols` columns, ending in "…" when anything was cut.
+/// Cut text to at most `cols` columns, ending in "…" when anything was cut. Styled text is
+/// fine: every escape is kept, so colours opened before the cut are closed after it.
 pub fn truncate(s: &str, cols: usize) -> String {
+    if cols == 0 {
+        return String::new();
+    }
     if width(s) <= cols {
         return s.to_string();
     }
     let mut out = String::new();
-    let mut used = 0;
-    for c in s.chars() {
-        let w = char_width(c);
-        if used + w + 1 > cols {
-            break;
+    let (mut used, mut cut) = (0, false);
+    for token in tokens(s) {
+        match token {
+            Token::Escape(e) => out += e,
+            Token::Text(_, _) if cut => {}
+            Token::Text(t, w) if used + w < cols => {
+                out += t;
+                used += w;
+            }
+            Token::Text(_, _) => {
+                out += "…";
+                cut = true;
+            }
         }
-        out.push(c);
-        used += w;
     }
-    out + "…"
+    out
 }
 
-/// Word-wrap plain text to `cols` columns. Words longer than a line are broken.
+/// Word-wrap plain text to `cols` columns. Words longer than a line are broken, between
+/// characters and never inside one.
 pub fn wrap(s: &str, cols: usize) -> Vec<String> {
     let cols = cols.max(1);
     let mut lines = Vec::new();
     for para in s.split('\n') {
-        let mut line = String::new();
+        let (mut line, mut used) = (String::new(), 0);
         for word in para.split_whitespace() {
-            let mut word = word.to_string();
-            while width(&word) > cols {
+            let w = width(word);
+            if w > cols {
                 if !line.is_empty() {
                     lines.push(std::mem::take(&mut line));
                 }
-                let split = word.char_indices().nth(cols).map_or(word.len(), |(i, _)| i);
-                lines.push(word[..split].to_string());
-                word = word[split..].to_string();
+                used = 0;
+                for token in tokens(word) {
+                    match token {
+                        Token::Escape(e) => line += e,
+                        Token::Text(t, w) => {
+                            if used + w > cols && used > 0 {
+                                lines.push(std::mem::take(&mut line));
+                                used = 0;
+                            }
+                            line += t;
+                            used += w;
+                        }
+                    }
+                }
+                continue;
             }
-            let needed = if line.is_empty() {
-                width(&word)
-            } else {
-                width(&line) + 1 + width(&word)
-            };
-            if needed > cols {
+            if !line.is_empty() && used + 1 + w > cols {
                 lines.push(std::mem::take(&mut line));
+                used = 0;
             }
             if !line.is_empty() {
                 line.push(' ');
+                used += 1;
             }
-            line += &word;
+            line += word;
+            used += w;
         }
         lines.push(line);
     }
@@ -160,6 +324,64 @@ mod tests {
         assert_eq!(strip_ansi("\x1b[1;31mred\x1b[0m"), "red");
         assert_eq!(strip_ansi("\x1bcreset"), "reset");
         assert_eq!(strip_ansi("\x1b]0;title\x07after"), "after");
+    }
+
+    #[test]
+    fn emoji_and_their_sequences_are_two_columns() {
+        for s in ["🚀", "✅", "🫠", "❤️", "👨‍👩‍👧", "👍🏽", "🇬🇧", "1️⃣", "日"] {
+            assert_eq!(width(s), 2, "{s:?}");
+        }
+        assert_eq!(width("❤"), 1);
+        assert_eq!(width("🇬🇧🇫🇷"), 4);
+    }
+
+    #[test]
+    fn marks_and_controls_take_no_columns() {
+        assert_eq!(width("กั"), 1, "Thai vowel sign");
+        assert_eq!(width("e\u{301}"), 1);
+        assert_eq!(width("a\u{200B}b"), 2);
+        assert_eq!(width("한\u{1161}"), 2);
+        assert_eq!(char_width('\u{7}'), 0);
+        assert_eq!(width("a\u{7}b"), 2);
+    }
+
+    #[test]
+    fn tabs_reach_the_next_stop() {
+        assert_eq!(width("\t"), 8);
+        assert_eq!(width("ab\tc"), 9);
+        assert_eq!(width("a\n\t"), 9);
+    }
+
+    #[test]
+    fn tokens_split_escapes_from_clusters() {
+        let found: Vec<Token> = tokens("\x1b[1me\u{301}\x1b]8;;u\x07👨‍👩‍👧").collect();
+        assert_eq!(
+            found,
+            [
+                Token::Escape("\x1b[1m"),
+                Token::Text("e\u{301}", 1),
+                Token::Escape("\x1b]8;;u\x07"),
+                Token::Text("👨‍👩‍👧", 2),
+            ]
+        );
+        assert_eq!(tokens("\x1b").collect::<Vec<_>>(), [Token::Escape("\x1b")]);
+        assert_eq!(tokens("\x1b[31").collect::<Vec<_>>(), [Token::Escape("\x1b[31")]);
+    }
+
+    #[test]
+    fn truncating_keeps_escapes_and_whole_characters() {
+        assert_eq!(truncate("\x1b[31mhello\x1b[0m", 3), "\x1b[31mhe…\x1b[0m");
+        assert_eq!(truncate("hello", 0), "");
+        assert_eq!(truncate("日本語", 4), "日…");
+        assert_eq!(truncate("e\u{301}e\u{301}e\u{301}", 2), "e\u{301}…");
+        assert_eq!(truncate("🇬🇧🇫🇷", 3), "🇬🇧…");
+    }
+
+    #[test]
+    fn wrapping_counts_columns_and_keeps_characters_whole() {
+        assert_eq!(wrap("日本語日本語", 4), ["日本", "語日", "本語"]);
+        assert_eq!(wrap("e\u{301}e\u{301}e\u{301}", 2), ["e\u{301}e\u{301}", "e\u{301}"]);
+        assert!(wrap("日本語 日本語 日", 7).iter().all(|l| width(l) <= 7));
     }
 
     #[test]
