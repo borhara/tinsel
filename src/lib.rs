@@ -29,7 +29,7 @@
 //! | **code** | [`diff`], [`Code`] excerpts with syntax colouring ([`Lang`], whose [`Lang::highlight`] colours one line) and carets under the problem |
 //! | **documents** | [`markdown`](fn@markdown) (and [`markdown::wrapped`] to a width), [`json`], [`Help`] (with an entrance), and [`Block::page`] for anything long |
 //! | **inline** | [`badge`], [`link`], [`Card`], [`paint`], [`paint_on`], [`paint_bg`], [`bold`] and friends, [`Line`] for text built up in colours |
-//! | **colour** | [`palette`], [`Rgb`], [`mix`]; [`style`] for gradients, blinking and the rest; [`anim`] for the shimmer, twinkle and moving bars tinsel animates with |
+//! | **colour** | [`palette`], [`Rgb`], [`mix`]; [`style`] for gradients, blinking and the rest; [`anim`] for the shimmer, twinkle and moving bars tinsel animates with, and [`anim::Glide`] and [`anim::Glider`] for values that ease into place |
 //! | **apps** | [`app`]: full-screen dashboards and tools, with [`app::Panel`]s, [`app::List`]s, [`app::ScrollView`]s, [`app::Tabs`], [`app::Plot`]s, [`app::Stat`]s, [`app::Loading`] and [`app::big`] text laid out in [`app::Rect`]s, drawn only when something changes or a frame asks; [`app::snapshot`] to test them |
 //! | **questions** | [`prompt`]: confirm, input (validation, suggestions, path completion), password, number, date, select and multiselect (filter as you type, headings, disabled options), a dropdown for long lists, editor, confirm by typing; `.back()` to go back a question |
 //! | **helpers** | [`text`] (width-aware pad, truncate, wrap) and [`format`](mod@format) (bytes, durations, ago); [`terminal_width`] |
