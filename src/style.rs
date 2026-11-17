@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::output::Target;
+use crate::text::Token;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// A colour as red, green and blue, 0-255 each.
@@ -799,10 +800,15 @@ impl Line {
             return vec![self.clone()];
         }
         let hang = if self.hang < cols { self.hang } else { 0 };
-        let plain: Vec<char> = crate::text::strip_ansi(&self.text).chars().collect();
+        let plain: Vec<(&str, usize)> = crate::text::tokens(&self.text)
+            .filter_map(|t| match t {
+                Token::Text(t, w) => Some((t, w)),
+                Token::Escape(_) => None,
+            })
+            .collect();
         let ranges = wrap_ranges(&plain, cols, hang);
 
-        // Walk the styled text, copying each visible character into the piece whose range holds
+        // Walk the styled text, copying each visible cluster into the piece whose range holds
         // it and dropping the spaces a break swallowed. Every colour code seen so far is kept, so
         // a new piece can replay them and start in the state the last one stopped in; each piece
         // but the last is closed with a reset (and an open link ended) so its padding stays plain.
@@ -810,47 +816,21 @@ impl Line {
         let mut piece = Line::new();
         let (mut colours, mut link) = (String::new(), None::<String>);
         let (mut k, mut v) = (0, 0);
-        let mut chars = self.text.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '\x1b' {
-                let mut code = String::from(c);
-                match chars.next() {
-                    Some('[') => {
-                        code.push('[');
-                        for c in chars.by_ref() {
-                            code.push(c);
-                            if ('@'..='~').contains(&c) {
-                                break;
-                            }
-                        }
-                        if code.ends_with('m') {
-                            colours += &code;
-                        }
+        for token in crate::text::tokens(&self.text) {
+            let (t, w) = match token {
+                Token::Escape(code) => {
+                    if code.starts_with("\x1b[") && code.ends_with('m') {
+                        colours += code;
+                    } else if code.starts_with("\x1b]8;") {
+                        // a link's own end is `ESC ]8;;` with nothing after it
+                        let ended = code.trim_end_matches(['\x07', '\\', '\x1b']).ends_with(";;");
+                        link = (!ended).then(|| code.to_string());
                     }
-                    Some(']') => {
-                        code.push(']');
-                        while let Some(c) = chars.next() {
-                            code.push(c);
-                            if c == '\x07' {
-                                break;
-                            }
-                            if c == '\x1b' && chars.peek() == Some(&'\\') {
-                                code.push(chars.next().unwrap_or('\\'));
-                                break;
-                            }
-                        }
-                        if code.starts_with("\x1b]8;") {
-                            // a link's own end is `ESC ]8;;` with nothing after it
-                            let ended = code.trim_end_matches(['\x07', '\\', '\x1b']).ends_with(";;");
-                            link = (!ended).then(|| code.clone());
-                        }
-                    }
-                    Some(other) => code.push(other),
-                    None => {}
+                    piece.text += code;
+                    continue;
                 }
-                piece.text += &code;
-                continue;
-            }
+                Token::Text(t, w) => (t, w),
+            };
             while k + 1 < ranges.len() && v >= ranges[k].1 {
                 if link.is_some() {
                     piece.text += "\x1b]8;;\x1b\\";
@@ -865,8 +845,8 @@ impl Line {
                 k += 1;
             }
             if (ranges[k].0..ranges[k].1).contains(&v) {
-                piece.text.push(c);
-                piece.width += crate::text::char_width(c);
+                piece.text += t;
+                piece.width += w;
             }
             v += 1;
         }
@@ -875,16 +855,18 @@ impl Line {
     }
 }
 
-/// Where [`Line::wrap`] cuts plain text: `[start, end)` character ranges, the first `cols` wide
-/// and the rest `cols - hang`. A cut goes at the last space that fits (never one inside the
-/// first `hang` columns, which hold a kv line's key), or mid-word when there isn't one, and the
-/// spaces either side of it belong to neither piece.
-fn wrap_ranges(plain: &[char], cols: usize, hang: usize) -> Vec<(usize, usize)> {
+/// Where [`Line::wrap`] cuts plain text, given as clusters and their widths: `[start, end)`
+/// ranges of clusters, the first `cols` wide and the rest `cols - hang`. A cut goes at the
+/// last space that fits (never one inside the first `hang` columns, which hold a kv line's
+/// key), or mid-word when there isn't one, and the spaces either side of it belong to neither
+/// piece.
+fn wrap_ranges(plain: &[(&str, usize)], cols: usize, hang: usize) -> Vec<(usize, usize)> {
+    let space = |i: usize| plain[i].0 == " ";
     let mut ranges = Vec::new();
     let (mut start, mut used, mut room) = (0, 0, cols);
     let mut i = 0;
     while i < plain.len() {
-        let w = crate::text::char_width(plain[i]);
+        let w = plain[i].1;
         // a character wider than the whole room still goes somewhere
         if used + w <= room || used == 0 {
             used += w;
@@ -892,22 +874,22 @@ fn wrap_ranges(plain: &[char], cols: usize, hang: usize) -> Vec<(usize, usize)> 
             continue;
         }
         let floor = if ranges.is_empty() { hang } else { 0 };
-        let (mut col, mut space) = (0, None);
-        for (j, &c) in plain.iter().enumerate().take(i).skip(start) {
-            if c == ' ' && col >= floor && j > start {
-                space = Some(j);
+        let (mut col, mut last_space) = (0, None);
+        for (j, &(t, w)) in plain.iter().enumerate().take(i).skip(start) {
+            if t == " " && col >= floor && j > start {
+                last_space = Some(j);
             }
-            col += crate::text::char_width(c);
+            col += w;
         }
         // the character that didn't fit may be the space itself
-        let end = if plain[i] == ' ' { i } else { space.unwrap_or(i) };
+        let end = if space(i) { i } else { last_space.unwrap_or(i) };
         let mut end_trim = end;
-        while end_trim > start && plain[end_trim - 1] == ' ' {
+        while end_trim > start && space(end_trim - 1) {
             end_trim -= 1;
         }
         ranges.push((start, end_trim));
         start = end;
-        while start < plain.len() && plain[start] == ' ' {
+        while start < plain.len() && space(start) {
             start += 1;
         }
         (i, used, room) = (start, 0, cols - hang);
@@ -1124,6 +1106,18 @@ mod tests {
         for c in 0..=255u8 {
             assert!(ansi256(Rgb(c, c / 2, 255 - c)) >= 16);
         }
+    }
+
+    #[test]
+    fn wrapping_a_line_keeps_characters_whole() {
+        let pieces = with_color_mode(ColorMode::None, || {
+            Line::new()
+                .push("e\u{301}e\u{301}e\u{301} 日本語日本", palette::TEXT)
+                .wrap(4)
+        });
+        let texts: Vec<String> = pieces.iter().map(|p| p.to_string()).collect();
+        assert_eq!(texts, ["e\u{301}e\u{301}e\u{301}", "日本", "語日", "本"]);
+        assert!(pieces.iter().all(|p| p.width() <= 4));
     }
 
     #[test]
