@@ -24,6 +24,7 @@ pub(crate) fn noise(cell: u32, tick: u32) -> f32 {
 /// How a step looks while it's running. Every style keeps to the pink palette and
 /// eases its brightness rather than snapping, so none of them feel mechanical.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Spinner {
     /// Three little stars twinkling out of step - the tinsel one.
     #[default]
@@ -218,6 +219,7 @@ fn shiny_bar(fraction: f32, width: usize, t: Option<f32>) -> Line {
 /// How a progress bar is drawn, for [`Live::with_bar`](crate::Live::with_bar) and
 /// [`Progress::with_bar`](crate::Progress::with_bar).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BarStyle {
     /// A thin line with a glint running along it: [`bar`] and [`live_bar`]. The default.
     #[default]

@@ -97,6 +97,7 @@ use crate::text;
 
 /// Why a question didn't get an answer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The person pressed Ctrl-C or Esc: they want to stop altogether. Exiting with status
     /// 130 is the convention.
