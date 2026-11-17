@@ -2,11 +2,11 @@
 //! offers.
 //!
 //! [`copy`] uses the system's own tool where there is one (`pbcopy` on a Mac, `wl-copy` on
-//! Wayland, `xclip` or `xsel` on X, `clip.exe` on Windows and WSL), and otherwise asks the
+//! Wayland, `xclip` or `xsel` on X, PowerShell on Windows and WSL), and otherwise asks the
 //! terminal to copy with an OSC 52 escape, which works over ssh too. Over ssh the terminal is
 //! asked first, since a tool on the far end would copy to the far end's clipboard.
 //! [`paste`] uses the tools alone, as terminals rarely answer a request to read the
-//! clipboard.
+//! clipboard, and gives up on one that takes more than a couple of seconds.
 //!
 //! ```no_run
 //! if tinsel::clipboard::copy("https://example.com/build/412") {
@@ -15,8 +15,10 @@
 //! let pasted = tinsel::clipboard::paste().unwrap_or_default();
 //! ```
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 /// The tools that copy, tried in turn.
 const COPY: &[&[&str]] = &[
@@ -24,6 +26,16 @@ const COPY: &[&[&str]] = &[
     &["wl-copy"],
     &["xclip", "-selection", "clipboard"],
     &["xsel", "--clipboard", "--input"],
+    // clip.exe reads its input in the console's code page, which garbles anything beyond
+    // ASCII, so PowerShell is asked to read it as UTF-8; clip.exe is left for a Windows
+    // without it
+    &[
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[Console]::InputEncoding = [Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+    ],
     &["clip.exe"],
 ];
 
@@ -33,8 +45,19 @@ const PASTE: &[&[&str]] = &[
     &["wl-paste", "--no-newline"],
     &["xclip", "-selection", "clipboard", "-o"],
     &["xsel", "--clipboard", "--output"],
-    &["powershell.exe", "-NoProfile", "-Command", "Get-Clipboard"],
+    // written as UTF-8, and as it is, without the newline printing it would add
+    &[
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; [Console]::Out.Write((Get-Clipboard -Raw))",
+    ],
 ];
+
+/// How long a tool gets to paste: `xclip` can wait forever for a clipboard's owner that
+/// never answers.
+const PASTE_WAIT: Duration = Duration::from_secs(2);
 
 /// Copy `text` to the clipboard. Gives whether it got there: a tool said it copied, or the
 /// terminal was asked to (which it may decline, unseen). False when there's neither a tool
@@ -48,18 +71,47 @@ pub fn copy(text: &str) -> bool {
 }
 
 /// The text on the clipboard, if a tool can read it, with Windows line endings made `\n`.
+/// A tool that hasn't answered in two seconds is stopped, and the next one tried.
 pub fn paste() -> Option<String> {
-    PASTE.iter().find_map(|tool| {
-        let out = Command::new(tool[0])
-            .args(&tool[1..])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n"))
-    })
+    PASTE.iter().find_map(|tool| run_paste(tool, PASTE_WAIT))
+}
+
+/// What `tool` prints, if it succeeds within `wait`; it's stopped if it doesn't.
+fn run_paste(tool: &[&str], wait: Duration) -> Option<String> {
+    let mut child = Command::new(tool[0])
+        .args(&tool[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + wait;
+    // read on a thread of its own, so a tool that never finishes can be given up on
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = tx.send(stdout.read_to_end(&mut bytes).map(|_| bytes));
+    });
+    let read = rx.recv_timeout(wait).ok().and_then(Result::ok);
+    // its output is all there, but it may not have finished yet
+    let mut status = None;
+    while read.is_some() && status.is_none() && Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(done)) => status = Some(done),
+            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+            Err(_) => break,
+        }
+    }
+    let (Some(bytes), Some(status)) = (read, status) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    // in case PowerShell starts its UTF-8 with a byte-order mark
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    status.success().then(|| text.replace("\r\n", "\n"))
 }
 
 fn run_copy(tool: &[&str], text: &str) -> bool {
@@ -142,5 +194,26 @@ mod tests {
     #[test]
     fn a_missing_tool_copies_nothing() {
         assert!(!run_copy(&["tinsel-no-such-tool"], "x"));
+        assert_eq!(run_paste(&["tinsel-no-such-tool"], PASTE_WAIT), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pasting_takes_what_the_tool_prints_and_gives_up_on_one_that_hangs() {
+        let printf = ["sh", "-c", "printf 'a\\r\\nb'"];
+        assert_eq!(run_paste(&printf, PASTE_WAIT).as_deref(), Some("a\nb"));
+        assert_eq!(run_paste(&["sh", "-c", "printf x; exit 1"], PASTE_WAIT), None);
+
+        let started = Instant::now();
+        assert_eq!(run_paste(&["sleep", "30"], Duration::from_millis(200)), None);
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        // and one that's printed everything but doesn't finish
+        assert_eq!(
+            run_paste(
+                &["sh", "-c", "printf x; exec 1>&-; sleep 30"],
+                Duration::from_millis(200)
+            ),
+            None
+        );
     }
 }
