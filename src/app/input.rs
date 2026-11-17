@@ -1,5 +1,7 @@
 //! Turning the bytes a terminal sends into keys and mouse events.
 
+use std::time::{Duration, Instant};
+
 /// A key someone pressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -73,7 +75,15 @@ pub(crate) struct Decoder {
     used: usize,
     /// Where to carry on looking for the end of a paste.
     searched: usize,
+    /// When bytes last came.
+    heard: Instant,
+    /// How long a paste can go quiet before it's taken as ended.
+    paste_wait: Duration,
 }
+
+/// The most a paste holds before it's handed over unfinished, so a terminal that never ends
+/// one can't fill the memory.
+const MAX_PASTE: usize = 4 << 20;
 
 impl Decoder {
     pub(crate) fn new() -> Decoder {
@@ -81,6 +91,8 @@ impl Decoder {
             pending: Vec::new(),
             used: 0,
             searched: 0,
+            heard: Instant::now(),
+            paste_wait: Duration::from_millis(1500),
         }
     }
 
@@ -90,7 +102,10 @@ impl Decoder {
             self.searched = self.searched.saturating_sub(self.used);
             self.used = 0;
         }
-        self.pending.extend_from_slice(bytes);
+        if !bytes.is_empty() {
+            self.pending.extend_from_slice(bytes);
+            self.heard = Instant::now();
+        }
     }
 
     /// The next event, as [`parse`] gives it: `None` while what's left could be the start of
@@ -99,7 +114,7 @@ impl Decoder {
     pub(crate) fn next(&mut self, done: bool) -> Option<Option<super::Event>> {
         let rest = &self.pending[self.used..];
         let (event, used) = if rest.starts_with(b"\x1b[") && rest[2..].starts_with(PASTE_START) {
-            self.paste()?
+            self.paste(done)?
         } else {
             parse(rest, done)?
         };
@@ -111,8 +126,10 @@ impl Decoder {
         Some(event)
     }
 
-    /// [`paste`], looking only at what came since last time.
-    fn paste(&mut self) -> Option<(Option<super::Event>, usize)> {
+    /// [`paste`], looking only at what came since last time. A paste that never ends (the
+    /// terminal lost its end, or it wasn't really one) is taken as it stands once it's gone
+    /// quiet or grown too big, and what follows is read as keys again, so Ctrl-C still works.
+    fn paste(&mut self, done: bool) -> Option<(Option<super::Event>, usize)> {
         let start = self.used + 2 + PASTE_START.len();
         let from = self.searched.max(start);
         let Some(at) = self.pending[from..]
@@ -121,7 +138,13 @@ impl Decoder {
         else {
             // the end may be split between reads, so its first bytes are looked at again
             self.searched = self.pending.len().saturating_sub(PASTE_END.len() - 1).max(start);
-            return None;
+            let stalled = done && self.heard.elapsed() >= self.paste_wait;
+            if !stalled && self.pending.len() - start < MAX_PASTE {
+                return None;
+            }
+            self.searched = 0;
+            let text = pasted(&self.pending[start..]);
+            return Some((Some(super::Event::Paste(text)), self.pending.len() - self.used));
         };
         self.searched = 0;
         let end = from + at;
@@ -548,6 +571,29 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn a_paste_that_never_ends_is_taken_once_it_goes_quiet_or_grows_too_big() {
+        let mut decoder = Decoder::new();
+        decoder.push(b"\x1b[200~half");
+        assert_eq!(decoder.next(true), None, "a short pause is waited out");
+        decoder.paste_wait = Duration::ZERO;
+        assert_eq!(decoder.next(false), None, "only a pause ends it");
+        assert_eq!(decoder.next(true), Some(Some(Event::Paste("half".into()))));
+        decoder.push(b"\x03");
+        assert_eq!(decoder.next(false), Some(Some(Event::Key(Key::Ctrl('c')))));
+
+        let mut decoder = Decoder::new();
+        decoder.push(b"\x1b[200~");
+        decoder.push(&vec![b'x'; MAX_PASTE]);
+        let Some(Some(Event::Paste(text))) = decoder.next(false) else {
+            panic!("not taken")
+        };
+        assert_eq!(text.len(), MAX_PASTE);
+        decoder.push(b"\x1b[201~q");
+        assert_eq!(decoder.next(false), Some(None));
+        assert_eq!(decoder.next(false), Some(Some(Event::Key(Key::Char('q')))));
     }
 
     #[test]
