@@ -235,11 +235,11 @@ impl Help {
         push(&|tint, _| {
             let (mark, name) = match anim {
                 Some((t, since)) if since < 0.0 => (
-                    Spinner::Sparkle.frame(t).to_string(),
+                    Spinner::Sparkle.frame(t as f64).to_string(),
                     crate::style::gradient(&self.name, &RAMP, t * 0.9),
                 ),
                 Some((_, since)) => {
-                    let m = pop(since).map_or_else(|| paint(ROSE, "✦"), |l| l.to_string());
+                    let m = pop(since as f64).map_or_else(|| paint(ROSE, "✦"), |l| l.to_string());
                     (format!(" {m} "), bold(&paint(ROSE, &self.name)))
                 }
                 // the settled mark blinks, which the terminal keeps doing after the program exits

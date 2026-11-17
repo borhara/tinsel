@@ -285,7 +285,7 @@ pub struct Frame {
     width: usize,
     height: usize,
     cells: Vec<Cell>,
-    time: f32,
+    time: f64,
     cursor: Option<(usize, usize, CursorShape)>,
     cursor_color: Option<Rgb>,
     window_color: Option<Rgb>,
@@ -361,7 +361,7 @@ impl Frame {
     /// };
     /// assert_eq!(draw(0.0).plain(), draw(1.0).plain());   // the same text…
     /// ```
-    pub fn at(mut self, seconds: f32) -> Self {
+    pub fn at(mut self, seconds: f64) -> Self {
         self.time = seconds;
         self
     }
@@ -373,7 +373,7 @@ impl Frame {
 
     /// Seconds since the app started, for anything animated: pass it to
     /// [`Spinner::frame`](crate::Spinner::frame), [`anim::shimmer`](crate::anim::shimmer) and friends.
-    pub fn time(&self) -> f32 {
+    pub fn time(&self) -> f64 {
         self.time
     }
 

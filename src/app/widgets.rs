@@ -491,7 +491,7 @@ impl Widget for Panel<'_> {
         frame.clear(area);
         let (w, h, t) = (area.width, area.height, frame.time());
         let perimeter = 2 * (w - 1) + 2 * (h - 1);
-        let glint = (t * 18.0).rem_euclid(perimeter as f32);
+        let glint = (t * 18.0).rem_euclid(perimeter as f64) as f32;
         let color = |i: usize| {
             if !self.focused {
                 return LINE;
@@ -504,7 +504,7 @@ impl Widget for Panel<'_> {
         // the title and footer sit on the border, so it's built a cell at a time around them
         let mut title = Line::new().push(LINE, " ");
         if self.focused {
-            let b = ((t * 2.6).sin() + 1.0) / 2.0;
+            let b = (crate::widgets::turn(t, 2.6).sin() + 1.0) / 2.0;
             title = title.push(sample(&[BERRY, ROSE, SHINE], b * b), "✦ ");
         }
         let pill = if self.count.is_empty() {
@@ -1110,7 +1110,7 @@ impl Loading {
     }
 
     /// The lines to draw at `t` seconds, the second in from the first by the spinner's width.
-    fn lines(&self, t: f32, width: usize) -> Vec<String> {
+    fn lines(&self, t: f64, width: usize) -> Vec<String> {
         let mark = self.spinner.frame(t);
         let indent = " ".repeat(mark.width() + 1);
         let mut lines = vec![format!("{mark} {}", crate::anim::shimmer(&self.label, t))];
@@ -1319,15 +1319,15 @@ impl Default for Sparkles {
     }
 }
 
-fn wander(density: f32, area: Rect, frame: &mut Frame, t: f32) {
+fn wander(density: f32, area: Rect, frame: &mut Frame, t: f64) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     let count = ((area.width * area.height) as f32 * density).round() as u32;
     for star in 0..count {
-        let life = 2.5 + 3.5 * noise(star, 11);
-        let age = t / life + noise(star, 12);
-        let (lived, p) = (age.floor() as u32, age.fract());
+        let life = 2.5 + 3.5 * noise(star, 11) as f64;
+        let age = t / life + noise(star, 12) as f64;
+        let (lived, p) = (age.floor() as u64 as u32, age.fract() as f32);
         let b = (p * std::f32::consts::PI).sin().powi(3);
         // hidden near the ends of its life so it never visibly jumps
         if b < 0.08 {
@@ -1356,8 +1356,8 @@ impl Widget for Sparkles {
                     continue;
                 }
                 // each star keeps its place and twinkles at its own pace
-                let speed = 0.6 + 1.8 * noise(cell, 1);
-                let b = ((t * speed + noise(cell, 2) * 6.3).sin() + 1.0) / 2.0;
+                let speed = 0.6 + 1.8 * noise(cell, 1) as f64;
+                let b = ((crate::widgets::turn(t, speed) + noise(cell, 2) * 6.3).sin() + 1.0) / 2.0;
                 let b = b * b * b;
                 let star = paint(
                     sample(&[TRACK, BERRY, ROSE, SHINE], b),
@@ -1376,7 +1376,7 @@ mod tests {
     #[test]
     fn wandering_stars_go_out_and_come_back_elsewhere() {
         crate::set_color_mode(crate::ColorMode::None);
-        let drawn = |t: f32| {
+        let drawn = |t: f64| {
             let mut f = Frame::new(60, 20).at(t);
             f.render(f.area(), Sparkles::new().density(0.02).wandering());
             f.snapshot().plain()

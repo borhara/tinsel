@@ -13,7 +13,7 @@ fn colour() {
 #[test]
 fn focused_panels_shimmer_and_quiet_ones_dont() {
     colour();
-    let at = |t: f32, focused: bool| {
+    let at = |t: f64, focused: bool| {
         let mut f = Frame::new(12, 3).at(t);
         f.render(f.area(), Panel::new("hi").focused(focused));
         f.snapshot().to_string()
@@ -28,7 +28,7 @@ fn focused_panels_shimmer_and_quiet_ones_dont() {
 #[test]
 fn sparkles_twinkle() {
     colour();
-    let at = |t: f32| {
+    let at = |t: f64| {
         let mut f = Frame::new(20, 4).at(t);
         f.render(f.area(), Sparkles::new().density(0.5));
         f.snapshot().to_string()

@@ -31,7 +31,7 @@ const ENTRANCE: f32 = 0.18;
 pub struct Modal<'a> {
     body: Box<dyn Widget + 'a>,
     size: Option<(usize, usize)>,
-    opened: Option<f32>,
+    opened: Option<f64>,
 }
 
 impl<'a> Modal<'a> {
@@ -52,7 +52,7 @@ impl<'a> Modal<'a> {
 
     /// When it was opened, from [`app::time`](super::time) (or [`Frame::time`]), so it can
     /// rise gently into place instead of appearing all at once.
-    pub fn opened(mut self, seconds: f32) -> Self {
+    pub fn opened(mut self, seconds: f64) -> Self {
         self.opened = Some(seconds);
         self
     }
@@ -78,7 +78,7 @@ impl Widget for Modal<'_> {
         let mut at = self.area(area);
         frame.fade(area);
         if let Some(opened) = self.opened {
-            let p = ((frame.time() - opened) / ENTRANCE).clamp(0.0, 1.0);
+            let p = ((frame.time() - opened) as f32 / ENTRANCE).clamp(0.0, 1.0);
             let rise = (1.0 - p).powi(3) * 2.0;
             at.y = (at.y + rise.round() as usize).min((area.y + area.height).saturating_sub(at.height));
         }
@@ -122,7 +122,7 @@ const SLIDE: f32 = 0.25;
 ///
 /// tinsel::set_color_mode(tinsel::ColorMode::None);
 /// let mut toasts = Toasts::new();
-/// toasts.push(Tone::Success, "deployed my-app");
+/// toasts.push(0.0, Tone::Success, "deployed my-app");
 /// let mut frame = Frame::new(30, 3).at(1.0);
 /// frame.render(frame.area(), &toasts);
 /// assert_eq!(
@@ -133,14 +133,14 @@ const SLIDE: f32 = 0.25;
 #[derive(Clone, Debug)]
 pub struct Toasts {
     shown: Vec<Toast>,
-    life: f32,
+    life: f64,
 }
 
 #[derive(Clone, Debug)]
 struct Toast {
     tone: Tone,
     text: String,
-    at: f32,
+    at: f64,
 }
 
 impl Default for Toasts {
@@ -159,14 +159,14 @@ impl Toasts {
     }
 
     /// How many seconds each toast stays.
-    pub fn life(mut self, seconds: f32) -> Self {
-        self.life = seconds.max(SLIDE * 2.0);
+    pub fn life(mut self, seconds: f64) -> Self {
+        self.life = seconds.max(SLIDE as f64 * 2.0);
         self
     }
 
-    /// Show a message, marked and coloured by its tone, from now (by [`app::time`](super::time)).
-    pub fn push(&mut self, tone: Tone, text: impl Into<String>) {
-        let now = super::time();
+    /// Show a message, marked and coloured by its tone, from `now`: [`app::time`](super::time)
+    /// in [`App::event`](super::App::event), as for [`Modal::opened`].
+    pub fn push(&mut self, now: f64, tone: Tone, text: impl Into<String>) {
         self.shown.retain(|t| now - t.at < self.life);
         self.shown.push(Toast {
             tone,
@@ -176,7 +176,7 @@ impl Toasts {
     }
 
     /// Whether any toast is still showing at `seconds`.
-    pub fn showing(&self, seconds: f32) -> bool {
+    pub fn showing(&self, seconds: f64) -> bool {
         self.shown.iter().any(|t| (t.at..t.at + self.life).contains(&seconds))
     }
 }
@@ -198,10 +198,11 @@ impl Widget for Toasts {
         let mut bottom = area.y + area.height;
         // newest at the bottom, older ones stacked above until there's no more room
         for toast in self.shown.iter().rev() {
-            let age = now - toast.at;
-            if !(0.0..self.life).contains(&age) {
+            if !(0.0..self.life).contains(&(now - toast.at)) {
                 continue;
             }
+            // small once it's known to be within the toast's life
+            let (age, life) = ((now - toast.at) as f32, self.life as f32);
             let (mark, color) = tone_look(toast.tone);
             let inner = widest.saturating_sub(8).max(1);
             let lines = wrap(&toast.text, inner);
@@ -216,7 +217,7 @@ impl Widget for Toasts {
 
             // slides in from the right, and back out at the end
             let ease = |p: f32| 1.0 - (1.0 - p.clamp(0.0, 1.0)).powi(3);
-            let shown = ease(age / SLIDE).min(ease((self.life - age) / SLIDE));
+            let shown = ease(age / SLIDE).min(ease((life - age) / SLIDE));
             let hidden = ((1.0 - shown) * (w + 1) as f32).round() as usize;
             let x = area.x + area.width - w + hidden.min(w);
             let visible = Rect::new(x, y, area.x + area.width - x, h);
@@ -225,7 +226,7 @@ impl Widget for Toasts {
             }
 
             let edge = mix(LINE, color, 0.55);
-            let left = 1.0 - age / self.life;
+            let left = 1.0 - age / life;
             let span = (w - 2) as f32 * left.clamp(0.0, 1.0);
             let run = span.floor() as usize;
             // the cell where it ends fades between the two, so the line shrinks smoothly rather
@@ -290,9 +291,9 @@ mod tests {
     fn toasts_slide_in_stack_and_go() {
         crate::set_color_mode(crate::ColorMode::None);
         let mut toasts = Toasts::default().life(3.0);
-        toasts.push(Tone::Error, "couldn't connect to the database server");
-        toasts.push(Tone::Info, "retrying");
-        let drawn = |t: f32| {
+        toasts.push(0.0, Tone::Error, "couldn't connect to the database server");
+        toasts.push(0.0, Tone::Info, "retrying");
+        let drawn = |t: f64| {
             let mut f = Frame::new(40, 8).at(t);
             f.render(f.area(), &toasts);
             f.snapshot().plain()
@@ -323,7 +324,7 @@ mod tests {
     #[test]
     fn modals_rise_into_place() {
         crate::set_color_mode(crate::ColorMode::None);
-        let at = |t: f32| {
+        let at = |t: f64| {
             let mut f = Frame::new(12, 7).at(t);
             f.render(f.area(), Modal::new(Panel::new("").body("hi")).opened(1.0));
             f.snapshot().plain().lines().position(|l| l.contains('╭'))
