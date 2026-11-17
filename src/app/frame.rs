@@ -286,10 +286,22 @@ pub struct Frame {
     height: usize,
     cells: Vec<Cell>,
     time: f64,
-    cursor: Option<(usize, usize, CursorShape)>,
+    cursor: Option<TerminalCursor>,
     cursor_color: Option<Rgb>,
     window_color: Option<Rgb>,
     background: Ink,
+}
+
+/// Where a frame shows the terminal's cursor, and how: from [`Frame::cursor`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct TerminalCursor {
+    /// The column, from 0 at the left.
+    pub x: usize,
+    /// The row, from 0 at the top.
+    pub y: usize,
+    /// Its shape.
+    pub shape: CursorShape,
 }
 
 /// How the terminal's own cursor looks, when a frame shows it with
@@ -426,17 +438,18 @@ impl Frame {
     ///
     /// let mut frame = Frame::new(10, 2);
     /// frame.set_cursor(3, 1, CursorShape::Bar);
-    /// assert_eq!(frame.cursor(), Some((3, 1, CursorShape::Bar)));
+    /// let at = frame.cursor().unwrap();
+    /// assert_eq!((at.x, at.y, at.shape), (3, 1, CursorShape::Bar));
     /// frame.set_cursor(10, 1, CursorShape::Bar);
     /// assert_eq!(frame.cursor(), None);
     /// ```
     pub fn set_cursor(&mut self, x: usize, y: usize, shape: CursorShape) {
-        self.cursor = (x < self.width && y < self.height).then_some((x, y, shape));
+        self.cursor = (x < self.width && y < self.height).then_some(TerminalCursor { x, y, shape });
     }
 
     /// Where the terminal's cursor shows, and how, if [`set_cursor`](Frame::set_cursor) put
     /// it on the screen.
-    pub fn cursor(&self) -> Option<(usize, usize, CursorShape)> {
+    pub fn cursor(&self) -> Option<TerminalCursor> {
         self.cursor
     }
 
@@ -904,20 +917,16 @@ impl Frame {
 
     /// Escapes to send before and after drawing, given where the last frame left the cursor.
     /// Drawing moves the cursor, so it's hidden while drawing and put back after.
-    pub(crate) fn cursor_escape(
-        &self,
-        shown: Option<(usize, usize, CursorShape)>,
-        drew: bool,
-    ) -> (&'static str, String) {
+    pub(crate) fn cursor_escape(&self, shown: Option<TerminalCursor>, drew: bool) -> (&'static str, String) {
         let hide = if shown.is_some() && (drew || self.cursor.is_none()) {
             "\x1b[?25l"
         } else {
             ""
         };
-        let Some((x, y, shape)) = self.cursor.filter(|now| drew || shown != Some(*now)) else {
+        let Some(TerminalCursor { x, y, shape }) = self.cursor.filter(|now| drew || shown != Some(*now)) else {
             return (hide, String::new());
         };
-        let shape = if shown.map(|s| s.2) == Some(shape) {
+        let shape = if shown.map(|s| s.shape) == Some(shape) {
             String::new()
         } else {
             format!("\x1b[{} q", shape.code())

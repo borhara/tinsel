@@ -8,13 +8,23 @@ use crate::style::palette::{BERRY, MUTED, SOFT, TEXT, TRACK};
 use crate::style::{italic, mix, paint};
 use crate::text::char_width;
 
+/// A place in a [`TextArea`]'s text, from [`TextArea::cursor`]: the line, and the character
+/// in it, both counted from 0. (Characters, not columns: a wide one counts once.)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Position {
+    /// The line.
+    pub row: usize,
+    /// The character in the line.
+    pub column: usize,
+}
+
 /// A box to type several lines into: a message, notes, a description. Like [`TextInput`](super::TextInput),
 /// keep one in your app, pass it every event while it has focus, and read what's typed with
 /// [`value`](TextArea::value). Enter starts a new line, pasted text keeps its line breaks,
 /// long lines wrap, and the box scrolls to keep the cursor in view.
 ///
 /// ```
-/// use tinsel::app::{Event, Frame, Key, TextArea};
+/// use tinsel::app::{Event, Frame, Key, Position, TextArea};
 ///
 /// tinsel::set_color_mode(tinsel::ColorMode::None);
 /// let mut notes = TextArea::new().placeholder("what changed?");
@@ -24,7 +34,7 @@ use crate::text::char_width;
 ///     notes.handle(&Event::Key(Key::Char(c)));
 /// }
 /// assert_eq!(notes.value(), "fix the build\nand the docs");
-/// assert_eq!(notes.cursor(), (1, 12));
+/// assert_eq!(notes.cursor(), Position { row: 1, column: 12 });
 /// ```
 #[derive(Clone, Debug)]
 pub struct TextArea {
@@ -87,8 +97,11 @@ impl TextArea {
     }
 
     /// Where the cursor is: the line, and the character in it, both counted from 0.
-    pub fn cursor(&self) -> (usize, usize) {
-        (self.row, self.col)
+    pub fn cursor(&self) -> Position {
+        Position {
+            row: self.row,
+            column: self.col,
+        }
     }
 
     /// Whether this is where keys go. Only a focused box takes keys or shows its cursor.
@@ -285,6 +298,11 @@ impl Widget for TextArea {
 mod tests {
     use super::*;
 
+    fn at(text: &TextArea) -> (usize, usize) {
+        let p = text.cursor();
+        (p.row, p.column)
+    }
+
     fn typed(text: &mut TextArea, keys: &[Key]) {
         for k in keys {
             text.handle(&Event::Key(*k));
@@ -316,9 +334,9 @@ mod tests {
             &mut text,
             &[Key::Char('a'), Key::Enter, Key::Char('b'), Key::Left, Key::Backspace],
         );
-        assert_eq!((text.value().as_str(), text.cursor()), ("ab", (0, 1)));
+        assert_eq!((text.value().as_str(), at(&text)), ("ab", (0, 1)));
         typed(&mut text, &[Key::Enter, Key::Up, Key::End, Key::Delete]);
-        assert_eq!((text.value().as_str(), text.cursor()), ("ab", (0, 1)));
+        assert_eq!((text.value().as_str(), at(&text)), ("ab", (0, 1)));
         typed(&mut text, &[Key::Delete, Key::Delete, Key::Home, Key::Backspace]);
         assert_eq!(text.value(), "a", "nothing to delete at either end");
         typed(&mut text, &[Key::End]);
@@ -326,33 +344,33 @@ mod tests {
         assert_eq!(text.value(), "a    b\nc");
         assert!(!text.handle(&Event::Tick) && !text.handle(&Event::Key(Key::Tab)));
         text.clear();
-        assert_eq!((text.value().as_str(), text.cursor()), ("", (0, 0)));
+        assert_eq!((text.value().as_str(), at(&text)), ("", (0, 0)));
     }
 
     #[test]
     fn moves_across_lines_keeping_its_column() {
         let mut text = focused("long line\nab\nanother line");
-        assert_eq!(text.cursor(), (2, 12));
+        assert_eq!(at(&text), (2, 12));
         typed(&mut text, &[Key::Up]);
-        assert_eq!(text.cursor(), (1, 2), "as far as the short line goes");
+        assert_eq!(at(&text), (1, 2), "as far as the short line goes");
         typed(&mut text, &[Key::Up]);
-        assert_eq!(text.cursor(), (0, 9), "and back out to where it was aiming");
+        assert_eq!(at(&text), (0, 9), "and back out to where it was aiming");
         typed(&mut text, &[Key::Up]);
-        assert_eq!(text.cursor(), (0, 0), "up from the top goes to the start");
+        assert_eq!(at(&text), (0, 0), "up from the top goes to the start");
         typed(&mut text, &[Key::PageDown]);
-        assert_eq!(text.cursor(), (2, 0));
+        assert_eq!(at(&text), (2, 0));
         typed(&mut text, &[Key::Down]);
-        assert_eq!(text.cursor(), (2, 12), "down from the bottom goes to the end");
+        assert_eq!(at(&text), (2, 12), "down from the bottom goes to the end");
         typed(&mut text, &[Key::PageUp]);
-        assert_eq!(text.cursor(), (0, 9));
+        assert_eq!(at(&text), (0, 9));
         typed(&mut text, &[Key::Right]);
-        assert_eq!(text.cursor(), (1, 0), "right from a line's end goes to the next");
+        assert_eq!(at(&text), (1, 0), "right from a line's end goes to the next");
         typed(&mut text, &[Key::Left]);
-        assert_eq!(text.cursor(), (0, 9), "and left comes back");
+        assert_eq!(at(&text), (0, 9), "and left comes back");
         typed(&mut text, &[Key::Ctrl('a'), Key::Left]);
-        assert_eq!(text.cursor(), (0, 0), "nowhere left of the start");
+        assert_eq!(at(&text), (0, 0), "nowhere left of the start");
         typed(&mut text, &[Key::Ctrl('e')]);
-        assert_eq!(text.cursor(), (0, 9));
+        assert_eq!(at(&text), (0, 9));
     }
 
     #[test]
@@ -363,7 +381,7 @@ mod tests {
         typed(&mut text, &[Key::Ctrl('w'), Key::Left, Key::Ctrl('k')]);
         assert_eq!(text.value(), "keep\ndeploy");
         typed(&mut text, &[Key::Left, Key::Ctrl('u')]);
-        assert_eq!((text.value().as_str(), text.cursor()), ("keep\ny", (1, 0)));
+        assert_eq!((text.value().as_str(), at(&text)), ("keep\ny", (1, 0)));
     }
 
     #[test]
