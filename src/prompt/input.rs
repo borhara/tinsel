@@ -14,6 +14,12 @@ use super::*;
 /// }
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::NotATerminal`] when there's no terminal to ask
+/// on and no line to read, [`Error::Invalid`] when a line read from a pipe isn't an answer it
+/// takes, and [`Error::Io`] when the terminal can't be used.
 pub fn confirm(question: &str, default: bool) -> Result<bool> {
     Confirm::new(question).default(default).ask()
 }
@@ -89,6 +95,13 @@ impl Confirm {
     }
 
     /// Ask the question. Without a terminal, reads the answer from stdin as [`confirm`] does.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::Back`] on ← when asked with `.back()`,
+    /// [`Error::NotATerminal`] when there's no terminal to ask on and no line to read,
+    /// [`Error::Invalid`] when a line read from a pipe isn't an answer it takes, and [`Error::Io`] when
+    /// the terminal can't be used.
     pub fn ask(self) -> Result<bool> {
         if !interactive() {
             return match read_piped()? {
@@ -304,6 +317,13 @@ impl<'a> Input<'a> {
     }
 
     /// Ask the question.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::Back`] on ← when asked with `.back()`,
+    /// [`Error::NotATerminal`] when there's no terminal to ask on and no line to read,
+    /// [`Error::Invalid`] when a line read from a pipe isn't an answer it takes, and [`Error::Io`] when
+    /// the terminal can't be used.
     pub fn ask(self) -> Result<String> {
         if !interactive() {
             let line = read_piped_line()?;
@@ -583,6 +603,12 @@ impl LineEdit {
 }
 
 /// A line of text. An empty answer takes the default, shown dim until you type.
+///
+/// # Errors
+///
+/// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::NotATerminal`] when there's no terminal to ask
+/// on and no line to read, [`Error::Invalid`] when a line read from a pipe isn't an answer it
+/// takes, and [`Error::Io`] when the terminal can't be used.
 pub fn input(question: &str, default: Option<&str>) -> Result<String> {
     let mut q = Input::new(question);
     if let Some(d) = default {
@@ -592,6 +618,11 @@ pub fn input(question: &str, default: Option<&str>) -> Result<String> {
 }
 
 /// A line of text shown as dots.
+///
+/// # Errors
+///
+/// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::NotATerminal`] without a terminal, since a
+/// password is never read from a pipe, and [`Error::Io`] when the terminal can't be used.
 pub fn password(question: &str) -> Result<String> {
     Input::new(question).password().ask()
 }
@@ -603,6 +634,12 @@ pub fn password(question: &str) -> Result<String> {
 /// tinsel::prompt::confirm_typing("Delete my-app and all its data?", "my-app")?;
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::NotATerminal`] when there's no terminal to ask
+/// on and no line to read, [`Error::Invalid`] when a line read from a pipe isn't an answer it
+/// takes, and [`Error::Io`] when the terminal can't be used.
 pub fn confirm_typing(question: &str, expected: &str) -> Result<()> {
     Input::new(question)
         .placeholder(format!("type {expected} to confirm"))
@@ -624,6 +661,12 @@ pub fn confirm_typing(question: &str, expected: &str) -> Result<()> {
 /// let replicas: u32 = tinsel::prompt::number("Replicas", Some(3))?;
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::NotATerminal`] when there's no terminal to ask
+/// on and no line to read, [`Error::Invalid`] when a line read from a pipe isn't an answer it
+/// takes, and [`Error::Io`] when the terminal can't be used.
 pub fn number<T>(question: &str, default: Option<T>) -> Result<T>
 where
     T: FromStr + fmt::Display,

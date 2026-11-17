@@ -42,6 +42,10 @@ impl std::fmt::Debug for Keys {
 
 impl Keys {
     /// Start reading keys from the terminal on stdin. Fails without one.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error when there's no terminal on stdin, or it can't be put into raw mode.
     pub fn open() -> io::Result<Keys> {
         let raw = if crate::prompt::scripted() {
             None
@@ -58,6 +62,10 @@ impl Keys {
     /// The next key, waiting up to `timeout` (to within a tenth of a second) for one, or
     /// `None` if nothing was pressed. Mouse reports and anything else that isn't a key are
     /// skipped. Once the terminal has gone (its window closed), this is an error.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error once the terminal has gone.
     pub fn next(&mut self, timeout: Duration) -> io::Result<Option<Key>> {
         if self.raw.is_none() {
             return Ok(crate::prompt::next_scripted());

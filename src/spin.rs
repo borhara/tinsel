@@ -161,6 +161,10 @@ pub fn spin<T>(label: &str, f: impl FnOnce() -> T) -> T {
 }
 
 /// Like [`spin`], but an `Err` ends on `✕` with the error under it.
+///
+/// # Errors
+///
+/// Whatever `f` fails with, once the spinner has ended on its ✕ line.
 pub fn try_spin<T, E: Display>(label: &str, f: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
     let spinning = Spinning::start(label);
     let result = f();
