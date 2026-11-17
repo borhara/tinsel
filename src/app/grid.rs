@@ -10,20 +10,21 @@ use crate::style::{ColorMode, Rgb, bold, color_mode, mix, paint, sample};
 use crate::table::{Align, Table};
 use crate::text;
 
-/// Where the cursor is in a [`Grid`], and how far it's scrolled. Keep one in your app for
+/// Where the cursor row is in a [`Grid`], and how far it's scrolled: the grid's state, as
+/// opposed to the terminal's cursor. Keep one in your app for
 /// each grid, move it in [`event`](super::App::event), and hand it to the grid in
 /// [`view`](super::App::view).
 ///
 /// ```
-/// use tinsel::app::{Cursor, Event, Key};
+/// use tinsel::app::{GridState, Event, Key};
 ///
-/// let mut cursor = Cursor::new();
+/// let mut cursor = GridState::new();
 /// cursor.navigate(3, &Event::Key(Key::Down));
 /// cursor.navigate(3, &Event::Key(Key::End));
 /// assert_eq!(cursor.row(), 2);
 /// ```
 #[derive(Clone, Debug, Default)]
-pub struct Cursor {
+pub struct GridState {
     row: usize,
     column: usize,
     // what the last drawing found, so the next move knows where it can go
@@ -31,10 +32,10 @@ pub struct Cursor {
     last_column: Cell<usize>,
 }
 
-impl Cursor {
+impl GridState {
     /// A cursor on the first row, scrolled to the left edge.
     pub fn new() -> Self {
-        Cursor::default()
+        GridState::default()
     }
 
     /// The row the cursor is on, counted from 0.
@@ -61,10 +62,10 @@ impl Cursor {
     /// Scroll one column to the right, if anything's cut off there. Returns whether it moved.
     ///
     /// ```
-    /// use tinsel::app::{Cursor, Frame, Grid};
+    /// use tinsel::app::{GridState, Frame, Grid};
     ///
-    /// let mut cursor = Cursor::new();
-    /// let grid = |c| Grid::new(["name", "env", "owner"]).row(["api", "production", "platform"]).cursor(c);
+    /// let mut cursor = GridState::new();
+    /// let grid = |c| Grid::new(["name", "env", "owner"]).row(["api", "production", "platform"]).state(c);
     /// let mut frame = Frame::new(16, 3);
     /// frame.render(frame.area(), grid(&cursor));
     /// assert!(cursor.scroll_right());
@@ -107,15 +108,15 @@ enum Body {
 /// gathered under [`heading`](Grid::heading)s.
 ///
 /// ```
-/// use tinsel::app::{Cursor, Frame, Grid};
+/// use tinsel::app::{GridState, Frame, Grid};
 ///
 /// tinsel::set_color_mode(tinsel::ColorMode::None);
-/// let mut cursor = Cursor::new();
+/// let mut cursor = GridState::new();
 /// cursor.select(1);
 /// let grid = Grid::new(["service", "pods"])
 ///     .row(["api", "12"])
 ///     .row(["worker", "3"])
-///     .cursor(&cursor);
+///     .state(&cursor);
 /// let mut frame = Frame::new(20, 4);
 /// frame.render(frame.area(), grid);
 /// assert_eq!(frame.snapshot().plain(), "  service   pods\n  ┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n  api         12\n› worker       3");
@@ -128,7 +129,7 @@ pub struct Grid<'a> {
     headings: Vec<(usize, String)>,
     align: Vec<(usize, Align)>,
     limits: Vec<(usize, usize)>,
-    cursor: Option<&'a Cursor>,
+    cursor: Option<&'a GridState>,
     focused: bool,
     striped: bool,
     blank: bool,
@@ -177,22 +178,22 @@ impl<'a> Grid<'a> {
 
     /// Start a group: a heading drawn on its own line above the rows added after it, up to
     /// the next heading. Headings aren't rows: the cursor, [`row_at`](Grid::row_at) and
-    /// [`Cursor::navigate`]'s `len` count only the rows, so row 0 is the first row under the
+    /// [`GridState::navigate`]'s `len` count only the rows, so row 0 is the first row under the
     /// first heading, and moving steps over headings. Scrolling up to a group's first rows
     /// brings its heading into view too.
     ///
     /// ```
-    /// use tinsel::app::{Cursor, Frame, Grid};
+    /// use tinsel::app::{GridState, Frame, Grid};
     ///
     /// tinsel::set_color_mode(tinsel::ColorMode::None);
-    /// let mut cursor = Cursor::new();
+    /// let mut cursor = GridState::new();
     /// cursor.select(1);
     /// let grid = Grid::new(["service", "pods"])
     ///     .heading("frontend")
     ///     .row(["web", "4"])
     ///     .heading("backend")
     ///     .row(["api", "12"])
-    ///     .cursor(&cursor);
+    ///     .state(&cursor);
     /// let mut frame = Frame::new(20, 6);
     /// frame.render(frame.area(), grid);
     /// assert_eq!(
@@ -217,9 +218,10 @@ impl<'a> Grid<'a> {
         self
     }
 
-    /// Where the cursor is. Without one, nothing is chosen and the grid starts at the top.
-    pub fn cursor(mut self, cursor: &'a Cursor) -> Self {
-        self.cursor = Some(cursor);
+    /// Where the cursor is and how far it's scrolled. Without one, nothing is chosen and the
+    /// grid starts at the top.
+    pub fn state(mut self, state: &'a GridState) -> Self {
+        self.cursor = Some(state);
         self
     }
 
@@ -671,9 +673,9 @@ mod tests {
             grid = grid.row(row.clone());
             table = table.row(row);
         }
-        let mut cursor = Cursor::new();
+        let mut cursor = GridState::new();
         cursor.select(500);
-        let shown = drawn(30, 6, grid.clone().cursor(&cursor));
+        let shown = drawn(30, 6, grid.clone().state(&cursor));
         crate::set_color_mode(ColorMode::None);
         let all = table.lines().plain();
         let all: Vec<&str> = all.lines().collect();
@@ -733,8 +735,8 @@ mod tests {
     }
 
     /// Two groups of three rows, under headings "a" and "b", rows named r0 to r5.
-    fn grouped(cursor: &Cursor) -> Grid<'_> {
-        let mut grid = Grid::new(["name"]).cursor(cursor);
+    fn grouped(cursor: &GridState) -> Grid<'_> {
+        let mut grid = Grid::new(["name"]).state(cursor);
         for i in 0..6 {
             if i % 3 == 0 {
                 grid = grid.heading(if i == 0 { "a" } else { "b" });
@@ -746,7 +748,7 @@ mod tests {
 
     #[test]
     fn headings_sit_between_rows_and_the_cursor_counts_rows_only() {
-        let mut cursor = Cursor::new();
+        let mut cursor = GridState::new();
         cursor.select(3);
         let shown = drawn(12, 10, grouped(&cursor));
         assert_eq!(shown, "  name\n  ┈┈┈┈\n  a\n  r0\n  r1\n  r2\n  b\n› r3\n  r4\n  r5");
@@ -759,7 +761,7 @@ mod tests {
 
     #[test]
     fn scrolling_keeps_the_cursor_row_and_its_heading_in_view() {
-        let mut cursor = Cursor::new();
+        let mut cursor = GridState::new();
         let mut at = |row: usize| {
             cursor.select(row);
             let shown = drawn(12, 5, grouped(&cursor));
@@ -783,7 +785,7 @@ mod tests {
 
     #[test]
     fn clicks_on_headings_find_no_row() {
-        let mut cursor = Cursor::new();
+        let mut cursor = GridState::new();
         cursor.select(5);
         let area = Rect::new(0, 0, 12, 5);
         drawn(12, 5, grouped(&cursor));
@@ -815,12 +817,12 @@ mod tests {
         let grid = Grid::new(["name", "n"]).heading("group").row(["abc", "1"]).fill(0);
         assert_eq!(drawn(12, 3, grid), "  name    n\n  ┈┈┈┈┈┈┈┈┈\n  group    ┃");
 
-        let mut cursor = Cursor::new();
-        fn services(c: &Cursor) -> Grid<'_> {
+        let mut cursor = GridState::new();
+        fn services(c: &GridState) -> Grid<'_> {
             Grid::new(["name", "env", "owner"])
                 .heading("services")
                 .row(["api", "production", "platform"])
-                .cursor(c)
+                .state(c)
         }
         drawn(16, 4, services(&cursor));
         assert!(cursor.scroll_right());
@@ -847,13 +849,13 @@ mod tests {
 
     #[test]
     fn rows_are_found_by_where_they_are() {
-        let mut cursor = Cursor::new();
+        let mut cursor = GridState::new();
         cursor.select(9);
         let rows: Vec<String> = (0..10).map(|i| i.to_string()).collect();
         let grid = rows
             .iter()
             .fold(Grid::new(["n"]), |g, r| g.row([r.as_str()]))
-            .cursor(&cursor);
+            .state(&cursor);
         let area = Rect::new(0, 0, 10, 5);
         drawn(10, 5, grid.clone());
         assert_eq!(cursor.top.get(), 7);
@@ -889,9 +891,9 @@ mod tests {
 
     #[test]
     fn a_heading_too_far_above_stays_off_screen() {
-        let mut cursor = Cursor::new();
+        let mut cursor = GridState::new();
         cursor.select(7);
-        let mut grid = Grid::new(["name"]).heading("far").cursor(&cursor);
+        let mut grid = Grid::new(["name"]).heading("far").state(&cursor);
         for i in 0..8 {
             grid = grid.row([format!("r{i}")]);
         }
@@ -915,13 +917,13 @@ mod tests {
 
     #[test]
     fn striped_rows_alternate() {
-        let cursor = Cursor::new();
+        let cursor = GridState::new();
         let grid = Grid::new(["n"])
             .row(["a"])
             .row(["b"])
             .row(["c"])
             .striped()
-            .cursor(&cursor);
+            .state(&cursor);
         let mut f = Frame::new(10, 5);
         crate::style::with_color_mode(ColorMode::TrueColor, || f.render(f.area(), grid));
         assert_ne!(f.snapshot().lines()[3], f.snapshot().lines()[4]);

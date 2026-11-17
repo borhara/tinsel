@@ -90,7 +90,7 @@ use std::time::{Duration, Instant};
 
 pub use field::TextInput;
 pub use frame::{CursorShape, Frame};
-pub use grid::{Cursor, Grid};
+pub use grid::{Grid, GridState};
 pub use input::{Key, Mods, Mouse, MouseKind, NamedKey};
 pub use keys::Keys;
 pub use layout::{Rect, Size};

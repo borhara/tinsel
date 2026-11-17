@@ -17,7 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tinsel::app::{
-    self, App, Cursor, Event, Flow, Footer, Frame, Grid, Key, List, Modal, Panel, Size::*, Tabs, TextInput, Toasts,
+    self, App, Event, Flow, Footer, Frame, Grid, GridState, Key, List, Modal, Panel, Size::*, Tabs, TextInput, Toasts,
     Waker,
 };
 use tinsel::{ColorMode, Line, Spinner, Table, Theme, Tone, format, paint, palette, shimmer};
@@ -115,7 +115,7 @@ struct Dashboard {
     services: Vec<Service>,
     group: usize,
     pane: Pane,
-    cursor: Cursor,
+    cursor: GridState,
     filter: TextInput,
     drifted_only: bool,
     env: usize,
@@ -136,7 +136,7 @@ impl Dashboard {
             services: Vec::new(),
             group: 0,
             pane: Pane::Table,
-            cursor: Cursor::new(),
+            cursor: GridState::new(),
             filter: TextInput::new().prompt("/").placeholder("filter services by name"),
             drifted_only: false,
             env: 1,
@@ -160,7 +160,7 @@ impl Dashboard {
             services,
             group: 0,
             pane: Pane::Table,
-            cursor: Cursor::new(),
+            cursor: GridState::new(),
             filter: TextInput::new().prompt("/").placeholder("filter services by name"),
             drifted_only: false,
             env: 1,
@@ -289,7 +289,7 @@ impl Dashboard {
     fn table(&self, frame: &mut Frame, area: app::Rect) {
         let shown = self.shown();
         let mut grid = Grid::new(["service", "staging", "production", "health", "replicas", "updated", ""])
-            .cursor(&self.cursor)
+            .state(&self.cursor)
             .focused(self.pane == Pane::Table)
             .striped()
             .blank_cells()
