@@ -87,7 +87,7 @@ static ENABLED: AtomicU8 = AtomicU8::new(0);
 /// while you're in another window, a notification when a long run finishes unseen, and a
 /// twinkle for what finished when you come back. Reading focus reports means reading stdin
 /// while a display runs, so turn it off in tests, or in a tool that hands stdin to something
-/// else. Without this, setting `TINSEL_NO_FOCUS` turns it off. [`Live::no_focus`](crate::Live::no_focus)
+/// else. Without this, setting `TINSEL_NO_FOCUS` to anything but an empty value turns it off. [`Live::no_focus`](crate::Live::no_focus)
 /// turns it off for one display.
 ///
 /// ```
@@ -104,7 +104,7 @@ pub(crate) fn why() -> (bool, String) {
         2 => return (false, "set in code".into()),
         _ => {}
     }
-    if std::env::var_os("TINSEL_NO_FOCUS").is_some() {
+    if crate::term::env_flag("TINSEL_NO_FOCUS") {
         (false, "TINSEL_NO_FOCUS is set".into())
     } else if !term::answers_queries() {
         (false, "only Windows Terminal reports focus on Windows".into())
@@ -121,7 +121,7 @@ fn enabled() -> bool {
     match ENABLED.load(Ordering::Relaxed) {
         1 => true,
         2 => false,
-        _ => std::env::var_os("TINSEL_NO_FOCUS").is_none(),
+        _ => !crate::term::env_flag("TINSEL_NO_FOCUS"),
     }
 }
 
