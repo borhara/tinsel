@@ -18,6 +18,39 @@ const UNDERLINE: u8 = 8;
 const BLINK: u8 = 16;
 const REVERSE: u8 = 32;
 
+/// Which ways a piece of line reaches from the middle of its cell.
+const UP: u8 = 1;
+const DOWN: u8 = 2;
+const LEFT: u8 = 4;
+const RIGHT: u8 = 8;
+
+/// Which ways a box-drawing character reaches, or none for anything else.
+fn arms_of(c: char) -> u8 {
+    match c {
+        '─' => LEFT | RIGHT,
+        '│' => UP | DOWN,
+        '┌' | '╭' => DOWN | RIGHT,
+        '┐' | '╮' => DOWN | LEFT,
+        '└' | '╰' => UP | RIGHT,
+        '┘' | '╯' => UP | LEFT,
+        '├' => UP | DOWN | RIGHT,
+        '┤' => UP | DOWN | LEFT,
+        '┬' => DOWN | LEFT | RIGHT,
+        '┴' => UP | LEFT | RIGHT,
+        '┼' => UP | DOWN | LEFT | RIGHT,
+        _ => 0,
+    }
+}
+
+/// The box-drawing character that reaches the ways `arms` says. A line reaching one way
+/// alone is drawn whole.
+fn joint(arms: u8) -> char {
+    const ALL: [char; 16] = [
+        ' ', '│', '│', '│', '─', '┘', '┐', '┤', '─', '└', '┌', '├', '─', '┴', '┬', '┼',
+    ];
+    ALL[usize::from(arms & 15)]
+}
+
 /// A colour as it arrived in an escape code, kept as-is so the theme and colour mode that
 /// chose it aren't decided twice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -825,6 +858,71 @@ impl Frame {
         modal.inner_at(screen, self.time)
     }
 
+    /// A line `width` columns long from column `x` of row `y`, in `color`. Where it meets
+    /// or crosses a line already drawn (a panel's border, another rule) the two join up,
+    /// `├` or `┼`, rather than one cutting the other.
+    ///
+    /// ```
+    /// use tinsel::app::{Frame, Panel};
+    ///
+    /// tinsel::set_color_mode(tinsel::ColorMode::None);
+    /// let mut frame = Frame::new(8, 4);
+    /// frame.render(frame.area(), Panel::new(""));
+    /// frame.hline(0, 2, 8, tinsel::palette::LINE);
+    /// assert_eq!(frame.snapshot().plain().lines().nth(2), Some("├──────┤"));
+    /// ```
+    pub fn hline(&mut self, x: usize, y: usize, width: usize, color: Rgb) {
+        for i in 0..width {
+            let arms = match (i == 0, i + 1 == width) {
+                (true, true) => LEFT | RIGHT,
+                (true, false) => RIGHT,
+                (false, true) => LEFT,
+                (false, false) => LEFT | RIGHT,
+            };
+            self.join(x + i, y, arms, color);
+        }
+    }
+
+    /// A line `height` rows tall from row `y` of column `x`, in `color`, joining up with
+    /// lines already drawn as [`hline`](Frame::hline) does: a column rule drawn from one
+    /// row rule to another meets them with `┬` and `┴`.
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// tinsel::set_color_mode(tinsel::ColorMode::None);
+    /// let mut frame = Frame::new(5, 3);
+    /// frame.hline(0, 0, 5, tinsel::palette::LINE);
+    /// frame.hline(0, 2, 5, tinsel::palette::LINE);
+    /// frame.vline(2, 0, 3, tinsel::palette::LINE);
+    /// assert_eq!(frame.snapshot().plain(), "──┬──\n  │\n──┴──");
+    /// ```
+    pub fn vline(&mut self, x: usize, y: usize, height: usize, color: Rgb) {
+        for i in 0..height {
+            let arms = match (i == 0, i + 1 == height) {
+                (true, true) => UP | DOWN,
+                (true, false) => DOWN,
+                (false, true) => UP,
+                (false, false) => UP | DOWN,
+            };
+            self.join(x, y + i, arms, color);
+        }
+    }
+
+    /// Draw a piece of line with these arms at a cell, joined to whatever line is there.
+    fn join(&mut self, x: usize, y: usize, arms: u8, color: Rgb) {
+        if x >= self.width || y >= self.height {
+            return;
+        }
+        let there = arms_of(self.cells[y * self.width + x].ch);
+        let glyph = joint(there | arms);
+        self.print(
+            Rect::new(x, y, 1, 1),
+            0,
+            &crate::style::paint(color, glyph.encode_utf8(&mut [0; 4])),
+        );
+    }
+
     /// [`fade`](Frame::fade) everything but `keep`, so it's what the eye goes to: a
     /// column of text while the rest of the screen falls away.
     ///
@@ -1495,5 +1593,27 @@ mod tests {
                 assert_ne!(plain.cells[i], faded.cells[i], "cell {i}");
             }
         });
+    }
+
+    #[test]
+    fn lines_join_up_where_they_meet() {
+        crate::set_color_mode(crate::ColorMode::None);
+        let line = crate::style::palette::LINE;
+        let mut f = Frame::new(5, 5);
+        f.render(f.area(), super::super::Panel::new(""));
+        f.hline(0, 2, 5, line);
+        f.vline(2, 0, 5, line);
+        assert_eq!(f.snapshot().plain(), "╭─┬─╮\n│ │ │\n├─┼─┤\n│ │ │\n╰─┴─╯");
+        // on their own, and off the edge
+        let mut f = Frame::new(3, 2);
+        f.hline(0, 0, 1, line);
+        f.vline(2, 0, 1, line);
+        f.hline(2, 1, 4, line);
+        assert_eq!(f.snapshot().plain(), "─ │\n  ─");
+        for arms in 0..16u8 {
+            if arms.count_ones() >= 2 {
+                assert_eq!(arms_of(joint(arms)), arms, "{arms}");
+            }
+        }
     }
 }
