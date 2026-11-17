@@ -1,4 +1,4 @@
-use tinsel::app::{self, App, Event, Flow, Frame, Grid, GridState, Key, List, Panel, Size::*, Tabs, hints};
+use tinsel::app::{self, App, Event, Flow, Frame, Grid, GridState, Key, Keymap, List, Panel, Size::*, Tabs, hints};
 
 struct Picker {
     tab: usize,
@@ -17,7 +17,7 @@ impl App for Picker {
     }
 
     fn event(&mut self, event: &Event) -> Flow {
-        app::navigate(&mut self.selected, FLAVOURS.len(), event);
+        app::navigate(&mut self.selected, FLAVOURS.len(), event, Keymap::Vim);
         match event {
             Event::Key(Key::Tab) => self.tab = 1 - self.tab,
             Event::Key(Key::Enter) => return Flow::Quit,
@@ -85,7 +85,7 @@ fn a_grid_keeps_the_cursor_and_header_in_view() {
         frame.snapshot().plain()
     };
     for _ in 0..4 {
-        cursor.navigate(rows.len(), &Event::Key(Key::Down));
+        cursor.handle(rows.len(), &Event::Key(Key::Down));
     }
     // three rows fit: moving down scrolls just enough to keep the cursor on the last one
     assert_eq!(
@@ -104,11 +104,11 @@ fn a_grid_keeps_the_cursor_and_header_in_view() {
     assert!(shown.lines().last().unwrap().starts_with("› service-4"), "{shown}");
     assert!(!shown.contains("service-1 "), "{shown}");
     // moving back up only scrolls once the cursor reaches the top
-    cursor.navigate(rows.len(), &Event::Key(Key::Up));
-    cursor.navigate(rows.len(), &Event::Key(Key::Up));
+    cursor.handle(rows.len(), &Event::Key(Key::Up));
+    cursor.handle(rows.len(), &Event::Key(Key::Up));
     let shown = draw(&cursor);
     assert!(shown.lines().nth(2).unwrap().starts_with("› service-2"), "{shown}");
-    cursor.navigate(rows.len(), &Event::Key(Key::Up));
+    cursor.handle(rows.len(), &Event::Key(Key::Up));
     let shown = draw(&cursor);
     assert!(shown.lines().nth(2).unwrap().starts_with("› service-1"), "{shown}");
 }
@@ -187,7 +187,7 @@ fn every_piece_together_in_plain_text() {
         toasts: tinsel::app::Toasts::new(),
         confirm: false,
     };
-    app.cursor.navigate(3, &Event::Key(Key::Down));
+    app.cursor.handle(3, &Event::Key(Key::Down));
     assert_eq!(
         app::snapshot(&app, 44, 9).plain(),
         [

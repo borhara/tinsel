@@ -19,9 +19,9 @@ use crate::text::char_width;
 /// tinsel::set_color_mode(tinsel::ColorMode::None);
 /// let mut notes = TextArea::new().placeholder("what changed?");
 /// notes.focus(true);
-/// notes.event(&Event::Paste("fix the build\n".into()));
+/// notes.handle(&Event::Paste("fix the build\n".into()));
 /// for c in "and the docs".chars() {
-///     notes.event(&Event::Key(Key::Char(c)));
+///     notes.handle(&Event::Key(Key::Char(c)));
 /// }
 /// assert_eq!(notes.value(), "fix the build\nand the docs");
 /// assert_eq!(notes.cursor(), (1, 12));
@@ -146,12 +146,12 @@ impl TextArea {
     /// let mut text = TextArea::new();
     /// text.focus(true);
     /// text.set_value("one\ntwo");
-    /// text.event(&Event::Key(Key::Home));
-    /// text.event(&Event::Key(Key::Backspace));
+    /// text.handle(&Event::Key(Key::Home));
+    /// text.handle(&Event::Key(Key::Backspace));
     /// assert_eq!(text.value(), "onetwo");
-    /// assert!(!text.event(&Event::Key(Key::Esc)));
+    /// assert!(!text.handle(&Event::Key(Key::Esc)));
     /// ```
-    pub fn event(&mut self, event: &Event) -> bool {
+    pub fn handle(&mut self, event: &Event) -> bool {
         if !self.focused {
             return false;
         }
@@ -286,7 +286,7 @@ mod tests {
 
     fn typed(text: &mut TextArea, keys: &[Key]) {
         for k in keys {
-            text.event(&Event::Key(*k));
+            text.handle(&Event::Key(*k));
         }
     }
 
@@ -309,7 +309,7 @@ mod tests {
         let mut text = TextArea::new();
         typed(&mut text, &[Key::Char('x')]);
         assert_eq!(text.value(), "", "no focus, no typing");
-        assert!(!text.event(&Event::Paste("x".into())));
+        assert!(!text.handle(&Event::Paste("x".into())));
         text.focus(true);
         typed(
             &mut text,
@@ -321,9 +321,9 @@ mod tests {
         typed(&mut text, &[Key::Delete, Key::Delete, Key::Home, Key::Backspace]);
         assert_eq!(text.value(), "a", "nothing to delete at either end");
         typed(&mut text, &[Key::End]);
-        assert!(text.event(&Event::Paste("\tb\r\x07\nc".into())));
+        assert!(text.handle(&Event::Paste("\tb\r\x07\nc".into())));
         assert_eq!(text.value(), "a    b\nc");
-        assert!(!text.event(&Event::Tick) && !text.event(&Event::Key(Key::Tab)));
+        assert!(!text.handle(&Event::Tick) && !text.handle(&Event::Key(Key::Tab)));
         text.clear();
         assert_eq!((text.value().as_str(), text.cursor()), ("", (0, 0)));
     }

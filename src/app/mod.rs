@@ -7,7 +7,7 @@
 //! terminal back when you're done (or if anything panics).
 //!
 //! ```no_run
-//! use tinsel::app::{self, App, Event, Flow, Frame, Key, List, Panel, Size::*, hints};
+//! use tinsel::app::{self, App, Event, Flow, Frame, Key, Keymap, List, Panel, Size::*, hints};
 //!
 //! struct Picker {
 //!     flavours: Vec<&'static str>,
@@ -23,7 +23,7 @@
 //!     }
 //!
 //!     fn event(&mut self, event: &Event) -> Flow {
-//!         app::navigate(&mut self.selected, self.flavours.len(), event);
+//!         app::navigate(&mut self.selected, self.flavours.len(), event, Keymap::Vim);
 //!         match event {
 //!             Event::Key(Key::Enter | Key::Esc | Key::Char('q')) => Flow::Quit,
 //!             _ => Flow::Continue,
@@ -492,20 +492,37 @@ pub fn snapshot<A: App + ?Sized>(app: &A, width: usize, height: usize) -> Block 
     frame.snapshot()
 }
 
-/// Move a selection through a list of `len` things in response to an event: ↑↓ and j/k one
-/// at a time, Page Up/Down ten, Home/End (or g/G) to the ends, and the scroll wheel. Returns
-/// whether it moved. Made for [`List`], but works for anything with a position.
+/// Which keys move through a list or scroll a view, for [`navigate`], [`Scroll`] and
+/// [`GridState`]. Both have ↑↓ a step at a time, Page Up/Down a page, Home/End to the ends
+/// and the scroll wheel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Keymap {
+    /// The arrows and the keys above them, and nothing else, so letters are left free for
+    /// typing or the app's own shortcuts.
+    Arrows,
+    /// Those, and vim's j/k a step at a time and g/G to the ends. The default for a
+    /// [`Scroll`] and a [`GridState`].
+    #[default]
+    Vim,
+}
+
+/// Move a selection through a list of `len` things in response to an event, with the keys
+/// `keymap` names: ↑↓ one at a time, Page Up/Down ten, Home/End to the ends and the scroll
+/// wheel, and j/k and g/G too with [`Keymap::Vim`]. Returns whether it moved. Made for
+/// [`List`], but works for anything with a position.
 ///
 /// ```
-/// use tinsel::app::{Event, Key, navigate};
+/// use tinsel::app::{Event, Key, Keymap, navigate};
 ///
 /// let mut selected = 0;
-/// navigate(&mut selected, 3, &Event::Key(Key::Down));
-/// navigate(&mut selected, 3, &Event::Key(Key::End));
+/// navigate(&mut selected, 3, &Event::Key(Key::Down), Keymap::Arrows);
+/// navigate(&mut selected, 3, &Event::Key(Key::Char('G')), Keymap::Vim);
 /// assert_eq!(selected, 2);
+/// assert!(!navigate(&mut selected, 3, &Event::Key(Key::Char('k')), Keymap::Arrows));
 /// ```
-pub fn navigate(selected: &mut usize, len: usize, event: &Event) -> bool {
-    let Some((to, _)) = step(*selected, len.saturating_sub(1), 10, 1, event) else {
+pub fn navigate(selected: &mut usize, len: usize, event: &Event, keymap: Keymap) -> bool {
+    let Some((to, _)) = step(*selected, len.saturating_sub(1), 10, 1, event, keymap) else {
         return false;
     };
     let moved = to != *selected;
@@ -513,17 +530,22 @@ pub fn navigate(selected: &mut usize, len: usize, event: &Event) -> bool {
     moved
 }
 
-/// Where the keys [`navigate`] knows, and the wheel, take position `at` in `0..=last`: a
-/// page at a time `page` apart, a turn of the wheel `wheel`. Gives the new position, and
-/// whether the way was back towards the start, or nothing for any other event.
-fn step(at: usize, last: usize, page: usize, wheel: usize, event: &Event) -> Option<(usize, bool)> {
+/// Where the keys `keymap` names, and the wheel, take position `at` in `0..=last`: a page at
+/// a time `page` apart, a turn of the wheel `wheel`. Gives the new position, and whether the
+/// way was back towards the start, or nothing for any other event.
+fn step(at: usize, last: usize, page: usize, wheel: usize, event: &Event, keymap: Keymap) -> Option<(usize, bool)> {
+    let vim = keymap == Keymap::Vim;
     let (to, back) = match event {
-        Event::Key(Key::Up | Key::Char('k')) => (at.saturating_sub(1), true),
-        Event::Key(Key::Down | Key::Char('j')) => (at + 1, false),
+        Event::Key(Key::Up) => (at.saturating_sub(1), true),
+        Event::Key(Key::Down) => (at + 1, false),
+        Event::Key(Key::Char('k')) if vim => (at.saturating_sub(1), true),
+        Event::Key(Key::Char('j')) if vim => (at + 1, false),
         Event::Key(Key::PageUp) => (at.saturating_sub(page), true),
         Event::Key(Key::PageDown) => (at + page, false),
-        Event::Key(Key::Home | Key::Char('g')) => (0, true),
-        Event::Key(Key::End | Key::Char('G')) => (last, false),
+        Event::Key(Key::Home) => (0, true),
+        Event::Key(Key::End) => (last, false),
+        Event::Key(Key::Char('g')) if vim => (0, true),
+        Event::Key(Key::Char('G')) if vim => (last, false),
         Event::Mouse(m) if m.kind == MouseKind::ScrollUp => (at.saturating_sub(wheel), true),
         Event::Mouse(m) if m.kind == MouseKind::ScrollDown => (at + wheel, false),
         _ => return None,
@@ -1358,14 +1380,19 @@ mod tests {
             (Event::Key(Key::End), 19),
         ];
         for (event, want) in steps {
-            navigate(&mut at, 20, &event);
+            navigate(&mut at, 20, &event, Keymap::Vim);
             assert_eq!(at, want, "after {event:?}");
         }
-        assert!(!navigate(&mut at, 20, &Event::Key(Key::End)));
-        assert!(!navigate(&mut at, 20, &Event::Tick));
-        assert!(!navigate(&mut at, 20, &scroll(Click)));
+        assert!(!navigate(&mut at, 20, &Event::Key(Key::End), Keymap::Vim));
+        assert!(!navigate(&mut at, 20, &Event::Tick, Keymap::Vim));
+        assert!(!navigate(&mut at, 20, &scroll(Click), Keymap::Vim));
         let mut empty = 0;
-        assert!(!navigate(&mut empty, 0, &Event::Key(Key::Down)));
+        assert!(!navigate(&mut empty, 0, &Event::Key(Key::Down), Keymap::Vim));
+        // letters are left alone with the arrows alone
+        for c in ['j', 'k', 'g', 'G'] {
+            assert!(!navigate(&mut at, 20, &Event::Key(Key::Char(c)), Keymap::Arrows));
+        }
+        assert!(navigate(&mut at, 20, &Event::Key(Key::Up), Keymap::Arrows));
     }
 
     #[test]
