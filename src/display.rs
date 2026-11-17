@@ -52,6 +52,35 @@ impl Mode {
 
     /// How a display starting now shows itself.
     pub(crate) fn now() -> Mode {
-        Mode::pick(crate::output::output(), crate::output::is_terminal())
+        Mode::pick(crate::output::output(), animated())
+    }
+}
+
+/// Whether to redraw in place: on a terminal that can move its cursor. `TERM=dumb` (Emacs
+/// shell buffers, some CI runners) is a terminal that can't, so it gets plain lines.
+pub(crate) fn animated() -> bool {
+    if let Some(terminal) = crate::output::pretended_terminal() {
+        return terminal;
+    }
+    crate::output::is_terminal() && !dumb(std::env::var_os("TERM").as_deref())
+}
+
+fn dumb(term: Option<&std::ffi::OsStr>) -> bool {
+    term.is_some_and(|t| t == "dumb")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dumb_terminal_gets_plain_lines() {
+        assert!(dumb(Some("dumb".as_ref())));
+        assert!(!dumb(Some("xterm-256color".as_ref())));
+        assert!(!dumb(None));
+        assert_eq!(Mode::pick(Output::Pretty, false), Mode::Plain);
+        assert_eq!(Mode::pick(Output::Json, true), Mode::Json);
+        assert!(crate::output::with_terminal(true, animated));
+        assert!(!crate::output::with_terminal(false, animated));
     }
 }
