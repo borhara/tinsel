@@ -180,3 +180,8 @@ pub mod prelude {
         callout, error, hint, info, pairs, palette, prompt, rule, spin, success, title, try_spin, warn,
     };
 }
+
+/// The README's examples, compiled and run as doc tests so they keep up with the code.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
