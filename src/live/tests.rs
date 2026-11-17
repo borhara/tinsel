@@ -422,7 +422,7 @@ fn a_command_that_isnt_there_isnt_retried() {
     let live = Live::headless("c", "x");
     let err = live
         .step("missing")
-        .command(&mut Command::new("/nonexistent/tinsel-command"))
+        .command(Command::new("/nonexistent/tinsel-command"))
         .retries(3)
         .run()
         .unwrap_err();
@@ -433,6 +433,30 @@ fn a_command_that_isnt_there_isnt_retried() {
     );
     assert!(std::error::Error::source(&err).is_some());
     assert!(err.status().is_none() && !err.timed_out() && err.output().is_empty());
+    assert!(matches!(err.kind(), RunErrorKind::Spawn(_)));
+    assert_eq!((err.program(), err.code()), ("/nonexistent/tinsel-command", None));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_command_reads_nothing_unless_given_input() {
+    let live = Live::headless("c", "x");
+    let read = |stdin: Option<Stdio>| {
+        let mut command = Command::new("sh");
+        command.args(["-c", "read line && echo got $line"]);
+        let step = live.step("reads");
+        let command = step.command(command);
+        match stdin {
+            Some(stdin) => command.stdin(stdin).run(),
+            None => command.run(),
+        }
+    };
+    assert_eq!(read(None).unwrap_err().code(), Some(1), "nothing to read");
+    let file = std::env::temp_dir().join(format!("tinsel-stdin-{}", std::process::id()));
+    std::fs::write(&file, "hello\n").unwrap();
+    let given = read(Some(std::fs::File::open(&file).unwrap().into()));
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(given.unwrap(), "got hello");
 }
 
 #[cfg(unix)]

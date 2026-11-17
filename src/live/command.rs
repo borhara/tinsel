@@ -22,8 +22,8 @@ pub(super) fn attempts_note(error: &str, retries: u32) -> String {
     }
 }
 
-/// A command to run as a [`Step`], from [`Step::command`]: set a timeout or retries, then
-/// [`run`](StepCommand::run) it.
+/// A command to run as a [`Step`], from [`Step::command`]: set a timeout, retries or what it
+/// reads, then [`run`](StepCommand::run) it.
 ///
 /// ```no_run
 /// use std::process::Command;
@@ -39,7 +39,8 @@ pub(super) fn attempts_note(error: &str, retries: u32) -> String {
 /// ```
 pub struct StepCommand<'a, 'c> {
     pub(super) step: &'a Step,
-    pub(super) command: &'c mut Command,
+    pub(super) command: Box<dyn BorrowMut<Command> + 'c>,
+    pub(super) stdin: Option<Stdio>,
     pub(super) timeout: Option<Duration>,
     pub(super) retries: u32,
     pub(super) tail: usize,
@@ -65,10 +66,29 @@ impl StepCommand<'_, '_> {
         self
     }
 
+    /// What the command reads as its input. Nothing unless this says otherwise, so a command
+    /// that stops to ask something fails rather than waiting unseen; `Stdio::inherit()` hands
+    /// it the terminal's input, for one that reads what's typed. Prompts written straight to
+    /// the terminal, as `sudo` and `ssh` ask for passwords, work either way.
+    ///
+    /// ```no_run
+    /// use std::process::{Command, Stdio};
+    ///
+    /// let live = tinsel::Live::new("setup", "my-app");
+    /// live.step("Install").command(Command::new("./install.sh")).stdin(Stdio::inherit()).run()?;
+    /// # Ok::<(), tinsel::RunError>(())
+    /// ```
+    pub fn stdin(mut self, stdin: Stdio) -> Self {
+        self.stdin = Some(stdin);
+        self
+    }
+
     /// Run the command, marking the step done or failed. Returns everything the command
     /// printed, stdout and stderr together.
     pub fn run(mut self) -> Result<String, RunError> {
         self.step.start_if_pending();
+        let stdin = self.stdin.take().unwrap_or_else(Stdio::null);
+        (*self.command).borrow_mut().stdin(stdin);
         let mut attempt = 0;
         loop {
             match self.once() {
@@ -97,10 +117,9 @@ impl StepCommand<'_, '_> {
     }
 
     fn once(&mut self) -> Result<String, RunError> {
-        let program = self.command.get_program().to_string_lossy().into_owned();
-        let mut child = self
-            .command
-            .stdin(Stdio::null())
+        let command = (*self.command).borrow_mut();
+        let program = command.get_program().to_string_lossy().into_owned();
+        let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -194,10 +213,15 @@ pub struct RunError {
     kind: RunErrorKind,
 }
 
+/// What went wrong running a command, from [`RunError::kind`].
 #[derive(Debug)]
-pub(super) enum RunErrorKind {
+#[non_exhaustive]
+pub enum RunErrorKind {
+    /// It couldn't be started: not installed, say, or not allowed to run.
     Spawn(std::io::Error),
+    /// It ran and failed, ending with this status.
     Exit(ExitStatus),
+    /// It was stopped for running past its [`timeout`](StepCommand::timeout), this long.
     TimedOut(Duration),
 }
 
@@ -209,6 +233,22 @@ impl RunErrorKind {
 }
 
 impl RunError {
+    /// The program that was run, as it was named: `cargo`, `./deploy.sh`.
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    /// What went wrong.
+    pub fn kind(&self) -> &RunErrorKind {
+        &self.kind
+    }
+
+    /// The exit code, if the command ran to the end and exited with one (rather than being
+    /// stopped by a signal).
+    pub fn code(&self) -> Option<i32> {
+        self.status().and_then(|s| s.code())
+    }
+
     /// Everything the command printed before it stopped, stdout and stderr together.
     pub fn output(&self) -> &str {
         &self.output

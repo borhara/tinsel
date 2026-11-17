@@ -1,3 +1,4 @@
+use std::borrow::BorrowMut;
 use std::io::Read;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -956,16 +957,21 @@ impl Step {
     /// # Ok::<(), tinsel::RunError>(())
     /// ```
     ///
-    /// For a timeout or retries, use [`command`](Step::command).
-    pub fn run(&self, command: &mut Command) -> Result<String, RunError> {
+    /// The command can be handed over, or lent as `&mut Command` as above. It reads nothing
+    /// (see [`StepCommand::stdin`]), and its output is collected, so a lent command keeps
+    /// those settings afterwards.
+    ///
+    /// For a timeout, retries or input, use [`command`](Step::command).
+    pub fn run<'c>(&self, command: impl BorrowMut<Command> + 'c) -> Result<String, RunError> {
         self.command(command).run()
     }
 
     /// A command to run as this step, with options: see [`StepCommand`].
-    pub fn command<'c>(&self, command: &'c mut Command) -> StepCommand<'_, 'c> {
+    pub fn command<'c>(&self, command: impl BorrowMut<Command> + 'c) -> StepCommand<'_, 'c> {
         StepCommand {
             step: self,
-            command,
+            command: Box::new(command),
+            stdin: None,
             timeout: None,
             retries: 0,
             tail: 12,
