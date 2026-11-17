@@ -382,20 +382,40 @@ impl Frame {
         if self.offscreen {
             return;
         }
-        let mut s = if self.drawn > 0 {
-            format!("\x1b[{}F", self.drawn)
-        } else {
-            "\r".to_string()
-        };
-        for line in lines {
-            s += line;
-            s += "\x1b[K\n";
-        }
-        s += "\x1b[J";
+        let (cols, rows) = crate::term::stderr_size();
+        let (s, drawn) = frame(self.drawn, lines, cols, rows);
         eprint!("{s}");
         let _ = io::stderr().flush();
-        self.drawn = lines.len();
+        self.drawn = drawn;
     }
+}
+
+/// The escape codes and text that draw `lines` over the `drawn` rows of the last frame on a
+/// terminal of `cols`×`rows`, and how many rows they take up.
+///
+/// A line wider than the terminal wraps onto the rows below, so rows are counted, not lines:
+/// otherwise a long answer would leave a stale copy behind on every key. Only the lines that
+/// fit on screen are drawn, since the cursor can't move back above the top of it to redraw
+/// the rest.
+fn frame(drawn: usize, lines: &[String], cols: usize, rows: usize) -> (String, usize) {
+    let mut s = if drawn > 0 {
+        format!("\x1b[{drawn}F")
+    } else {
+        "\r".to_string()
+    };
+    let room = rows.saturating_sub(1).max(1);
+    let mut used = 0;
+    for line in lines {
+        let tall = text::width(line).div_ceil(cols.max(1)).max(1);
+        if used > 0 && used + tall > room {
+            break;
+        }
+        s += line;
+        s += "\x1b[K\n";
+        used += tall;
+    }
+    s += "\x1b[J";
+    (s, used)
 }
 
 /// Where a question reads keys and draws: the terminal in raw mode, or a script in tests.
@@ -3234,6 +3254,25 @@ mod tests {
         for (from, to) in pairs {
             assert_eq!(Key::from(from), to, "{from:?}");
         }
+    }
+
+    #[test]
+    fn a_frame_counts_the_rows_a_long_line_wraps_onto() {
+        let long = "x".repeat(60);
+        let (_, drawn) = frame(0, &[long.clone(), "next".into()], 40, 24);
+        assert_eq!(drawn, 3);
+        let (s, _) = frame(drawn, &[long], 40, 24);
+        assert!(s.starts_with("\x1b[3F"), "{s:?}");
+        // exactly the width still takes one row
+        assert_eq!(frame(0, &["y".repeat(40)], 40, 24).1, 1);
+    }
+
+    #[test]
+    fn a_frame_taller_than_the_screen_draws_what_fits() {
+        let lines: Vec<String> = (0..30).map(|i| format!("option {i}")).collect();
+        let (s, drawn) = frame(0, &lines, 80, 10);
+        assert_eq!(drawn, 9);
+        assert!(s.contains("option 8") && !s.contains("option 9"), "{s:?}");
     }
 
     #[test]
