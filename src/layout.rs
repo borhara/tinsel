@@ -25,10 +25,48 @@ pub fn badge(color: Rgb, label: &str) -> String {
 /// println!("docs: {}", tinsel::link("tinsel on docs.rs", "https://docs.rs/tinsel"));
 /// ```
 pub fn link(label: &str, url: &str) -> String {
+    let label = clean_label(label);
     if color_mode() == ColorMode::None {
-        return label.to_string();
+        return label;
     }
-    format!("\x1b]8;;{url}\x1b\\{}\x1b]8;;\x1b\\", underline(&paint(BLUSH, label)))
+    format!(
+        "\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\",
+        clean_url(url),
+        underline(&paint(BLUSH, &label))
+    )
+}
+
+/// Control characters (C0, DEL and C1) can't end the link early or run other commands.
+fn is_control(c: char) -> bool {
+    c < ' ' || ('\x7f'..='\u{9f}').contains(&c)
+}
+
+/// The url with its control characters percent-encoded, so it can't break out of the link.
+fn clean_url(url: &str) -> String {
+    let mut out = String::with_capacity(url.len());
+    for c in url.chars() {
+        if is_control(c) {
+            let mut buf = [0; 4];
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out += &format!("%{b:02X}");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The label with its colours kept but any other escape or control character taken out.
+fn clean_label(label: &str) -> String {
+    text::tokens(label)
+        .filter_map(|t| match t {
+            text::Token::Escape(e) if e.starts_with("\x1b[") && e.ends_with('m') => Some(e),
+            text::Token::Escape(_) => None,
+            text::Token::Text(t, _) if t.chars().any(is_control) => None,
+            text::Token::Text(t, _) => Some(t),
+        })
+        .collect()
 }
 
 /// Keys in a muted column as wide as the longest, values beside them.
@@ -229,7 +267,9 @@ impl Code {
     pub fn around(file: &str, line: usize, context: usize) -> Self {
         let line = line.max(1);
         let first = line.saturating_sub(context).max(1);
-        let excerpt: Vec<&str> = file.lines().skip(first - 1).take(line + context + 1 - first).collect();
+        // saturating, so a huge line or context takes the rest of the file rather than overflowing
+        let count = line.saturating_add(context).saturating_add(1).saturating_sub(first);
+        let excerpt: Vec<&str> = file.lines().skip(first - 1).take(count).collect();
         Code::new(excerpt.join("\n")).first_line(first).highlight(line)
     }
 
@@ -307,7 +347,9 @@ impl Code {
                 paint(SOFT, &format!("{path}{at}"))
             ));
         }
-        for (i, line) in self.src.lines().enumerate() {
+        for (i, raw) in self.src.lines().enumerate() {
+            // tabs are drawn as the spaces they reach, so carets below line up with them
+            let line = &text::expand_tabs(raw);
             let n = self.first_line + i;
             let num = if self.numbers {
                 format!("{n:>w$} ")
@@ -331,10 +373,14 @@ impl Code {
             ));
             if let Some((col, len, label)) = &self.caret {
                 // measured in columns, so wide characters before the carets keep them in place
-                let before: String = line.chars().take(col - 1).collect();
-                let under: String = line.chars().skip(col - 1).take(*len).collect();
+                // columns count from the source's characters, a tab as one
+                let before: String = raw.chars().take(col - 1).collect();
+                let end = (col - 1).saturating_add(*len);
+                let through: String = raw.chars().take(end).collect();
+                let (before, through) = (text::expand_tabs(&before), text::expand_tabs(&through));
                 // past the end of the line, a character is taken as one column
-                let carets = text::width(&under) + len - under.chars().count();
+                let short = end.saturating_sub(raw.chars().count().max(col - 1));
+                let carets = text::width(&through) - text::width(&before) + short;
                 let label = if label.is_empty() {
                     String::new()
                 } else {
@@ -436,6 +482,50 @@ mod tests {
         );
         let linked = crate::style::with_color_mode(ColorMode::TrueColor, || link("site", url));
         assert!(linked.starts_with("\x1b]8;;https://example.com\x1b\\"), "{linked:?}");
+    }
+
+    #[test]
+    fn links_cannot_break_out_of_themselves() {
+        let url = "https://x\x1b\\\x1b]0;PWNED\x07\x1b[2J\u{9b}";
+        let label = "do\x1b]0;t\x07c\rs";
+        let linked = crate::style::with_color_mode(ColorMode::TrueColor, || link(label, url));
+        assert!(
+            linked.starts_with("\x1b]8;;https://x%1B\\%1B]0;PWNED%07%1B[2J%C2%9B\x1b\\"),
+            "{linked:?}"
+        );
+        // only the link's own two sequences are OSC, and the rest are colours
+        assert_eq!(linked.matches("\x1b]").count(), 2, "{linked:?}");
+        assert!(!linked.contains('\x07') && !linked.contains('\r'), "{linked:?}");
+        assert_eq!(text::strip_ansi(&linked), "docs");
+        let plain = crate::style::with_color_mode(ColorMode::None, || link(label, url));
+        assert_eq!(plain, "docs");
+        // a label's own colours are kept
+        let styled = crate::style::with_color_mode(ColorMode::TrueColor, || {
+            let label = crate::style::bold("site");
+            (link(&label, "https://x.y"), label)
+        });
+        assert!(styled.0.contains(&styled.1), "{styled:?}");
+    }
+
+    #[test]
+    fn excerpts_around_a_line_never_overflow() {
+        crate::set_color_mode(ColorMode::None);
+        let out = Code::around("a\nb\nc", 2, usize::MAX).lines().plain();
+        assert_eq!(out, "  1 │ a\n  2 › b\n  3 │ c");
+        let out = Code::around("a\nb", usize::MAX, usize::MAX).lines().plain();
+        assert_eq!(out, "  1 │ a\n  2 │ b");
+    }
+
+    #[test]
+    fn carets_line_up_after_tabs() {
+        crate::set_color_mode(ColorMode::None);
+        let out = Code::new("\tx = 1").highlight(1).caret(2, 1, "").lines().plain();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "  1 ›         x = 1");
+        assert_eq!(lines[1], "    │         ^");
+        // a tab under the carets is as wide as the spaces it reaches
+        let out = Code::new("a\tb").highlight(1).caret(2, 1, "").lines().plain();
+        assert!(out.ends_with("│  ^^^^^^^"), "{out}");
     }
 
     #[test]
