@@ -136,8 +136,6 @@ pub struct Grid<'a> {
     body: Body,
     empty: String,
     fill: Option<usize>,
-    /// Spaces added after one column's header, to widen it: (column, spaces).
-    grow: Option<(usize, usize)>,
 }
 
 impl<'a> Grid<'a> {
@@ -157,7 +155,6 @@ impl<'a> Grid<'a> {
             body: Body::Rows,
             empty: "nothing here yet".into(),
             fill: None,
-            grow: None,
         }
     }
 
@@ -286,25 +283,32 @@ impl<'a> Grid<'a> {
             return None;
         }
         let top = self.cursor.map_or(0, |c| c.top.get());
-        match self.lines().get(top + y - area.y - 2) {
-            Some(Line::Row(i)) => Some(*i),
+        match self.line_at(top + y - area.y - 2) {
+            Some(Line::Row(i)) => Some(i),
             _ => None,
         }
     }
 
-    /// The body's lines from the top: headings and rows, in order.
-    fn lines(&self) -> Vec<Line<'_>> {
-        let mut headings = self.headings.iter().peekable();
-        let mut lines = Vec::with_capacity(self.rows.len() + self.headings.len());
-        for i in 0..=self.rows.len() {
-            while let Some((_, text)) = headings.next_if(|h| h.0 <= i) {
-                lines.push(Line::Heading(text));
+    /// How many lines the body has: headings and rows.
+    fn total(&self) -> usize {
+        self.rows.len() + self.headings.len()
+    }
+
+    /// The body's line `line` from the top, found without listing them all, so a long
+    /// table costs only the lines that show.
+    fn line_at(&self, line: usize) -> Option<Line<'_>> {
+        // heading k sits after the k headings and the rows before it
+        for (k, (row, text)) in self.headings.iter().enumerate() {
+            let at = row + k;
+            if line == at {
+                return Some(Line::Heading(text));
             }
-            if i < self.rows.len() {
-                lines.push(Line::Row(i));
+            if line < at {
+                return Some(Line::Row(line - k));
             }
         }
-        lines
+        let row = line.checked_sub(self.headings.len())?;
+        (row < self.rows.len()).then_some(Line::Row(row))
     }
 
     /// Which line row `row` is on, counting headings.
@@ -326,29 +330,66 @@ impl<'a> Grid<'a> {
                 h.push_str(if desc { " ▼" } else { " ▲" });
             }
         }
-        if let Some((col, spaces)) = self.grow {
-            // a column of cells can be wider than the headers go
-            headers.resize(headers.len().max(col + 1), String::new());
-            headers[col].push_str(&" ".repeat(spaces));
-        }
         headers
     }
 
-    fn table(&self, headers: &[String]) -> Table {
-        let mut table = Table::new(headers.iter().cloned());
-        for row in &self.rows {
-            table = table.row(row.iter().cloned());
+    /// The header and these rows laid out as a table, with each column as wide as `widths`
+    /// says and lined up as it would be with every row there, so drawing only the rows that
+    /// show looks the same as drawing them all.
+    /// `fill` is the column widened to fill the area, and how wide it now is.
+    fn table(
+        &self,
+        headers: &[String],
+        widths: &[usize],
+        fill: Option<(usize, usize)>,
+        rows: impl Iterator<Item = usize>,
+    ) -> Table {
+        let aligns: Vec<Align> = (0..widths.len()).map(|c| self.column_align(c)).collect();
+        // a header padded out to the column's full width holds the column open
+        let headers = widths.iter().zip(&aligns).enumerate().map(|(c, (&w, &align))| {
+            let header = headers.get(c).map_or("", String::as_str);
+            match align {
+                Align::Left => text::pad(header, w),
+                Align::Right => text::pad_left(header, w),
+            }
+        });
+        let mut table = Table::new(headers);
+        for row in rows {
+            table = table.row(self.rows[row].iter().cloned());
         }
-        for &(col, align) in &self.align {
+        for (col, align) in aligns.into_iter().enumerate() {
             table = table.align(col, align);
         }
-        for &(col, cols) in &self.limits {
+        for &(col, cols) in self.limits.iter().chain(&fill) {
             table = table.max_width(col, cols);
         }
         if self.blank {
             table = table.blank_cells();
         }
         table
+    }
+
+    /// Which way `column` lines up: as asked, or right for a column of numbers, as
+    /// [`Table`] decides it.
+    fn column_align(&self, column: usize) -> Align {
+        if let Some(&(_, align)) = self.align.iter().rev().find(|a| a.0 == column) {
+            return align;
+        }
+        let numeric = self.rows.iter().filter_map(|r| r.get(column)).all(|cell| {
+            let stripped;
+            let cell = if cell.contains('\x1b') {
+                stripped = text::strip_ansi(cell);
+                stripped.trim()
+            } else {
+                cell.trim()
+            };
+            cell.is_empty() || cell.starts_with(|ch: char| ch.is_ascii_digit() || ch == '-' || ch == '$')
+        });
+        if numeric && !self.rows.is_empty() {
+            Align::Right
+        } else {
+            Align::Left
+        }
     }
 
     /// How wide each column is, as the table lays them out.
@@ -362,7 +403,7 @@ impl<'a> Grid<'a> {
                     .chain([&headers.to_vec()])
                     .filter_map(|r| r.get(c))
                     .map(|cell| {
-                        let w = text::width(cell);
+                        let w = width(cell);
                         limit.map_or(w, |l| w.min(l))
                     })
                     .max()
@@ -373,6 +414,16 @@ impl<'a> Grid<'a> {
     }
 }
 
+/// How wide `cell` shows, without copying it when there's no styling to strip.
+fn width(cell: &str) -> usize {
+    if cell.is_ascii() && !cell.contains('\x1b') {
+        // plain ascii: one column a character, but for nul as the text module counts it
+        cell.bytes().filter(|&b| b != 0).count()
+    } else {
+        text::width(cell)
+    }
+}
+
 /// The band behind the cursor row.
 fn band(focused: bool) -> Rgb {
     mix(TRACK, BERRY, if focused { 0.35 } else { 0.16 })
@@ -380,24 +431,17 @@ fn band(focused: bool) -> Rgb {
 
 const STRIPE: Rgb = Rgb(38, 32, 36);
 
-impl<'a> Grid<'a> {
-    /// This grid with its [`fill`](Grid::fill) column widened to fill `area`, if it has one
-    /// and there's room to spare.
-    fn filled(&self, area: Rect) -> Option<Grid<'a>> {
+impl Grid<'_> {
+    /// How wide the [`fill`](Grid::fill) column grows to fill `area`, given the columns'
+    /// `widths`, if the grid has one and there's room to spare: (column, its new width).
+    fn spare(&self, area: Rect, widths: &[usize]) -> Option<(usize, usize)> {
         let column = self.fill?;
-        let headers = self.headers();
-        let widths = self.widths(&headers);
         let width = *widths.get(column)?;
         let inner = widths.iter().sum::<usize>() + 3 * widths.len().saturating_sub(1);
-        let lines = self.rows.len() + self.headings.len();
-        let overflow = matches!(self.body, Body::Rows) && lines > area.height.saturating_sub(2);
+        let overflow = matches!(self.body, Body::Rows) && self.total() > area.height.saturating_sub(2);
         let room = area.width.saturating_sub(2 + overflow as usize);
         let spare = room.checked_sub(inner).filter(|&s| s > 0)?;
-        let mut grid = self.clone();
-        grid.limits.push((column, width + spare));
-        let header = headers.get(column).map_or(0, |h| text::width(h));
-        grid.grow = Some((column, width + spare - header));
-        Some(grid)
+        Some((column, width + spare))
     }
 }
 
@@ -406,10 +450,14 @@ impl Widget for Grid<'_> {
         if area.is_empty() {
             return;
         }
-        if let Some(grid) = self.filled(area) {
-            return grid.draw(area, frame);
+        // every row is measured, but cheaply; only the rows that show are laid out
+        let headers = self.headers();
+        let mut widths = self.widths(&headers);
+        let fill = self.spare(area, &widths);
+        if let Some((column, cols)) = fill {
+            widths[column] = cols;
         }
-        self.draw(area, frame);
+        self.draw(area, frame, &headers, &widths, fill);
     }
 
     /// Every column in full, and every row.
@@ -417,24 +465,17 @@ impl Widget for Grid<'_> {
         let widths = self.widths(&self.headers());
         let inner = widths.iter().sum::<usize>() + 3 * widths.len().saturating_sub(1);
         let headings = self.headings.iter().map(|h| text::width(&h.1)).max().unwrap_or(0);
-        let lines = self.rows.len() + self.headings.len();
-        Some((inner.max(headings) + 2, lines.max(1) + 2))
+        Some((inner.max(headings) + 2, self.total().max(1) + 2))
     }
 }
 
 impl Grid<'_> {
-    fn draw(&self, area: Rect, frame: &mut Frame) {
-        let headers = self.headers();
-        let lines = self.table(&headers).lines().into_lines();
-        // every line starts with the table's two-column margin, which the gutter replaces
-        let line = |i: usize| lines.get(i).map(|l| l.chars().skip(2).collect::<String>());
-
+    fn draw(&self, area: Rect, frame: &mut Frame, headers: &[String], widths: &[usize], fill: Option<(usize, usize)>) {
         let n = self.rows.len();
         let rows = matches!(self.body, Body::Rows) && n > 0;
         let body = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2));
         let chosen = self.cursor.filter(|_| rows).map(|c| c.row.min(n - 1));
-        let body_lines = self.lines();
-        let total = body_lines.len();
+        let total = self.total();
         let overflow = rows && total > body.height;
         let content = Rect::new(
             area.x + 2,
@@ -444,7 +485,6 @@ impl Grid<'_> {
         );
 
         // sideways: a whole column at a time, until everything from there on fits
-        let widths = self.widths(&headers);
         let inner = widths.iter().sum::<usize>() + 3 * widths.len().saturating_sub(1);
         let starts: Vec<usize> = widths
             .iter()
@@ -482,6 +522,27 @@ impl Grid<'_> {
             c.last_column.set(last_column);
         }
 
+        // only the rows that show are laid out, so a long table costs no more than a short one
+        let showing: Vec<Line> = (top..total.min(top + body.height))
+            .filter_map(|l| self.line_at(l))
+            .collect();
+        let shown: Vec<usize> = match self.body {
+            Body::Rows => showing
+                .iter()
+                .filter_map(|l| match l {
+                    Line::Row(i) => Some(*i),
+                    Line::Heading(_) => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let lines = self
+            .table(headers, widths, fill, shown.iter().copied())
+            .lines()
+            .into_lines();
+        // every line starts with the table's two-column margin, which the gutter replaces
+        let line = |i: usize| lines.get(i).map(|l| l.chars().skip(2).collect::<String>());
+
         // the header and the rule under it
         for row in 0..2 {
             frame.print_from(content, row, &line(row).unwrap_or_default(), skip);
@@ -502,11 +563,11 @@ impl Grid<'_> {
                 let message = format!("{}  {}", paint(RED, "✕"), paint(RED, message));
                 centered(frame, body, &message);
             }
-            Body::Loading => skeleton(frame, body, content, &widths, skip),
+            Body::Loading => skeleton(frame, body, content, widths, skip),
             Body::Rows if n == 0 => centered(frame, body, &paint(MUTED, &self.empty)),
             Body::Rows => {
                 let across = Rect::new(area.x, 0, area.width - overflow as usize, 1);
-                for (row, &item) in body_lines.iter().skip(top).take(body.height).enumerate() {
+                for (row, &item) in showing.iter().enumerate() {
                     let y = body.y + row;
                     let strip = Rect { y, ..across };
                     let i = match item {
@@ -530,7 +591,9 @@ impl Grid<'_> {
                     } else if self.striped && i % 2 == 1 {
                         frame.tint(strip, STRIPE);
                     }
-                    let l = line(i + 2).unwrap_or_default();
+                    // the table's lines are the header, its rule, then the shown rows in order
+                    let at = shown.iter().position(|&r| r == i).unwrap_or(usize::MAX);
+                    let l = line(at.saturating_add(2)).unwrap_or_default();
                     frame.print_from(Rect { y, ..content }, 0, &l, skip);
                 }
                 if overflow {
@@ -589,6 +652,46 @@ mod tests {
         let mut f = Frame::new(w, h);
         f.render(f.area(), grid);
         f.snapshot().plain()
+    }
+
+    #[test]
+    fn only_the_rows_showing_are_laid_out_and_they_line_up_as_if_all_were() {
+        // numbers all the way down but for the last row, so the column is lined up left
+        let mut grid = Grid::new(["id", "name"]);
+        let mut table = Table::new(["id", "name"]);
+        for i in 0..1000 {
+            let row = [
+                if i == 999 {
+                    "n/a".to_string()
+                } else {
+                    (i * 7).to_string()
+                },
+                format!("row {i}"),
+            ];
+            grid = grid.row(row.clone());
+            table = table.row(row);
+        }
+        let mut cursor = Cursor::new();
+        cursor.select(500);
+        let shown = drawn(30, 6, grid.clone().cursor(&cursor));
+        crate::set_color_mode(ColorMode::None);
+        let all = table.lines().plain();
+        let all: Vec<&str> = all.lines().collect();
+        let want: Vec<String> = all[..2]
+            .iter()
+            .chain(&all[499..503])
+            .map(|l| format!("  {}", &l[2..]).trim_end().to_string())
+            .collect();
+        let shown: Vec<String> = shown
+            .lines()
+            .map(|l| {
+                l.replacen('›', " ", 1)
+                    .trim_end_matches(['│', '┃'])
+                    .trim_end()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(shown, want);
     }
 
     #[test]
