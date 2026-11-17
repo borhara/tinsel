@@ -540,6 +540,8 @@ struct Session {
     reader: Option<std::thread::JoinHandle<()>>,
     /// The resize handler there was before, to put back.
     resize: Option<usize>,
+    /// The same for hangups and kills.
+    termination: [Option<usize>; 2],
     _hook: Hook,
 }
 
@@ -593,6 +595,7 @@ impl Session {
             control: Arc::default(),
             reader: None,
             resize: term::watch_resize(),
+            termination: term::guard_termination(LEAVE),
             _hook: hook,
         };
         RUNNING.with(|r| {
@@ -624,6 +627,7 @@ impl Drop for Session {
         leave_screen();
         // out of line mode, unless a suspended closure panicked and it's already there
         RUNNING.with(|r| r.borrow_mut().take());
+        term::unguard_termination(std::mem::take(&mut self.termination));
         term::forget_terminal();
     }
 }

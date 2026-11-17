@@ -727,6 +727,10 @@ const SIGINT: i32 = 2;
 #[cfg(unix)]
 const SIG_ERR: usize = usize::MAX;
 #[cfg(unix)]
+const SIGHUP: i32 = 1;
+#[cfg(unix)]
+const SIGTERM: i32 = 15;
+#[cfg(unix)]
 const SIG_DFL: usize = 0;
 #[cfg(unix)]
 const SIG_IGN: usize = 1;
@@ -752,9 +756,77 @@ unsafe extern "C" {
     fn signal(sig: i32, handler: usize) -> usize;
     fn write(fd: i32, buf: *const std::ffi::c_void, count: usize) -> isize;
     fn _exit(code: i32) -> !;
+    fn raise(sig: i32) -> i32;
     fn tcgetattr(fd: i32, termios: *mut u8) -> i32;
     fn tcsetattr(fd: i32, action: i32, termios: *const u8) -> i32;
 }
+
+/// What a full-screen app writes on its way out, for [`on_terminate`] to write too.
+static LEAVING: std::sync::atomic::AtomicPtr<u8> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static LEAVING_LEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Hangups (the window closed) and kills (SIGTERM) end the program at once, which would leave
+/// the terminal in raw mode on the alternate screen. While guarded, they put the terminal
+/// back and write `leave` first, then end the program as they would have. Only signals with
+/// no handler of their own are guarded; the previous handlers are returned for
+/// [`unguard_termination`].
+#[cfg(unix)]
+pub(crate) fn guard_termination(leave: &'static str) -> [Option<usize>; 2] {
+    use std::sync::atomic::Ordering::SeqCst;
+    LEAVING_LEN.store(leave.len(), SeqCst);
+    LEAVING.store(leave.as_ptr().cast_mut(), SeqCst);
+    [SIGHUP, SIGTERM].map(|sig| {
+        // SAFETY: on_terminate only calls async-signal-safe functions
+        let prev = unsafe { signal(sig, on_terminate as extern "C" fn(i32) as usize) };
+        if prev == SIG_ERR {
+            return None;
+        }
+        if prev != SIG_DFL {
+            // ignored, or the program's own: either way, it stays
+            // SAFETY: prev came from signal() itself, so it is a valid handler value
+            unsafe { signal(sig, prev) };
+            return None;
+        }
+        Some(prev)
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn unguard_termination(prev: [Option<usize>; 2]) {
+    for (sig, prev) in [SIGHUP, SIGTERM].into_iter().zip(prev) {
+        if let Some(prev) = prev {
+            // SAFETY: prev came from signal() itself, so it is a valid handler value
+            unsafe { signal(sig, prev) };
+        }
+    }
+}
+
+#[cfg(unix)]
+extern "C" fn on_terminate(sig: i32) {
+    use std::sync::atomic::Ordering::SeqCst;
+    // SAFETY: tcsetattr, write, signal and raise are all async-signal-safe; SAVED_TERMIOS is
+    // only written before HAVE_SAVED is set, and LEAVING points at a &'static str
+    unsafe {
+        if HAVE_SAVED.load(SeqCst) {
+            tcsetattr(0, TCSANOW, (&raw const SAVED_TERMIOS).cast());
+        }
+        let leave = LEAVING.load(SeqCst);
+        if !leave.is_null() {
+            write(1, leave.cast(), LEAVING_LEN.load(SeqCst));
+        }
+        // the signal waits until this handler returns, then ends the program as it would have
+        signal(sig, SIG_DFL);
+        raise(sig);
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn guard_termination(_: &'static str) -> [Option<usize>; 2] {
+    [None, None]
+}
+
+#[cfg(not(unix))]
+pub(crate) fn unguard_termination(_: [Option<usize>; 2]) {}
 
 #[cfg(unix)]
 extern "C" fn on_interrupt(_: i32) {
@@ -907,9 +979,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_resize_is_noted_while_watched() {
-        unsafe extern "C" {
-            fn raise(sig: i32) -> i32;
-        }
         let prev = watch_resize();
         assert!(prev.is_some());
         // SAFETY: raise only delivers a signal, to the handler just set
@@ -917,6 +986,20 @@ mod tests {
         assert!(resized());
         assert!(!resized(), "noted once");
         unwatch_resize(prev);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hangups_and_kills_are_guarded_unless_the_program_handles_them() {
+        extern "C" fn own(_: i32) {}
+        let own = own as extern "C" fn(i32) as usize;
+        // SAFETY: `own` does nothing, and each handler is put back as it was
+        unsafe {
+            let (hup, term) = (signal(SIGHUP, own), signal(SIGTERM, SIG_DFL));
+            assert_eq!(guard_termination("bye"), [None, Some(SIG_DFL)]);
+            assert_eq!(signal(SIGHUP, hup), own, "the program's own handler stays");
+            assert_eq!(signal(SIGTERM, term), on_terminate as extern "C" fn(i32) as usize);
+        }
     }
 
     #[cfg(not(windows))]
