@@ -55,7 +55,8 @@ impl From<crate::app::Key> for Key {
 ///
 /// Questions behave as they do in a terminal (a piped stdin is ignored) but draw nothing.
 /// A question that needs a key after the last one fails with an [`Error::Io`] of kind
-/// `UnexpectedEof`. [`editor`] still needs a terminal. [`typed`] turns text into keys.
+/// `UnexpectedEof`. [`editor`] can't be scripted, so it's an [`Error::NotATerminal`]
+/// meanwhile. [`typed`] turns text into keys.
 ///
 /// ```
 /// use tinsel::app::Key;
