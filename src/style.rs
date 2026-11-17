@@ -1,5 +1,7 @@
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
+
+use crate::output::Target;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// A colour as red, green and blue, 0-255 each.
@@ -51,28 +53,102 @@ pub enum ColorMode {
     TrueColor,
 }
 
-// 0 = not decided yet; otherwise 1 + the ColorMode's position
-static MODE: AtomicU8 = AtomicU8::new(0);
-/// Whether MODE was worked out rather than chosen, so it can be worked out again for another stream.
-static DETECTED: AtomicBool = AtomicBool::new(false);
+/// A colour mode as a byte for the atomics below; 0 is "not decided".
+fn mode_code(mode: ColorMode) -> u8 {
+    match mode {
+        ColorMode::None => 1,
+        ColorMode::Ansi256 => 2,
+        ColorMode::TrueColor => 3,
+    }
+}
 
-/// The colour mode in use. Decided once, from `NO_COLOR`, whether stdout (or the
-/// [`Target`](crate::Target)) is a terminal, and
+fn mode_from(code: u8) -> Option<ColorMode> {
+    match code {
+        1 => Some(ColorMode::None),
+        2 => Some(ColorMode::Ansi256),
+        3 => Some(ColorMode::TrueColor),
+        _ => None,
+    }
+}
+
+// The mode chosen with set_color_mode, which wins over anything worked out; 0 = none chosen.
+static CHOSEN: AtomicU8 = AtomicU8::new(0);
+// The mode worked out for stdout and for stderr, each decided the first time it's needed.
+static DETECTED: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
+
+fn stream_slot(stream: Target) -> &'static AtomicU8 {
+    match stream {
+        Target::Stdout => &DETECTED[0],
+        Target::Stderr => &DETECTED[1],
+    }
+}
+
+/// The colour mode in use. Decided once, from `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR_FORCE`,
+/// whether stdout (or the [`Target`](crate::Target)) is a terminal, `TERM`, `CLICOLOR` and
 /// `COLORTERM`, unless [`set_color_mode`] has chosen one.
 pub fn color_mode() -> ColorMode {
+    color_mode_for(crate::output::target())
+}
+
+/// The colour mode for text written to `stream`, which may differ from [`color_mode`] when
+/// one of stdout and stderr is a terminal and the other isn't. A mode chosen with
+/// [`set_color_mode`] or [`with_color_mode`] holds for both.
+pub(crate) fn color_mode_for(stream: Target) -> ColorMode {
     if let Some(mode) = SCOPED_MODE.get() {
         return mode;
     }
-    match MODE.load(Ordering::Relaxed) {
-        1 => ColorMode::None,
-        2 => ColorMode::Ansi256,
-        3 => ColorMode::TrueColor,
-        _ => {
-            let mode = detect();
-            set_color_mode(mode);
-            DETECTED.store(true, Ordering::Relaxed);
-            mode
-        }
+    if let Some(mode) = mode_from(CHOSEN.load(Ordering::Relaxed)) {
+        return mode;
+    }
+    let slot = stream_slot(stream);
+    if let Some(mode) = mode_from(slot.load(Ordering::Relaxed)) {
+        return mode;
+    }
+    let (mode, _) = decide(&ColorEnv::read(), stream_is_terminal(stream), stream);
+    if mode != ColorMode::None {
+        crate::term::enable_escapes();
+    }
+    // threads deciding at once decide alike; whichever lands first is kept
+    let _ = slot.compare_exchange(0, mode_code(mode), Ordering::Relaxed, Ordering::Relaxed);
+    mode_from(slot.load(Ordering::Relaxed)).unwrap_or(mode)
+}
+
+/// The colour mode for stderr, where errors go whatever the [`Target`](crate::Target).
+#[allow(dead_code)] // for the writers to stderr
+pub(crate) fn stderr_color_mode() -> ColorMode {
+    color_mode_for(Target::Stderr)
+}
+
+/// Run `f` in the colour mode for `stream`, so what it paints suits where it's written: an
+/// error painted for stderr has no codes when stderr goes to a file, and has colour when only
+/// stdout is piped. A mode already chosen for this thread is kept.
+#[allow(dead_code)] // for the writers to stderr
+pub(crate) fn for_stream<T>(stream: Target, f: impl FnOnce() -> T) -> T {
+    match SCOPED_MODE.get() {
+        Some(_) => f(),
+        None => with_color_mode(color_mode_for(stream), f),
+    }
+}
+
+/// `s`, already painted, made fit for `stream`: its escape codes dropped if that stream
+/// has no colour.
+#[allow(dead_code)] // for the writers to stderr
+pub(crate) fn fit_for(stream: Target, s: &str) -> std::borrow::Cow<'_, str> {
+    if color_mode_for(stream) == ColorMode::None && s.contains('\x1b') {
+        crate::text::strip_ansi(s).into()
+    } else {
+        s.into()
+    }
+}
+
+fn stream_is_terminal(stream: Target) -> bool {
+    use std::io::IsTerminal;
+    if let Some(terminal) = crate::output::pretended_terminal() {
+        return terminal;
+    }
+    match stream {
+        Target::Stdout => std::io::stdout().is_terminal(),
+        Target::Stderr => std::io::stderr().is_terminal(),
     }
 }
 
@@ -132,32 +208,17 @@ pub(crate) fn color_why() -> String {
     if SCOPED_MODE.get().is_some() {
         return "chosen for this closure, with with_color_mode".into();
     }
-    color_mode();
-    if !DETECTED.load(Ordering::Relaxed) {
+    if CHOSEN.load(Ordering::Relaxed) != 0 {
         return "set in code".into();
     }
-    let stream = match crate::output::target() {
-        crate::Target::Stdout => "stdout",
-        crate::Target::Stderr => "stderr",
-    };
-    let colorterm = std::env::var("COLORTERM").ok();
-    if !std::env::var_os("NO_COLOR").unwrap_or_default().is_empty() {
-        "NO_COLOR is set".into()
-    } else if !crate::output::is_terminal() {
-        format!("{stream} isn't a terminal")
-    } else {
-        match colorterm.as_deref() {
-            Some(v @ ("truecolor" | "24bit")) => format!("COLORTERM={v}"),
-            Some(v) => format!("COLORTERM={v} doesn't promise truecolor"),
-            None => "COLORTERM isn't set, so 256 colours to be safe".into(),
-        }
-    }
+    let stream = crate::output::target();
+    decide(&ColorEnv::read(), stream_is_terminal(stream), stream).1
 }
 
 /// Decide the colour mode again next time, unless it was chosen with [`set_color_mode`].
 pub(crate) fn forget_detected() {
-    if DETECTED.swap(false, Ordering::Relaxed) {
-        MODE.store(0, Ordering::Relaxed);
+    for slot in &DETECTED {
+        slot.store(0, Ordering::Relaxed);
     }
 }
 
@@ -168,29 +229,93 @@ pub(crate) fn forget_detected() {
 /// assert_eq!(tinsel::paint(tinsel::palette::ROSE, "hi"), "hi");
 /// ```
 pub fn set_color_mode(mode: ColorMode) {
-    let code = match mode {
-        ColorMode::None => 1,
-        ColorMode::Ansi256 => 2,
-        ColorMode::TrueColor => 3,
-    };
-    DETECTED.store(false, Ordering::Relaxed);
-    MODE.store(code, Ordering::Relaxed);
+    CHOSEN.store(mode_code(mode), Ordering::Relaxed);
 }
 
-fn detect() -> ColorMode {
-    let no_color = !std::env::var_os("NO_COLOR").unwrap_or_default().is_empty();
-    let colorterm = std::env::var("COLORTERM").ok();
-    pick_color_mode(no_color, crate::output::is_terminal(), colorterm.as_deref())
+/// The environment variables that have a say in the colour mode.
+#[derive(Default)]
+struct ColorEnv {
+    no_color: Option<String>,
+    force_color: Option<String>,
+    clicolor_force: Option<String>,
+    clicolor: Option<String>,
+    term: Option<String>,
+    colorterm: Option<String>,
 }
 
-fn pick_color_mode(no_color: bool, terminal: bool, colorterm: Option<&str>) -> ColorMode {
-    if no_color || !terminal {
-        return ColorMode::None;
+impl ColorEnv {
+    fn read() -> Self {
+        let var = |name: &str| std::env::var_os(name).map(|v| v.to_string_lossy().into_owned());
+        ColorEnv {
+            no_color: var("NO_COLOR"),
+            force_color: var("FORCE_COLOR"),
+            clicolor_force: var("CLICOLOR_FORCE"),
+            clicolor: var("CLICOLOR"),
+            term: var("TERM"),
+            colorterm: var("COLORTERM"),
+        }
     }
-    crate::term::enable_escapes();
-    match colorterm {
-        Some(v) if v.eq_ignore_ascii_case("truecolor") || v.eq_ignore_ascii_case("24bit") => ColorMode::TrueColor,
-        _ => ColorMode::Ansi256,
+}
+
+/// The colour mode for a stream, and why. In order: `NO_COLOR` turns colour off;
+/// `FORCE_COLOR` turns it off (`0`, `false`) or on, and `CLICOLOR_FORCE` on, even when the
+/// stream isn't a terminal; otherwise a stream that isn't a terminal, `TERM=dumb` or
+/// `CLICOLOR=0` means no colour. With colour on, the depth comes from `COLORTERM`, or from
+/// `FORCE_COLOR`'s level (1 is 16 colours, 2 is 256, 3 is truecolor).
+fn decide(env: &ColorEnv, terminal: bool, stream: Target) -> (ColorMode, String) {
+    let set = |v: &Option<String>| v.as_deref().is_some_and(|v| !v.is_empty());
+    if set(&env.no_color) {
+        return (ColorMode::None, "NO_COLOR is set".into());
+    }
+    if let Some(v) = env.force_color.as_deref() {
+        let level = match v.trim().to_ascii_lowercase().as_str() {
+            "0" | "false" => return (ColorMode::None, format!("FORCE_COLOR={v}")),
+            // 16 colours would be level 1; 256 is the fewest tinsel draws with
+            "1" | "2" => Some(ColorMode::Ansi256),
+            "3" => Some(ColorMode::TrueColor),
+            _ => None,
+        };
+        return match level {
+            Some(mode) => (mode, format!("FORCE_COLOR={v}")),
+            None => forced(env, format!("FORCE_COLOR={v}")),
+        };
+    }
+    if let Some(v) = env.clicolor_force.as_deref().filter(|v| !v.is_empty() && *v != "0") {
+        return forced(env, format!("CLICOLOR_FORCE={v}"));
+    }
+    if !terminal {
+        let name = match stream {
+            Target::Stdout => "stdout",
+            Target::Stderr => "stderr",
+        };
+        return (ColorMode::None, format!("{name} isn't a terminal"));
+    }
+    if env.term.as_deref() == Some("dumb") {
+        return (ColorMode::None, "TERM=dumb".into());
+    }
+    if env.clicolor.as_deref() == Some("0") {
+        return (ColorMode::None, "CLICOLOR=0".into());
+    }
+    depth(env)
+}
+
+/// Colour turned on by a variable, as deep as `COLORTERM` allows.
+fn forced(env: &ColorEnv, why: String) -> (ColorMode, String) {
+    let (mode, depth_why) = depth(env);
+    (mode, format!("{why}, and {depth_why}"))
+}
+
+/// How many colours the terminal has, from `COLORTERM`.
+fn depth(env: &ColorEnv) -> (ColorMode, String) {
+    match env.colorterm.as_deref() {
+        Some(v) if v.eq_ignore_ascii_case("truecolor") || v.eq_ignore_ascii_case("24bit") => {
+            (ColorMode::TrueColor, format!("COLORTERM={v}"))
+        }
+        Some(v) => (ColorMode::Ansi256, format!("COLORTERM={v} doesn't promise truecolor")),
+        None => (
+            ColorMode::Ansi256,
+            "COLORTERM isn't set, so 256 colours to be safe".into(),
+        ),
     }
 }
 
@@ -820,14 +945,96 @@ mod tests {
         assert_eq!(Accent::from_name("200"), Some(Accent::Hue(200.0)));
     }
 
+    fn env(vars: &[(&str, &str)]) -> ColorEnv {
+        let get = |name: &str| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string());
+        ColorEnv {
+            no_color: get("NO_COLOR"),
+            force_color: get("FORCE_COLOR"),
+            clicolor_force: get("CLICOLOR_FORCE"),
+            clicolor: get("CLICOLOR"),
+            term: get("TERM"),
+            colorterm: get("COLORTERM"),
+        }
+    }
+
     #[test]
     fn colour_depth_comes_from_the_terminal_and_the_environment() {
-        assert_eq!(pick_color_mode(true, true, Some("truecolor")), ColorMode::None);
-        assert_eq!(pick_color_mode(false, false, None), ColorMode::None);
-        assert_eq!(pick_color_mode(false, true, Some("24bit")), ColorMode::TrueColor);
-        assert_eq!(pick_color_mode(false, true, Some("TrueColor")), ColorMode::TrueColor);
-        assert_eq!(pick_color_mode(false, true, None), ColorMode::Ansi256);
-        assert_eq!(crate::output::with_terminal(false, detect), ColorMode::None);
+        let mode = |vars: &[(&str, &str)], terminal: bool| decide(&env(vars), terminal, Target::Stdout).0;
+        assert_eq!(
+            mode(&[("NO_COLOR", "1"), ("COLORTERM", "truecolor")], true),
+            ColorMode::None
+        );
+        assert_eq!(mode(&[("NO_COLOR", "")], true), ColorMode::Ansi256);
+        assert_eq!(mode(&[], false), ColorMode::None);
+        assert_eq!(mode(&[("COLORTERM", "24bit")], true), ColorMode::TrueColor);
+        assert_eq!(mode(&[("COLORTERM", "TrueColor")], true), ColorMode::TrueColor);
+        assert_eq!(mode(&[], true), ColorMode::Ansi256);
+        assert_eq!(
+            crate::output::with_terminal(false, color_mode_for_test),
+            ColorMode::None
+        );
+    }
+
+    fn color_mode_for_test() -> ColorMode {
+        decide(&ColorEnv::read(), stream_is_terminal(Target::Stdout), Target::Stdout).0
+    }
+
+    #[test]
+    fn colour_can_be_forced_on_or_turned_off() {
+        let mode = |vars: &[(&str, &str)], terminal: bool| decide(&env(vars), terminal, Target::Stdout).0;
+        // forced on, even when piped
+        assert_eq!(mode(&[("FORCE_COLOR", "1")], false), ColorMode::Ansi256);
+        assert_eq!(mode(&[("FORCE_COLOR", "3")], false), ColorMode::TrueColor);
+        assert_eq!(
+            mode(&[("FORCE_COLOR", ""), ("COLORTERM", "truecolor")], false),
+            ColorMode::TrueColor
+        );
+        assert_eq!(mode(&[("CLICOLOR_FORCE", "1")], false), ColorMode::Ansi256);
+        assert_eq!(mode(&[("CLICOLOR_FORCE", "0")], false), ColorMode::None);
+        assert_eq!(
+            mode(&[("FORCE_COLOR", "1"), ("TERM", "dumb")], true),
+            ColorMode::Ansi256
+        );
+        // turned off
+        assert_eq!(
+            mode(&[("FORCE_COLOR", "0"), ("CLICOLOR_FORCE", "1")], true),
+            ColorMode::None
+        );
+        assert_eq!(mode(&[("FORCE_COLOR", "false")], true), ColorMode::None);
+        assert_eq!(mode(&[("NO_COLOR", "1"), ("FORCE_COLOR", "1")], true), ColorMode::None);
+        assert_eq!(mode(&[("TERM", "dumb")], true), ColorMode::None);
+        assert_eq!(mode(&[("CLICOLOR", "0")], true), ColorMode::None);
+        assert_eq!(mode(&[("CLICOLOR", "1")], true), ColorMode::Ansi256);
+    }
+
+    #[test]
+    fn the_reason_matches_the_decision() {
+        let why = |vars: &[(&str, &str)], terminal: bool| decide(&env(vars), terminal, Target::Stderr);
+        assert_eq!(
+            why(&[("COLORTERM", "TrueColor")], true),
+            (ColorMode::TrueColor, "COLORTERM=TrueColor".into())
+        );
+        assert_eq!(why(&[], false), (ColorMode::None, "stderr isn't a terminal".into()));
+        assert_eq!(
+            why(&[("CLICOLOR_FORCE", "1")], false),
+            (
+                ColorMode::Ansi256,
+                "CLICOLOR_FORCE=1, and COLORTERM isn't set, so 256 colours to be safe".into()
+            )
+        );
+    }
+
+    #[test]
+    fn each_stream_gets_its_own_mode_unless_one_is_chosen() {
+        with_color_mode(ColorMode::TrueColor, || {
+            assert_eq!(color_mode_for(Target::Stderr), ColorMode::TrueColor);
+            assert_eq!(fit_for(Target::Stderr, "\x1b[1mx\x1b[22m"), "\x1b[1mx\x1b[22m");
+            assert_eq!(for_stream(Target::Stderr, || bold("x")), "\x1b[1mx\x1b[22m");
+        });
+        with_color_mode(ColorMode::None, || {
+            assert_eq!(stderr_color_mode(), ColorMode::None);
+            assert_eq!(fit_for(Target::Stderr, "\x1b[1mx\x1b[22m"), "x");
+        });
     }
 
     #[test]
