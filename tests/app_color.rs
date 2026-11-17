@@ -1,7 +1,7 @@
 //! The app pieces in full colour. Colour mode is process-wide, so these live in their own
 //! file (Cargo runs each file under `tests/` as a separate process).
 
-use tinsel::app::{Cursor, Frame, Grid, List, Modal, Panel, Plot, Rect, Sparkles, Stat, Tabs};
+use tinsel::app::{Frame, Grid, GridState, List, Modal, Panel, Plot, Rect, Sparkles, Stat, Tabs};
 use tinsel::{Accent, ColorMode, Theme, palette, set_accent, set_color_mode, set_theme};
 
 fn colour() {
@@ -102,7 +102,7 @@ fn colours_survive_the_trip_through_cells() {
 #[test]
 fn the_grid_cursor_is_a_bar_on_a_band_and_quieter_unfocused() {
     colour();
-    let mut cursor = Cursor::new();
+    let mut cursor = GridState::new();
     cursor.select(1);
     let draw = |focused: bool| {
         let mut f = Frame::new(20, 6);
@@ -112,7 +112,7 @@ fn the_grid_cursor_is_a_bar_on_a_band_and_quieter_unfocused() {
             .row(["db", "3"])
             .row(["cache", "4"])
             .striped()
-            .cursor(&cursor)
+            .state(&cursor)
             .focused(focused);
         f.render(f.area(), grid);
         f.snapshot()
@@ -165,12 +165,12 @@ fn a_modal_fades_what_is_behind_it_and_casts_a_shadow() {
 #[test]
 fn grid_headings_are_bold_rose_and_never_the_cursor_row() {
     colour();
-    let mut cursor = Cursor::new();
+    let mut cursor = GridState::new();
     cursor.select(0);
     let mut f = Frame::new(16, 4);
     f.render(
         f.area(),
-        Grid::new(["name"]).heading("group").row(["api"]).cursor(&cursor),
+        Grid::new(["name"]).heading("group").row(["api"]).state(&cursor),
     );
     let shown = f.snapshot();
     let rose = format!("38;2;{};{};{}", palette::ROSE.0, palette::ROSE.1, palette::ROSE.2);
