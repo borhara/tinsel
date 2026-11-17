@@ -131,7 +131,7 @@ pub use highlight::Lang;
 pub use history::set_history;
 pub use json::{JsonError, json};
 pub use layout::{Code, badge, columns, diff, link, pairs};
-pub use live::{Live, RunError, Step, StepCommand};
+pub use live::{Live, RunError, RunErrorKind, Step, StepCommand};
 pub use markdown::markdown;
 pub use message::{Callout, Report, Tone, callout, counter, error, hint, info, rule, success, title, warn};
 pub use notify::notify;
