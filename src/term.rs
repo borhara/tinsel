@@ -125,12 +125,21 @@ pub(crate) struct RawMode {
     saved: win::Saved,
 }
 
+/// The `stty` settings for [`RawMode`]. Beyond echo, line buffering and signals, flow
+/// control (`ixon`: Ctrl-S and Ctrl-Q) and the extended keys (`iexten`: Ctrl-V and Ctrl-O) are
+/// turned off, so those keys arrive too and Ctrl-S can't freeze the screen. `icrnl` goes as
+/// well, so Return comes as the `\r` it is (both `\r` and `\n` read as Enter).
+#[cfg(not(windows))]
+const RAW: &[&str] = &[
+    "-icanon", "-echo", "-isig", "-ixon", "-iexten", "-icrnl", "min", "0", "time", "1",
+];
+
 impl RawMode {
     pub(crate) fn enter() -> io::Result<RawMode> {
         #[cfg(not(windows))]
         {
             let saved = stty(&["-g"])?;
-            stty(&["-icanon", "-echo", "-isig", "min", "0", "time", "1"])?;
+            stty(RAW)?;
             Ok(RawMode { saved })
         }
         #[cfg(windows)]
@@ -775,6 +784,20 @@ mod tests {
         assert_eq!(parse_osc_color("\x1b]11;rgb:1e1e/2020/2a2a\x1b\\"), Some((30, 32, 42)));
         assert_eq!(parse_osc_color("\x1b]11;rgb:ff/80/00\x07"), Some((255, 128, 0)));
         assert_eq!(parse_osc_color("garbage"), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn raw_mode_lets_every_control_key_through() {
+        for flag in ["-isig", "-ixon", "-iexten"] {
+            assert!(RAW.contains(&flag), "{flag}");
+        }
+        // stty accepts them all, where there's a terminal to try them on
+        if io::stdin().is_terminal() {
+            let saved = stty(&["-g"]).unwrap();
+            assert!(stty(RAW).is_ok());
+            stty(&[&saved]).unwrap();
+        }
     }
 
     #[cfg(not(windows))]
