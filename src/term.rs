@@ -628,7 +628,8 @@ mod win {
 }
 
 /// Put bytes back into the terminal's input queue, so keys typed while tinsel was reading
-/// stdin reach the shell afterwards. Best effort: newer Linux kernels refuse (TIOCSTI).
+/// stdin reach the shell afterwards. Best effort: Linux 6.2 and later refuse TIOCSTI unless
+/// `dev.tty.legacy_tiocsti` is set, and then the keys are lost; nothing else can put them back.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn push_back_input(bytes: &[u8]) {
     push_back_to(0, bytes);
@@ -717,6 +718,7 @@ pub(crate) fn restore_interrupt(prev: Option<usize>) {
 /// handing back exactly what tcgetattr gave means never needing to know the struct's layout.
 #[cfg(unix)]
 pub(crate) fn remember_terminal() {
+    restore_at_exit();
     // SAFETY: the buffer is larger than any platform's termios struct.
     let ok = unsafe { tcgetattr(0, (&raw mut SAVED_TERMIOS).cast()) } == 0;
     HAVE_SAVED.store(ok, std::sync::atomic::Ordering::SeqCst);
@@ -773,6 +775,38 @@ unsafe extern "C" {
     fn raise(sig: i32) -> i32;
     fn tcgetattr(fd: i32, termios: *mut u8) -> i32;
     fn tcsetattr(fd: i32, action: i32, termios: *const u8) -> i32;
+    fn atexit(f: extern "C" fn()) -> i32;
+}
+
+/// Put the terminal back if the program ends with [`std::process::exit`] while something is
+/// drawn: that skips every destructor, so a display would leave focus reports on, echo off
+/// and the cursor hidden. Registered with `atexit` the first time it's needed; it does
+/// nothing at an exit with nothing drawn.
+#[cfg(unix)]
+pub(crate) fn restore_at_exit() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    // SAFETY: on_exit takes no arguments and returns nothing, as atexit expects.
+    ONCE.call_once(|| unsafe {
+        atexit(on_exit);
+    });
+}
+
+#[cfg(not(unix))]
+pub(crate) fn restore_at_exit() {}
+
+#[cfg(unix)]
+extern "C" fn on_exit() {
+    let saved = HAVE_SAVED.swap(false, std::sync::atomic::Ordering::SeqCst);
+    if !saved && !crate::display::any_active() {
+        return;
+    }
+    // SAFETY: SAVED_TERMIOS holds exactly what tcgetattr wrote, as for on_interrupt.
+    unsafe {
+        if saved {
+            tcsetattr(0, TCSANOW, (&raw const SAVED_TERMIOS).cast());
+        }
+        write(crate::output::fd_now(), RESTORE.as_ptr().cast(), RESTORE.len());
+    }
 }
 
 /// What a full-screen app writes on its way out, for [`on_terminate`] to write too.

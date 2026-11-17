@@ -78,6 +78,7 @@ static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
 /// Note a display that has started drawing.
 pub(crate) fn add(shown: Weak<dyn Shown>) {
+    crate::term::restore_at_exit();
     let mut all = lock(&SHOWN);
     all.retain(|w| w.strong_count() > 0);
     all.push(shown);
