@@ -515,7 +515,7 @@ pub fn select(question: &str, options: &[&str]) -> Result<usize> {
     Select::new(question).options(options.iter().copied()).ask()
 }
 
-/// One of a list, with options: a default, groups under headings, options that can't be
+/// One of a list, with options: where to start, groups under headings, options that can't be
 /// picked (and why), notes and badges, a hint, validation and going back. [`select`] is the
 /// shortcut. Returns the number of the chosen option, counting from 0 in the order they
 /// were added.
@@ -523,7 +523,7 @@ pub fn select(question: &str, options: &[&str]) -> Result<usize> {
 /// ↑↓ (or j/k) move, PgUp/PgDn move a page. Lists longer than [`rows`](Select::rows) filter
 /// as you type, and Esc clears the filter before it cancels.
 ///
-/// Without a terminal, the [`default`](Select::default) is the answer, if there is one;
+/// Without a terminal, the [`selected`](Select::selected) option is the answer, if there is one;
 /// otherwise it's [`Error::NotATerminal`].
 ///
 /// ```no_run
@@ -537,7 +537,7 @@ pub fn select(question: &str, options: &[&str]) -> Result<usize> {
 ///     .disabled("legacy", "retired")
 ///     .heading("Yours")
 ///     .option("preview")
-///     .default(0)
+///     .selected(0)
 ///     .ask()?;
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
@@ -560,7 +560,7 @@ impl<'a> Select<'a> {
     }
 
     /// Start on this option (by number), and answer with it when there's no terminal.
-    pub fn default(mut self, index: usize) -> Self {
+    pub fn selected(mut self, index: usize) -> Self {
         self.default = Some(index);
         self
     }
@@ -584,7 +584,8 @@ impl<'a> Select<'a> {
         self.validate.as_ref().map_or(Ok(()), |check| check(i))
     }
 
-    /// Ask the question.
+    /// Ask the question. The answer is the chosen option's number, counted from 0 in the
+    /// order options were added (headings don't count).
     pub fn ask(self) -> Result<usize> {
         if !interactive() {
             return self.unasked();
@@ -650,11 +651,11 @@ impl<'a> Select<'a> {
 /// Several of a list: space toggles, `a` toggles all, enter confirms. Returns the chosen
 /// indices in order. In lists longer than eight, typing filters and Ctrl-A toggles all of
 /// what's shown. [`MultiSelect`] has more options.
-pub fn multiselect(question: &str, options: &[&str], preselected: &[usize]) -> Result<Vec<usize>> {
+pub fn multiselect(question: &str, options: &[&str], selected: &[usize]) -> Result<Vec<usize>> {
     need_terminal()?;
     MultiSelect::new(question)
         .options(options.iter().copied())
-        .default(preselected)
+        .selected(selected)
         .ask()
 }
 
@@ -666,7 +667,7 @@ pub fn multiselect(question: &str, options: &[&str], preselected: &[usize]) -> R
 /// Space toggles, `a` toggles all (Ctrl-A, all of what's shown, in lists that filter as you
 /// type), Enter is done.
 ///
-/// Without a terminal, the [`default`](MultiSelect::default) is the answer, if one was
+/// Without a terminal, the [`selected`](MultiSelect::selected) options are the answer, if any were
 /// given; otherwise it's [`Error::NotATerminal`].
 ///
 /// ```no_run
@@ -674,7 +675,7 @@ pub fn multiselect(question: &str, options: &[&str], preselected: &[usize]) -> R
 ///
 /// let services = MultiSelect::new("Restart")
 ///     .options(["api", "web", "worker"])
-///     .default(&[0])
+///     .selected(&[0])
 ///     .validate(|picked| if picked.is_empty() { Err("pick at least one".into()) } else { Ok(()) })
 ///     .ask()?;
 /// # Ok::<(), tinsel::prompt::Error>(())
@@ -699,7 +700,7 @@ impl<'a> MultiSelect<'a> {
 
     /// Tick these options (by number) to start with, and answer with them when there's no
     /// terminal. Options that can't be picked stay unticked.
-    pub fn default(mut self, indices: &[usize]) -> Self {
+    pub fn selected(mut self, indices: &[usize]) -> Self {
         self.default = Some(indices.to_vec());
         self
     }
@@ -722,7 +723,8 @@ impl<'a> MultiSelect<'a> {
             .collect()
     }
 
-    /// Ask the question.
+    /// Ask the question. The answer is the numbers of the ticked options, in order, counted
+    /// as [`Select::ask`] counts them.
     pub fn ask(self) -> Result<Vec<usize>> {
         if !interactive() {
             return self.unasked();
@@ -837,7 +839,7 @@ pub(super) fn summary(names: &[&str]) -> String {
 /// drawn quieter than the rest. With [`allow_custom`](Dropdown::allow_custom), what's typed
 /// can be the answer too. Returns the chosen option's label, or the typed answer.
 ///
-/// Without a terminal, the [`default`](Dropdown::default) is the answer, if there is one;
+/// Without a terminal, the [`selected`](Dropdown::selected) option is the answer, if there is one;
 /// otherwise it's [`Error::NotATerminal`].
 ///
 /// ```no_run
@@ -848,7 +850,7 @@ pub(super) fn summary(names: &[&str]) -> String {
 ///     .option("v1.2.0-rc.1").note("5 days ago").dim()
 ///     .option("v1.1.0").note("2 weeks ago")
 ///     .option("v1.0.0").note("2 months ago")
-///     .default(2)
+///     .selected(2)
 ///     .allow_custom()
 ///     .ask()?;
 /// # Ok::<(), tinsel::prompt::Error>(())
@@ -874,7 +876,7 @@ impl<'a> Dropdown<'a> {
     }
 
     /// Start on this option (by number), and answer with it when there's no terminal.
-    pub fn default(mut self, index: usize) -> Self {
+    pub fn selected(mut self, index: usize) -> Self {
         self.default = Some(index);
         self
     }
@@ -906,7 +908,8 @@ impl<'a> Dropdown<'a> {
         self.validate.as_ref().map_or(Ok(()), |check| check(value))
     }
 
-    /// Ask the question.
+    /// Ask the question. The answer is the chosen option's text rather than its number,
+    /// since with [`allow_custom`](Dropdown::allow_custom) it may be typed and have none.
     pub fn ask(self) -> Result<String> {
         if !interactive() {
             return self.unasked();

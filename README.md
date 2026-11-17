@@ -167,7 +167,7 @@ let port = prompt::Input::new("Port")
 let replicas: u32 = prompt::number("Replicas", Some(3))?;
 let live_on = prompt::date("Go live on", None)?;                  // a calendar
 let notes = prompt::editor("Release notes", "## What's new\n")?;   // opens $EDITOR
-let region = prompt::Input::new("Region").suggestions(&regions).ask()?;  // Tab completes
+let region = prompt::Input::new("Region").suggestions(regions).ask()?;  // Tab completes
 let path = prompt::Input::new("Config").paths().ask()?;                  // like a shell
 prompt::confirm_typing("Delete my-app?", "my-app")?;                       // type it to go on
 ```
