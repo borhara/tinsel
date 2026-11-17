@@ -8,6 +8,7 @@ use crate::text;
 
 /// Which side of a column cells hug.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Align {
     /// Text hugs the left edge: the default for words.
     Left,
@@ -17,6 +18,7 @@ pub enum Align {
 
 /// How a [`Table`] is framed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Border {
     /// No frame: a dotted rule under the header and space between columns. The default.
     #[default]

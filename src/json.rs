@@ -11,11 +11,26 @@ use crate::text;
 /// Why [`json`] couldn't read its input, and where.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JsonError {
-    /// The line the problem is on, from 1.
-    pub line: usize,
-    /// The column, from 1.
-    pub column: usize,
+    line: usize,
+    column: usize,
     message: String,
+}
+
+impl JsonError {
+    /// The line the problem is on, from 1.
+    pub fn line(&self) -> usize {
+        self.line
+    }
+
+    /// The column, from 1, counted in characters.
+    pub fn column(&self) -> usize {
+        self.column
+    }
+
+    /// What was wrong, without where: "expected a value", say.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 impl fmt::Display for JsonError {
@@ -350,7 +365,10 @@ mod tests {
     #[test]
     fn says_where_it_went_wrong() {
         let e = json("{\n  \"a\": 1,\n  \"b\" 2\n}").unwrap_err();
-        assert_eq!((e.line, e.column), (3, 7));
+        assert_eq!(
+            (e.line(), e.column(), e.message()),
+            (3, 7, "expected ':' after the key")
+        );
         assert_eq!(e.to_string(), "expected ':' after the key at line 3, column 7");
         assert!(json("[1, 2").is_err());
         assert!(json("\"open").is_err());

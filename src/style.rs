@@ -45,6 +45,7 @@ pub const RAMP: [Rgb; 3] = [palette::BERRY, palette::ROSE, palette::BLUSH];
 
 /// How much colour tinsel draws with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ColorMode {
     /// Plain text, no escape codes at all: piped output, `NO_COLOR`, or tests.
     None,
@@ -324,6 +325,7 @@ fn depth(env: &ColorEnv) -> (ColorMode, String) {
 /// backgrounds; on light ones every colour is redrawn darker, keeping its hue, so pinks stay
 /// pink and text stays readable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Theme {
     /// Light text on a dark background.
     Dark,
@@ -499,6 +501,7 @@ pub fn sample(stops: &[Rgb], t: f32) -> Rgb {
 /// # tinsel::set_accent(tinsel::Accent::Pink);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub enum Accent {
     /// tinsel's own: rose, blush and berry.
     #[default]

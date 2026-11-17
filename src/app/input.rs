@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 /// A key someone pressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Key {
     /// A printable character, space included.
     Char(char),
@@ -43,6 +44,7 @@ pub enum Key {
 
 /// What the mouse did. Only reported when [`App::mouse`](super::App::mouse) says so.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MouseKind {
     /// A left click.
     Click,
@@ -57,6 +59,7 @@ pub enum MouseKind {
 /// A mouse event, at a cell counted from 0 at the top left. Check which panel it landed in
 /// with [`Rect::contains`](super::Rect::contains).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Mouse {
     /// What happened.
     pub kind: MouseKind,
@@ -64,6 +67,13 @@ pub struct Mouse {
     pub x: usize,
     /// The row.
     pub y: usize,
+}
+
+impl Mouse {
+    /// A mouse event of this kind at column `x` and row `y`, as a test might send one.
+    pub fn new(kind: MouseKind, x: usize, y: usize) -> Self {
+        Mouse { kind, x, y }
+    }
 }
 
 /// Bytes as they're read, handed back as events once they're whole. Unlike calling [`parse`]

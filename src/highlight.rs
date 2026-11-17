@@ -7,6 +7,7 @@ use crate::style::{Rgb, mix, paint};
 
 /// A language [`Code`](crate::Code) excerpts know how to colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Lang {
     /// Rust.
     Rust,

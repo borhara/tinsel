@@ -104,6 +104,7 @@ use crate::term;
 
 /// Something that happened, handed to [`App::event`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Event {
     /// A key was pressed.
     Key(Key),
