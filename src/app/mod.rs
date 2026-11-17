@@ -120,6 +120,9 @@ pub enum Event {
     Resize(usize, usize),
     /// A [`Waker`] was woken: something another thread was doing is ready to look at.
     Wake,
+    /// The terminal window gained (`true`) or lost (`false`) focus, where the terminal says so:
+    /// a chance to pause animations nobody is watching.
+    Focus(bool),
 }
 
 /// Whether to keep going after an event.
@@ -489,10 +492,10 @@ pub fn navigate(selected: &mut usize, len: usize, event: &Event) -> bool {
 static ON_SCREEN: AtomicBool = AtomicBool::new(false);
 
 // the window title is saved on entering (22t) and put back on leaving (23t)
-// and pastes arrive bracketed (2004), so they can be told apart from typing
-const ENTER: &str = "\x1b[22;0t\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?2004h\x1b[2J";
-const LEAVE: &str =
-    "\x1b[0m\x1b]112\x07\x1b]111\x07\x1b[0 q\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t";
+// and pastes arrive bracketed (2004), so they can be told apart from typing,
+// and the terminal reports focus coming and going (1004)
+const ENTER: &str = "\x1b[22;0t\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?2004h\x1b[2J\x1b[?1004h";
+const LEAVE: &str = "\x1b[0m\x1b]112\x07\x1b]111\x07\x1b[0 q\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t\x1b[?1004l";
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
 
 /// The alternate screen, raw keys and a hidden cursor, for as long as it lives.
