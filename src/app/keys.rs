@@ -28,6 +28,7 @@ use crate::term;
 /// ```
 pub struct Keys {
     decoder: input::Decoder,
+    keyboard: term::Keyboard,
     raw: Option<term::RawMode>,
 }
 
@@ -41,13 +42,14 @@ impl Keys {
         };
         Ok(Keys {
             decoder: input::Decoder::new(),
+            keyboard: term::Keyboard::default(),
             raw,
         })
     }
 
     /// The next key, waiting up to `timeout` (to within a tenth of a second) for one, or
     /// `None` if nothing was pressed. Mouse reports and anything else that isn't a key are
-    /// skipped.
+    /// skipped. Once the terminal has gone (its window closed), this is an error.
     pub fn next(&mut self, timeout: Duration) -> io::Result<Option<Key>> {
         if self.raw.is_none() {
             return Ok(crate::prompt::next_scripted());
@@ -58,7 +60,7 @@ impl Keys {
                 return Ok(Some(key));
             }
             let mut buf = [0u8; 256];
-            let n = term::read_some(&mut buf)?;
+            let n = self.keyboard.read(&mut buf)?;
             self.decoder.push(&buf[..n]);
             // a pause ends whatever was half read, such as a lone Esc
             if n == 0 {
@@ -100,6 +102,7 @@ mod tests {
     fn half_read_bytes_become_keys() {
         let mut keys = Keys {
             decoder: input::Decoder::new(),
+            keyboard: term::Keyboard::default(),
             raw: None,
         };
         keys.decoder.push(b"\x1b[Ax\x1b");
