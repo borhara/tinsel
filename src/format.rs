@@ -2,55 +2,58 @@
 
 use std::time::Duration;
 
-/// `512 B`, `34.2 MB`, `1.1 GB` (powers of 1000, as disks and networks count).
+/// `512 B`, `1.1 GB`, `34 MB` (powers of 1000, as disks and networks count).
 pub fn bytes(n: u64) -> String {
-    const UNITS: [&str; 5] = ["KB", "MB", "GB", "TB", "PB"];
     if n < 1000 {
         return format!("{n} B");
     }
-    let mut v = n as f64;
-    let mut unit = "B";
-    for u in UNITS {
-        if v < 1000.0 {
-            break;
-        }
-        v /= 1000.0;
-        unit = u;
-    }
-    if v < 10.0 {
-        format!("{v:.1} {unit}")
-    } else {
-        format!("{v:.0} {unit}")
-    }
+    scaled(n, &[" KB", " MB", " GB", " TB", " PB"])
 }
 
 /// `340ms`, `4.2s`, `3m07s`, `1h02m`.
 pub fn duration(d: Duration) -> String {
     let s = d.as_secs_f64();
     if s < 1.0 {
-        format!("{}ms", d.as_millis())
-    } else if s < 60.0 {
-        format!("{s:.1}s")
-    } else if s < 3600.0 {
-        format!("{}m{:02}s", s as u64 / 60, s as u64 % 60)
+        return format!("{}ms", d.as_millis());
+    }
+    // rounded before the unit is picked, so 59.96s reads 1m00s rather than 60.0s
+    let tenths = (s * 10.0).round();
+    if tenths < 600.0 {
+        return format!("{:.1}s", tenths / 10.0);
+    }
+    let s = s.round() as u64;
+    if s < 3600 {
+        format!("{}m{:02}s", s / 60, s % 60)
     } else {
-        format!("{}h{:02}m", s as u64 / 3600, s as u64 % 3600 / 60)
+        format!("{}h{:02}m", s / 3600, s % 3600 / 60)
     }
 }
 
 /// `999`, `1.2k`, `34k`, `5.6M`.
 pub fn count(n: u64) -> String {
-    let (v, unit) = match n {
-        0..1_000 => return n.to_string(),
-        1_000..1_000_000 => (n as f64 / 1e3, "k"),
-        1_000_000..1_000_000_000 => (n as f64 / 1e6, "M"),
-        _ => (n as f64 / 1e9, "B"),
-    };
-    if v < 10.0 {
-        format!("{v:.1}{unit}")
-    } else {
-        format!("{v:.0}{unit}")
+    if n < 1000 {
+        return n.to_string();
     }
+    scaled(n, &["k", "M", "B"])
+}
+
+/// `n` (at least 1000) in the first of `units`, each a thousand times the last, that keeps
+/// it under 1000 once rounded: one decimal below 10, none from there.
+fn scaled(n: u64, units: &[&str]) -> String {
+    let mut v = n as f64;
+    for (i, unit) in units.iter().enumerate() {
+        v /= 1000.0;
+        let short = format!("{v:.1}");
+        let text = if short.parse::<f64>().is_ok_and(|r| r < 10.0) {
+            short
+        } else {
+            format!("{v:.0}")
+        };
+        if (text != "1000" && v < 1000.0) || i == units.len() - 1 {
+            return format!("{text}{unit}");
+        }
+    }
+    unreachable!("scaled is given at least one unit")
 }
 
 /// `1 file`, `3 files`. For irregular words pass the plural: `plural_with(2, "child", "children")`.
@@ -107,5 +110,21 @@ mod tests {
         assert_eq!(ago(Duration::from_secs(42)), "42s ago");
         assert_eq!(ago(Duration::from_secs(7200)), "2h ago");
         assert_eq!(ago(Duration::from_secs(3 * 86400)), "3d ago");
+    }
+
+    #[test]
+    fn rounding_comes_before_the_unit() {
+        assert_eq!(bytes(999_950), "1.0 MB");
+        assert_eq!(bytes(999_499), "999 KB");
+        assert_eq!(bytes(9_960), "10 KB");
+        assert_eq!(bytes(9_940), "9.9 KB");
+        assert_eq!(bytes(u64::MAX), "18447 PB");
+        assert_eq!(count(999_999), "1.0M");
+        assert_eq!(count(9_999), "10k");
+        assert_eq!(count(999_999_999_999), "1000B");
+        assert_eq!(duration(Duration::from_millis(59_960)), "1m00s");
+        assert_eq!(duration(Duration::from_millis(59_940)), "59.9s");
+        assert_eq!(duration(Duration::from_millis(119_600)), "2m00s");
+        assert_eq!(duration(Duration::from_millis(3_599_600)), "1h00m");
     }
 }
