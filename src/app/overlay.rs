@@ -76,7 +76,7 @@ impl<'a> Modal<'a> {
 impl Widget for Modal<'_> {
     fn render(&self, area: Rect, frame: &mut Frame) {
         let mut at = self.area(area);
-        frame.dim(area);
+        frame.fade(area);
         if let Some(opened) = self.opened {
             let p = ((frame.time() - opened) / ENTRANCE).clamp(0.0, 1.0);
             let rise = (1.0 - p).powi(3) * 2.0;
@@ -99,7 +99,7 @@ impl Widget for Modal<'_> {
 /// of near-black over the terminal's own background reads as a hole, not a shadow); on a
 /// light one the cells also turn a pale grey, which is what a shadow on paper looks like.
 fn shadow(frame: &mut Frame, area: Rect) {
-    frame.dim(area);
+    frame.fade(area);
     if crate::style::theme() == crate::style::Theme::Light {
         // redrawn for the light background, near-black becomes a pale grey
         frame.tint(area, Rgb(8, 6, 7));
