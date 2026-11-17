@@ -89,6 +89,7 @@ macro_rules! list_builders {
         impl $ty<'_> {
             /// Add an option. Options are numbered from 0 in the order they're added,
             /// disabled ones included, and the answer is given as those numbers.
+            #[must_use]
             pub fn option(mut self, label: impl Into<String>) -> Self {
                 self.choices.push(label.into(), None);
                 self
@@ -100,6 +101,7 @@ macro_rules! list_builders {
                                 "::new(\"Deploy to\").options([\"staging\", \"production\"]).ask()?;\n",
                                 "# Ok::<(), tinsel::prompt::Error>(())\n```"
                             )]
+            #[must_use]
             pub fn options<S: Into<String>>(mut self, labels: impl IntoIterator<Item = S>) -> Self {
                 for label in labels {
                     self.choices.push(label.into(), None);
@@ -114,6 +116,7 @@ macro_rules! list_builders {
                                 "    .option(\"staging\")\n    .disabled(\"production\", \"frozen until Monday\")\n",
                                 "    .ask()?;\n# Ok::<(), tinsel::prompt::Error>(())\n```"
                             )]
+            #[must_use]
             pub fn disabled(mut self, label: impl Into<String>, reason: impl Into<String>) -> Self {
                 self.choices.push(label.into(), Some(reason.into()));
                 self
@@ -127,6 +130,7 @@ macro_rules! list_builders {
                                 "    .heading(\"Backend\")\n    .options([\"api\", \"worker\"])\n",
                                 "    .ask()?;\n# Ok::<(), tinsel::prompt::Error>(())\n```"
                             )]
+            #[must_use]
             pub fn heading(mut self, title: impl Into<String>) -> Self {
                 self.choices.heading = Some(title.into());
                 self
@@ -140,6 +144,7 @@ macro_rules! list_builders {
                                 "    .option(\"v1.1.0\").note(\"2 weeks ago\")\n",
                                 "    .ask()?;\n# Ok::<(), tinsel::prompt::Error>(())\n```"
                             )]
+            #[must_use]
             pub fn note(mut self, text: impl Into<String>) -> Self {
                 if let Some(c) = self.choices.list.last_mut() {
                     c.note = Some(text.into());
@@ -149,6 +154,7 @@ macro_rules! list_builders {
 
             /// A small badge after the option added last, such as `latest` or `current`.
             /// Call it again for another.
+            #[must_use]
             pub fn badge(mut self, label: impl Into<String>) -> Self {
                 if let Some(c) = self.choices.list.last_mut() {
                     c.badges.push(label.into());
@@ -158,6 +164,7 @@ macro_rules! list_builders {
 
             /// Draw the option added last quieter than the rest, for ones that are less
             /// likely to be wanted (a pre-release, say). It can still be picked.
+            #[must_use]
             pub fn dim(mut self) -> Self {
                 if let Some(c) = self.choices.list.last_mut() {
                     c.dim = true;
@@ -166,12 +173,14 @@ macro_rules! list_builders {
             }
 
             /// A muted line under the question, to say more about what's being asked.
+            #[must_use]
             pub fn hint(mut self, text: impl Into<String>) -> Self {
                 self.choices.hint = Some(text.into());
                 self
             }
 
             /// Let ← go back to the question before, as [`Error::Back`].
+            #[must_use]
             pub fn back(mut self) -> Self {
                 self.choices.back = true;
                 self
@@ -179,6 +188,7 @@ macro_rules! list_builders {
 
             /// How many rows to show at once (8 unless set); longer lists scroll, with a
             /// count of what's above and below.
+            #[must_use]
             pub fn rows(mut self, rows: usize) -> Self {
                 self.choices.rows = rows.max(1);
                 self
@@ -549,6 +559,16 @@ pub struct Select<'a> {
 
 list_builders!(Select);
 
+impl std::fmt::Debug for Select<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Select")
+            .field("question", &self.choices.question)
+            .field("options", &self.choices.list.len())
+            .field("selected", &self.default)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> Select<'a> {
     /// A question with one answer from a list.
     pub fn new(question: impl Into<String>) -> Self {
@@ -560,6 +580,7 @@ impl<'a> Select<'a> {
     }
 
     /// Start on this option (by number), and answer with it when there's no terminal.
+    #[must_use]
     pub fn selected(mut self, index: usize) -> Self {
         self.default = Some(index);
         self
@@ -575,6 +596,7 @@ impl<'a> Select<'a> {
     ///     .ask()?;
     /// # Ok::<(), tinsel::prompt::Error>(())
     /// ```
+    #[must_use]
     pub fn validate(mut self, check: impl Fn(usize) -> std::result::Result<(), String> + 'a) -> Self {
         self.validate = Some(Box::new(check));
         self
@@ -688,6 +710,16 @@ pub struct MultiSelect<'a> {
 
 list_builders!(MultiSelect);
 
+impl std::fmt::Debug for MultiSelect<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MultiSelect")
+            .field("question", &self.choices.question)
+            .field("options", &self.choices.list.len())
+            .field("selected", &self.default)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> MultiSelect<'a> {
     /// A question with any number of answers from a list.
     pub fn new(question: impl Into<String>) -> Self {
@@ -700,6 +732,7 @@ impl<'a> MultiSelect<'a> {
 
     /// Tick these options (by number) to start with, and answer with them when there's no
     /// terminal. Options that can't be picked stay unticked.
+    #[must_use]
     pub fn selected(mut self, indices: &[usize]) -> Self {
         self.default = Some(indices.to_vec());
         self
@@ -707,6 +740,7 @@ impl<'a> MultiSelect<'a> {
 
     /// Check the choices when Enter is pressed. An `Err` is shown under the question, which
     /// stays open.
+    #[must_use]
     pub fn validate(mut self, check: impl Fn(&[usize]) -> std::result::Result<(), String> + 'a) -> Self {
         self.validate = Some(Box::new(check));
         self
@@ -864,6 +898,16 @@ pub struct Dropdown<'a> {
 
 list_builders!(Dropdown);
 
+impl std::fmt::Debug for Dropdown<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Dropdown")
+            .field("question", &self.choices.question)
+            .field("options", &self.choices.list.len())
+            .field("selected", &self.default)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> Dropdown<'a> {
     /// A question with one answer from a long list.
     pub fn new(question: impl Into<String>) -> Self {
@@ -876,6 +920,7 @@ impl<'a> Dropdown<'a> {
     }
 
     /// Start on this option (by number), and answer with it when there's no terminal.
+    #[must_use]
     pub fn selected(mut self, index: usize) -> Self {
         self.default = Some(index);
         self
@@ -883,6 +928,7 @@ impl<'a> Dropdown<'a> {
 
     /// Let the answer be something that isn't in the list: once something's typed that
     /// isn't an option, it's offered at the end of the list to choose.
+    #[must_use]
     pub fn allow_custom(mut self) -> Self {
         self.custom = true;
         self
@@ -899,6 +945,7 @@ impl<'a> Dropdown<'a> {
     ///     .ask()?;
     /// # Ok::<(), tinsel::prompt::Error>(())
     /// ```
+    #[must_use]
     pub fn validate(mut self, check: impl Fn(&str) -> std::result::Result<(), String> + 'a) -> Self {
         self.validate = Some(Box::new(check));
         self

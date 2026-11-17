@@ -35,7 +35,7 @@ pub(crate) fn noise(cell: u32, tick: u32) -> f32 {
 
 /// How a step looks while it's running. Every style keeps to the pink palette and
 /// eases its brightness rather than snapping, so none of them feel mechanical.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Spinner {
     /// Three little stars twinkling out of step - the tinsel one.
@@ -233,7 +233,7 @@ fn shiny_bar(fraction: f32, width: usize, t: Option<f64>) -> Line {
 
 /// How a progress bar is drawn, for [`Live::bar`](crate::Live::bar) and
 /// [`Progress::bar`](crate::Progress::bar).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BarStyle {
     /// A thin line with a glint running along it: [`bar`] and [`anim::bar`](crate::anim::bar). The default.
@@ -354,12 +354,14 @@ impl Card {
     }
 
     /// Use any line as the headline. A blank line separates it from the rows below.
+    #[must_use]
     pub fn headline(mut self, line: Line) -> Self {
         self.headline = Some(line);
         self
     }
 
     /// Quieter text after the headline, like how long something took.
+    #[must_use]
     pub fn aside(mut self, text: &str) -> Self {
         let headline = self.headline.take().unwrap_or_default();
         self.headline = Some(headline.push(MUTED, &format!(" {text}")));
@@ -367,27 +369,32 @@ impl Card {
     }
 
     /// A row of any styled line.
+    #[must_use]
     pub fn line(mut self, line: Line) -> Self {
         self.rows.push(line);
         self
     }
 
     /// An empty row.
+    #[must_use]
     pub fn blank(self) -> Self {
         self.line(Line::new())
     }
 
     /// A `key  value` row with the key muted.
+    #[must_use]
     pub fn kv(self, key: &str, value: &str) -> Self {
         self.kv_with(TEXT, key, value)
     }
 
     /// A `key  value` row with the value in a colour of your choosing.
+    #[must_use]
     pub fn kv_with(self, color: Rgb, key: &str, value: &str) -> Self {
         self.line(Line::kv(color, key, value))
     }
 
     /// Columns wide, border included (default: as wide as what's inside, when printed).
+    #[must_use]
     pub fn width(mut self, cols: usize) -> Self {
         self.width = Some(cols);
         self
@@ -411,6 +418,7 @@ impl Card {
     ///   │  target    staging  │
     ///   ╰─────────────── 12s ─╯
     /// ```
+    #[must_use]
     pub fn title(mut self, title: impl Into<Label>) -> Self {
         self.title = Some(title.into().styled(&|t| crate::style::bold(&paint(TEXT, t))));
         self
@@ -418,12 +426,14 @@ impl Card {
 
     /// Text set into the bottom border, at the right: `╰─── 12s ─╯`. A time, a count down, a
     /// note. Muted unless styled otherwise.
+    #[must_use]
     pub fn footer(mut self, footer: impl Into<Label>) -> Self {
         self.footer = Some(footer.into().styled(&|t| paint(MUTED, t)));
         self
     }
 
     /// Draw the border in this colour, to say how things went at a glance.
+    #[must_use]
     pub fn border(mut self, color: Rgb) -> Self {
         self.border = Some(color);
         self
@@ -431,6 +441,7 @@ impl Card {
 
     /// Only as wide as what's inside. Printed cards are already; this is for a card drawn in
     /// an app, which otherwise fills the area it's given.
+    #[must_use]
     pub fn fit(mut self) -> Self {
         self.sizing = Some(Sizing::Fit);
         self
@@ -444,6 +455,7 @@ impl Card {
     ///
     /// Card::success("deployed").kv("url", "https://my-app.example.com").fill().print();
     /// ```
+    #[must_use]
     pub fn fill(mut self) -> Self {
         self.sizing = Some(Sizing::Fill);
         self
@@ -534,8 +546,10 @@ fn edge(color: Rgb, inner: usize, (left, right): (char, char), label: Option<&Li
 
 /// Text for a card's border, from a `&str`, a `String` or a [`Line`]. Plain text takes the
 /// border's usual style; a `Line` keeps its own.
+#[derive(Clone, Debug)]
 pub struct Label(LabelText);
 
+#[derive(Clone, Debug)]
 enum LabelText {
     Plain(String),
     Styled(Line),

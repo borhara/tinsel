@@ -37,6 +37,7 @@ pub(super) fn attempts_note(error: &str, retries: u32) -> String {
 ///     .run()?;
 /// # Ok::<(), tinsel::RunError>(())
 /// ```
+#[must_use = "the command only runs when `run` is called"]
 pub struct StepCommand<'a, 'c> {
     pub(super) step: &'a Step,
     pub(super) command: Box<dyn BorrowMut<Command> + 'c>,
@@ -44,6 +45,18 @@ pub struct StepCommand<'a, 'c> {
     pub(super) timeout: Option<Duration>,
     pub(super) retries: u32,
     pub(super) tail: usize,
+}
+
+impl std::fmt::Debug for StepCommand<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StepCommand")
+            .field("step", self.step)
+            .field("command", (*self.command).borrow())
+            .field("timeout", &self.timeout)
+            .field("retries", &self.retries)
+            .field("tail", &self.tail)
+            .finish_non_exhaustive()
+    }
 }
 
 impl StepCommand<'_, '_> {

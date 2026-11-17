@@ -107,7 +107,7 @@ use crate::block::Block;
 use crate::term;
 
 /// Something that happened, handed to [`App::event`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Event {
     /// A key was pressed.
@@ -131,7 +131,7 @@ pub enum Event {
 }
 
 /// Whether to keep going after an event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Flow {
     /// Carry on.
     Continue,

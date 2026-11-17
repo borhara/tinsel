@@ -242,6 +242,7 @@ struct Counts {
 /// When the amount of work isn't known up front, use [`Progress::unknown`] (a count and a
 /// rate, no bar), or grow the total as you find more with [`add_total`](Progress::add_total).
 /// To track a loop, see [`ProgressIterator`]. Dropping a `Progress` finishes it.
+#[must_use = "a progress line finishes as soon as it's dropped"]
 pub struct Progress {
     counts: Arc<Mutex<Counts>>,
     label: String,
@@ -253,6 +254,17 @@ pub struct Progress {
     ticker: Mutex<Option<Ticker>>,
     fps: u32,
     finished: bool,
+}
+
+impl std::fmt::Debug for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let c = lock(&self.counts);
+        f.debug_struct("Progress")
+            .field("label", &self.label)
+            .field("done", &c.done)
+            .field("total", &c.total)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Progress {
@@ -439,9 +451,19 @@ impl<I: Iterator> ProgressIterator for I {
 }
 
 /// An iterator with a progress line: see [`ProgressIterator`].
+#[must_use = "iterators do nothing until they're used, and the progress line finishes when dropped"]
 pub struct WithProgress<I> {
     inner: I,
     bar: Option<Progress>,
+}
+
+impl<I: std::fmt::Debug> std::fmt::Debug for WithProgress<I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WithProgress")
+            .field("inner", &self.inner)
+            .field("progress", &self.bar)
+            .finish()
+    }
 }
 
 impl<I> WithProgress<I> {

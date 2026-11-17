@@ -27,6 +27,7 @@ pub fn confirm(question: &str, default: bool) -> Result<bool> {
 /// let tag = Confirm::new("Tag the release?").default(true).back().ask()?;
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
+#[derive(Clone, Debug)]
 pub struct Confirm {
     question: String,
     default: bool,
@@ -48,12 +49,14 @@ impl Confirm {
     }
 
     /// The answer when Enter or → is pressed (or an empty line is piped in).
+    #[must_use]
     pub fn default(mut self, yes: bool) -> Self {
         self.default = yes;
         self
     }
 
     /// Let ← go back to the question before, as [`Error::Back`].
+    #[must_use]
     pub fn back(mut self) -> Self {
         self.back = true;
         self
@@ -61,6 +64,7 @@ impl Confirm {
 
     /// The answer when there's no terminal and the piped input has already ended, so a
     /// script that runs out of answers can say no. The [`default`](Confirm::default) unless set.
+    #[must_use]
     pub fn end_of_input(mut self, yes: bool) -> Self {
         self.at_end = Some(yes);
         self
@@ -78,6 +82,7 @@ impl Confirm {
     /// let go = Confirm::new("Go?").lenient().ask()?;
     /// # Ok::<(), tinsel::prompt::Error>(())
     /// ```
+    #[must_use]
     pub fn lenient(mut self) -> Self {
         self.lenient = true;
         self
@@ -160,6 +165,19 @@ pub struct Input<'a> {
     back: bool,
 }
 
+impl std::fmt::Debug for Input<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Input")
+            .field("question", &self.question)
+            .field("default", &self.default)
+            .field("initial", &self.initial)
+            .field("placeholder", &self.placeholder)
+            .field("password", &self.secret)
+            .field("back", &self.back)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> Input<'a> {
     /// A text question.
     pub fn new(question: impl Into<String>) -> Self {
@@ -183,6 +201,7 @@ impl<'a> Input<'a> {
     ///     .ask()?;
     /// # Ok::<(), tinsel::prompt::Error>(())
     /// ```
+    #[must_use]
     pub fn suggestions<S: Into<String>>(self, options: impl IntoIterator<Item = S>) -> Self {
         let options: Vec<String> = options.into_iter().map(Into::into).collect();
         self.complete(move |typed| {
@@ -197,6 +216,7 @@ impl<'a> Input<'a> {
 
     /// Offer whatever `complete` returns for the text typed so far, best first. Each
     /// suggestion is a whole answer, not just the rest of it.
+    #[must_use]
     pub fn complete(mut self, complete: impl Fn(&str) -> Vec<String> + 'a) -> Self {
         self.complete = Some(Box::new(complete));
         self
@@ -204,11 +224,13 @@ impl<'a> Input<'a> {
 
     /// Complete file and folder paths, like a shell: Tab fills in names from the folder
     /// typed so far (`~` is your home folder), and folders end in `/`.
+    #[must_use]
     pub fn paths(self) -> Self {
         self.complete(complete_path)
     }
 
     /// The answer if Enter is pressed without typing anything, shown dim until you type.
+    #[must_use]
     pub fn default(mut self, value: impl Into<String>) -> Self {
         self.default = Some(value.into());
         self
@@ -221,18 +243,21 @@ impl<'a> Input<'a> {
     /// let name = tinsel::prompt::Input::new("Name").initial("api-gateway").ask()?;
     /// # Ok::<(), tinsel::prompt::Error>(())
     /// ```
+    #[must_use]
     pub fn initial(mut self, text: impl Into<String>) -> Self {
         self.initial = Some(text.into());
         self
     }
 
     /// Dim example text shown until you type. Unlike a default, it's never the answer.
+    #[must_use]
     pub fn placeholder(mut self, text: impl Into<String>) -> Self {
         self.placeholder = Some(text.into());
         self
     }
 
     /// Show what's typed as dots.
+    #[must_use]
     pub fn password(mut self) -> Self {
         self.secret = true;
         self
@@ -240,6 +265,7 @@ impl<'a> Input<'a> {
 
     /// Check the answer when Enter is pressed. An `Err` is shown under the question, which
     /// is asked again. The default is checked too, if it's used.
+    #[must_use]
     pub fn validate(mut self, check: impl Fn(&str) -> std::result::Result<(), String> + 'a) -> Self {
         self.validate = Some(Box::new(check));
         self
@@ -258,6 +284,7 @@ impl<'a> Input<'a> {
     /// }
     /// # Ok::<(), Error>(())
     /// ```
+    #[must_use]
     pub fn back(mut self) -> Self {
         self.back = true;
         self

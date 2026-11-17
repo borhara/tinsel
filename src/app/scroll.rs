@@ -56,6 +56,7 @@ impl Scroll {
 
     /// Which keys scroll it: vim's j/k and g/G as well as the arrows unless this says
     /// [`Keymap::Arrows`].
+    #[must_use]
     pub fn keymap(mut self, keymap: Keymap) -> Self {
         self.keymap = keymap;
         self
@@ -151,18 +152,21 @@ impl<'a> ScrollView<'a> {
     }
 
     /// How far it's scrolled.
+    #[must_use]
     pub fn scroll(mut self, scroll: &'a Scroll) -> Self {
         self.scroll = Some(scroll);
         self
     }
 
     /// Word-wrap long lines to the width, instead of cutting them off.
+    #[must_use]
     pub fn wrap(mut self) -> Self {
         self.wrap = true;
         self
     }
 
     /// What to say when there are no lines: "nothing here yet" unless changed.
+    #[must_use]
     pub fn empty(mut self, text: impl Into<String>) -> Self {
         self.empty = text.into();
         self

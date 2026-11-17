@@ -51,12 +51,14 @@ impl TextInput {
     }
 
     /// What sits before the text: `›` unless set. `/` suits a filter.
+    #[must_use]
     pub fn prompt(mut self, prompt: impl Into<String>) -> Self {
         self.prompt = prompt.into();
         self
     }
 
     /// Quiet text shown while the box is empty, saying what goes in it.
+    #[must_use]
     pub fn placeholder(mut self, text: impl Into<String>) -> Self {
         self.placeholder = text.into();
         self

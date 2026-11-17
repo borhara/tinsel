@@ -69,6 +69,7 @@ struct State {
 /// if it's kept. With [`Output::Json`](crate::Output::Json) logged lines are `"log"` events
 /// and a kept last frame is one `"block"` event; with [`Output::Quiet`](crate::Output::Quiet)
 /// nothing prints.
+#[must_use = "a region finishes as soon as it's dropped"]
 pub struct Region {
     state: Arc<Mutex<State>>,
     view: Arc<Mutex<View>>,
@@ -114,6 +115,15 @@ impl crate::display::Shown for Mutex<State> {
             s.abandoned = true;
         }
         output::write("\x1b[?7h\x1b[?25h");
+    }
+}
+
+impl std::fmt::Debug for Region {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Region")
+            .field("keep", &self.keep)
+            .field("finished", &self.closed)
+            .finish_non_exhaustive()
     }
 }
 

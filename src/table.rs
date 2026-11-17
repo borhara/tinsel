@@ -7,7 +7,7 @@ use crate::style::{Rgb, bold, mix, paint, paint_bg};
 use crate::text;
 
 /// Which side of a column cells hug.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Align {
     /// Text hugs the left edge: the default for words.
@@ -17,7 +17,7 @@ pub enum Align {
 }
 
 /// How a [`Table`] is framed.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Border {
     /// No frame: a dotted rule under the header and space between columns. The default.
@@ -82,6 +82,7 @@ impl Table {
     /// Add a row of cells. Cells can be plain or styled (a [`badge`](crate::badge), say).
     /// A row can have fewer cells than there are headers (the rest show `·`), but not more:
     /// debug builds stop there and say so.
+    #[must_use]
     pub fn row<S: Into<String>>(mut self, cells: impl IntoIterator<Item = S>) -> Self {
         let cells: Vec<String> = cells.into_iter().map(Into::into).collect();
         check_row("Table", &self.headers, cells.len(), self.rows.len());
@@ -93,42 +94,49 @@ impl Table {
     }
 
     /// A closing row under a rule, for totals.
+    #[must_use]
     pub fn footer<S: Into<String>>(mut self, cells: impl IntoIterator<Item = S>) -> Self {
         self.footer = Some(cells.into_iter().map(Into::into).collect());
         self
     }
 
     /// Override the automatic alignment of one column.
+    #[must_use]
     pub fn align(mut self, column: usize, align: Align) -> Self {
         set(&mut self.align, column, Some(align));
         self
     }
 
     /// Cut cells in a column to at most `cols` wide, ending in `…`.
+    #[must_use]
     pub fn max_width(mut self, column: usize, cols: usize) -> Self {
         set(&mut self.limits, column, Some((cols.max(1), Overflow::Truncate)));
         self
     }
 
     /// Wrap cells in a column onto more lines once they're wider than `cols`.
+    #[must_use]
     pub fn wrap(mut self, column: usize, cols: usize) -> Self {
         set(&mut self.limits, column, Some((cols.max(1), Overflow::Wrap)));
         self
     }
 
     /// Draw a frame around the table (default: [`Border::None`]).
+    #[must_use]
     pub fn border(mut self, border: Border) -> Self {
         self.border = border;
         self
     }
 
     /// A title, set into the top border (or above the table, without one).
+    #[must_use]
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
     /// Tint every other row faintly, to help the eye along wide tables.
+    #[must_use]
     pub fn striped(mut self) -> Self {
         self.striped = true;
         self
@@ -143,6 +151,7 @@ impl Table {
     /// let table = Table::new(["name", "note"]).row(["api", ""]).blank_cells();
     /// assert_eq!(table.lines().plain(), "  name   note\n  ┈┈┈┈┈┈┈┈┈┈┈\n  api");
     /// ```
+    #[must_use]
     pub fn blank_cells(mut self) -> Self {
         self.blank = true;
         self
@@ -150,6 +159,7 @@ impl Table {
 
     /// Pick out row `index` (counting rows added so far, from 0) in the accent colour, on a
     /// soft tint, with a little `✦` beside it. Highlighted rows stay highlighted when sorted.
+    #[must_use]
     pub fn highlight(mut self, index: usize) -> Self {
         if let Some(row) = self.rows.get_mut(index) {
             row.highlight = true;
@@ -159,12 +169,14 @@ impl Table {
 
     /// Sort the rows added so far by a column, smallest first. Columns of numbers sort by
     /// value, understanding units: `900 KB` comes before `1.2 MB`, `45s` before `2m`.
+    #[must_use]
     pub fn sort_by(mut self, column: usize) -> Self {
         self.sort(column, false);
         self
     }
 
     /// Like [`sort_by`](Table::sort_by), largest first.
+    #[must_use]
     pub fn sort_by_desc(mut self, column: usize) -> Self {
         self.sort(column, true);
         self
