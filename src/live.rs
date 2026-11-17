@@ -1,11 +1,12 @@
 use std::io::Read;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::block::Block;
+use crate::display::{Mode, lock, lock_patiently};
 use crate::history::{self, History};
 use crate::output::{self, Val};
 use crate::style::palette::{AMBER, MUTED, RED, ROSE, SOFT, TEXT};
@@ -50,33 +51,6 @@ impl State {
             State::Skipped => "skipped",
             State::Cancelled => "cancelled",
             State::Waiting => "waiting",
-        }
-    }
-}
-
-/// How a display shows itself, decided once when it starts.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Mode {
-    /// Redrawn in place on a terminal.
-    Draw,
-    /// One plain line per finished step, for logs and pipes.
-    Plain,
-    /// One JSON event per change.
-    Json,
-    /// Nothing but failures.
-    Quiet,
-    /// Nothing at all, on a clock that only moves when told: for tests.
-    Headless,
-}
-
-impl Mode {
-    /// How a display shows itself, given the output shape and whether it's drawn on a terminal.
-    fn pick(out: output::Output, terminal: bool) -> Mode {
-        match out {
-            output::Output::Json => Mode::Json,
-            output::Output::Quiet => Mode::Quiet,
-            output::Output::Pretty if terminal => Mode::Draw,
-            output::Output::Pretty => Mode::Plain,
         }
     }
 }
@@ -190,10 +164,6 @@ pub struct Step {
     idx: usize,
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 fn content_width() -> usize {
     term::width().min(MAX_WIDTH)
 }
@@ -293,19 +263,7 @@ pub(crate) fn abandon_all() -> bool {
     let mut any = false;
     for shared in drawing.iter().filter_map(Weak::upgrade) {
         // the panicking thread might be the one holding the lock, so never wait forever
-        let mut s = None;
-        for _ in 0..50 {
-            match shared.try_lock() {
-                Ok(guard) => s = Some(guard),
-                Err(TryLockError::Poisoned(e)) => s = Some(e.into_inner()),
-                Err(TryLockError::WouldBlock) => {
-                    thread::sleep(Duration::from_millis(2));
-                    continue;
-                }
-            }
-            break;
-        }
-        let Some(mut s) = s else { continue };
+        let Some(mut s) = lock_patiently(&shared) else { continue };
         let now = s.now();
         for step in s.steps.iter_mut().filter(|st| st.state == State::Active) {
             step.state = State::Fail;
@@ -325,7 +283,7 @@ impl Live {
     ///
     /// It starts drawing straight away; add steps with [`Live::step`].
     pub fn new(title: impl Into<String>, target: impl Into<String>) -> Self {
-        let mode = Mode::pick(output::output(), output::is_terminal());
+        let mode = Mode::now();
         let mut live = Live::with_mode(title.into(), target.into(), mode);
         match mode {
             Mode::Plain => {
