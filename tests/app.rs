@@ -1,4 +1,4 @@
-use tinsel::app::{self, App, Cursor, Event, Flow, Frame, Grid, Key, List, Panel, Size::*, Tabs, hints};
+use tinsel::app::{self, App, Event, Flow, Frame, Grid, GridState, Key, List, Panel, Size::*, Tabs, hints};
 
 struct Picker {
     tab: usize,
@@ -66,20 +66,20 @@ fn services(n: usize) -> Vec<[String; 3]> {
         .collect()
 }
 
-fn grid<'a>(rows: &[[String; 3]], cursor: &'a Cursor) -> Grid<'a> {
+fn grid<'a>(rows: &[[String; 3]], cursor: &'a GridState) -> Grid<'a> {
     rows.iter()
         .fold(Grid::new(["service", "version", "env"]), |g, r| {
             g.row(r.iter().cloned())
         })
-        .cursor(cursor)
+        .state(cursor)
 }
 
 #[test]
 fn a_grid_keeps_the_cursor_and_header_in_view() {
     tinsel::set_color_mode(tinsel::ColorMode::None);
     let rows = services(8);
-    let mut cursor = Cursor::new();
-    let draw = |cursor: &Cursor| {
+    let mut cursor = GridState::new();
+    let draw = |cursor: &GridState| {
         let mut frame = Frame::new(36, 5);
         frame.render(frame.area(), grid(&rows, cursor));
         frame.snapshot().plain()
@@ -117,8 +117,8 @@ fn a_grid_keeps_the_cursor_and_header_in_view() {
 fn a_grid_scrolls_sideways_a_column_at_a_time() {
     tinsel::set_color_mode(tinsel::ColorMode::None);
     let rows = services(2);
-    let mut cursor = Cursor::new();
-    let draw = |cursor: &Cursor| {
+    let mut cursor = GridState::new();
+    let draw = |cursor: &GridState| {
         let mut frame = Frame::new(20, 4);
         frame.render(frame.area(), grid(&rows, cursor));
         frame.snapshot().plain()
@@ -146,7 +146,7 @@ fn a_grid_scrolls_sideways_a_column_at_a_time() {
 
 /// A little services screen with every piece on it, to see how they sit together.
 struct Services {
-    cursor: Cursor,
+    cursor: GridState,
     filter: tinsel::app::TextInput,
     toasts: tinsel::app::Toasts,
     confirm: bool,
@@ -164,7 +164,7 @@ impl App for Services {
             .row(["api", "v2.1", "v2.1"])
             .row(["web", "v2.2", "v2.0"])
             .row(["worker", "v1.9", "v1.9"])
-            .cursor(&self.cursor);
+            .state(&self.cursor);
         frame.render(rows, grid);
         let footer_line = tinsel::app::Footer::new()
             .keys(&[("↑↓", "move"), ("/", "filter")])
@@ -182,7 +182,7 @@ impl App for Services {
 fn every_piece_together_in_plain_text() {
     tinsel::set_color_mode(tinsel::ColorMode::None);
     let mut app = Services {
-        cursor: Cursor::new(),
+        cursor: GridState::new(),
         filter: tinsel::app::TextInput::new().prompt("/").placeholder("filter by name"),
         toasts: tinsel::app::Toasts::new(),
         confirm: false,
