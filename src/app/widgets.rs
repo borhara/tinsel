@@ -58,11 +58,30 @@ pub trait Widget {
     fn size(&self) -> Option<(usize, usize)> {
         None
     }
+
+    /// Where what it holds goes when it's drawn at `area`: inside a [`Panel`]'s border and
+    /// padding, say. The whole area unless implemented; [`Frame::modal`] gives it back, so
+    /// what's in a modal can be drawn there.
+    ///
+    /// ```
+    /// use tinsel::app::{Panel, Rect, Widget};
+    ///
+    /// let area = Rect::new(0, 0, 20, 5);
+    /// assert_eq!(Widget::inner(&Panel::new("hi"), area), Rect::new(2, 1, 16, 3));
+    /// assert_eq!("text".inner(area), area);
+    /// ```
+    fn inner(&self, area: Rect) -> Rect {
+        area
+    }
 }
 
 impl<W: Widget + ?Sized> Widget for &W {
     fn render(&self, area: Rect, frame: &mut Frame) {
         (**self).render(area, frame)
+    }
+
+    fn inner(&self, area: Rect) -> Rect {
+        (**self).inner(area)
     }
 
     fn size(&self) -> Option<(usize, usize)> {
@@ -73,6 +92,10 @@ impl<W: Widget + ?Sized> Widget for &W {
 impl<W: Widget + ?Sized> Widget for Box<W> {
     fn render(&self, area: Rect, frame: &mut Frame) {
         (**self).render(area, frame)
+    }
+
+    fn inner(&self, area: Rect) -> Rect {
+        (**self).inner(area)
     }
 
     fn size(&self) -> Option<(usize, usize)> {
@@ -661,6 +684,10 @@ impl Widget for Panel<'_> {
         if let Some(body) = &self.body {
             body.render(self.inner(area), frame);
         }
+    }
+
+    fn inner(&self, area: Rect) -> Rect {
+        Panel::inner(self, area)
     }
 
     fn size(&self) -> Option<(usize, usize)> {
