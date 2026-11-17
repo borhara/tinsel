@@ -2,7 +2,10 @@
 //! escape codes count for nothing, CJK and emoji count for two columns, and a character
 //! with the marks, variation selectors and joiners that build on it counts as one.
 
+mod fuzzy;
 mod tables;
+
+pub use fuzzy::{Fuzzy, fuzzy, highlight};
 
 pub use crate::term::content_width;
 
