@@ -151,6 +151,8 @@ fn csi(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, usize)> {
     let n = end + 1;
     let key = match (bytes[end], params) {
         (b'M' | b'm', p) if p.starts_with('<') => return Some((mouse(&p[1..], bytes[end] == b'M'), n)),
+        (b'I', "") => return Some((Some(Event::Focus(true)), n)),
+        (b'O', "") => return Some((Some(Event::Focus(false)), n)),
         (b'A', _) => Key::Up,
         (b'B', _) => Key::Down,
         (b'C', _) => Key::Right,
@@ -394,6 +396,8 @@ mod tests {
             [Event::Paste("one\ntwo\nthree\x1b[A".into()), Event::Key(Key::Char('x'))]
         );
         // half a paste is waited for, pause or not
+        assert_eq!(parse(b"\x1b[I", true), Some((Some(Event::Focus(true)), 3)));
+        assert_eq!(parse(b"\x1b[O", true), Some((Some(Event::Focus(false)), 3)));
         assert_eq!(parse(b"\x1b[200~half\n", true), None);
         assert_eq!(parse(b"\x1b[200~half\x1b[20", false), None);
         // and an empty one is still a paste
