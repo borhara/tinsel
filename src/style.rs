@@ -53,6 +53,10 @@ pub const RAMP: [Rgb; 3] = [palette::BERRY, palette::ROSE, palette::BLUSH];
 pub enum ColorMode {
     /// Plain text, no escape codes at all: piped output, `NO_COLOR`, or tests.
     None,
+    /// The 16 colours every terminal has, in whatever shades its theme gives them: for a
+    /// `TERM` without `256color` (the Linux console, plain `xterm`), or `FORCE_COLOR=1`.
+    /// Pinks become magenta and greys become black and white.
+    Ansi16,
     /// The 256-colour palette, for terminals that don't advertise truecolor.
     Ansi256,
     /// Full 24-bit colour.
@@ -65,6 +69,7 @@ fn mode_code(mode: ColorMode) -> u8 {
         ColorMode::None => 1,
         ColorMode::Ansi256 => 2,
         ColorMode::TrueColor => 3,
+        ColorMode::Ansi16 => 4,
     }
 }
 
@@ -73,6 +78,7 @@ fn mode_from(code: u8) -> Option<ColorMode> {
         1 => Some(ColorMode::None),
         2 => Some(ColorMode::Ansi256),
         3 => Some(ColorMode::TrueColor),
+        4 => Some(ColorMode::Ansi16),
         _ => None,
     }
 }
@@ -288,8 +294,8 @@ fn decide(env: &ColorEnv, terminal: bool, stream: Target) -> (ColorMode, String)
     if let Some(v) = env.force_color.as_deref() {
         let level = match v.trim().to_ascii_lowercase().as_str() {
             "0" | "false" => return (ColorMode::None, format!("FORCE_COLOR={v}")),
-            // 16 colours would be level 1; 256 is the fewest tinsel draws with
-            "1" | "2" => Some(ColorMode::Ansi256),
+            "1" => Some(ColorMode::Ansi16),
+            "2" => Some(ColorMode::Ansi256),
             "3" => Some(ColorMode::TrueColor),
             _ => None,
         };
@@ -323,14 +329,19 @@ fn forced(env: &ColorEnv, why: String) -> (ColorMode, String) {
     (mode, format!("{why}, and {depth_why}"))
 }
 
-/// How many colours the terminal has, from `COLORTERM`.
+/// How many colours the terminal has, from `COLORTERM`, or failing that `TERM`.
 fn depth(env: &ColorEnv) -> (ColorMode, String) {
-    match env.colorterm.as_deref() {
-        Some(v) if v.eq_ignore_ascii_case("truecolor") || v.eq_ignore_ascii_case("24bit") => {
+    match (env.colorterm.as_deref(), env.term.as_deref()) {
+        (Some(v), _) if v.eq_ignore_ascii_case("truecolor") || v.eq_ignore_ascii_case("24bit") => {
             (ColorMode::TrueColor, format!("COLORTERM={v}"))
         }
-        Some(v) => (ColorMode::Ansi256, format!("COLORTERM={v} doesn't promise truecolor")),
-        None => (
+        (Some(v), _) => (ColorMode::Ansi256, format!("COLORTERM={v} doesn't promise truecolor")),
+        // a terminal that names itself without 256color (the Linux console, plain xterm,
+        // screen) is only sure to have the 16
+        (None, Some(term)) if !["256color", "direct", "truecolor"].iter().any(|t| term.contains(t)) => {
+            (ColorMode::Ansi16, format!("TERM={term} promises 16 colours"))
+        }
+        (None, _) => (
             ColorMode::Ansi256,
             "COLORTERM isn't set, so 256 colours to be safe".into(),
         ),
@@ -638,11 +649,39 @@ pub(crate) fn shown(rgb: Rgb) -> Rgb {
 /// The SGR parameters for a colour; `layer` is 38 for foreground, 48 for background.
 pub(crate) fn sgr(rgb: Rgb, layer: u8) -> String {
     let Rgb(r, g, b) = shown(rgb);
-    if color_mode() == ColorMode::TrueColor {
-        format!("{layer};2;{r};{g};{b}")
-    } else {
-        format!("{layer};5;{}", ansi256(Rgb(r, g, b)))
+    match color_mode() {
+        ColorMode::TrueColor => format!("{layer};2;{r};{g};{b}"),
+        // 30-37 and 90-97 for the text, 40-47 and 100-107 behind it
+        ColorMode::Ansi16 => match ansi16(Rgb(r, g, b)) {
+            n @ 0..8 => format!("{}", layer - 8 + n),
+            n => format!("{}", layer + 52 + n - 8),
+        },
+        _ => format!("{layer};5;{}", ansi256(Rgb(r, g, b))),
     }
+}
+
+/// The nearest of the 16 colours every terminal has, by kind rather than by shade, since a
+/// terminal's theme can draw them any way it likes: greys by how light they are, and other
+/// colours by hue, the bright ones light. Pinks are magenta, so they never read as red.
+pub(crate) fn ansi16(rgb: Rgb) -> u8 {
+    let (h, s, l) = to_hsl(rgb);
+    if s < 0.15 || !(0.08..=0.92).contains(&l) {
+        return match l {
+            l if l < 0.2 => 0,
+            l if l < 0.5 => 8,
+            l if l < 0.85 => 7,
+            _ => 15,
+        };
+    }
+    let hue = match h * 360.0 {
+        d if !(15.0..345.0).contains(&d) => 1,
+        d if d < 75.0 => 3,
+        d if d < 165.0 => 2,
+        d if d < 200.0 => 6,
+        d if d < 260.0 => 4,
+        _ => 5,
+    };
+    if l > 0.6 { hue + 8 } else { hue }
 }
 
 /// The nearest colour in xterm's 256-colour palette: the closer of the best match in its
@@ -1031,7 +1070,8 @@ mod tests {
     fn colour_can_be_forced_on_or_turned_off() {
         let mode = |vars: &[(&str, &str)], terminal: bool| decide(&env(vars), terminal, Target::Stdout).0;
         // forced on, even when piped
-        assert_eq!(mode(&[("FORCE_COLOR", "1")], false), ColorMode::Ansi256);
+        assert_eq!(mode(&[("FORCE_COLOR", "1")], false), ColorMode::Ansi16);
+        assert_eq!(mode(&[("FORCE_COLOR", "2")], false), ColorMode::Ansi256);
         assert_eq!(mode(&[("FORCE_COLOR", "3")], false), ColorMode::TrueColor);
         assert_eq!(
             mode(&[("FORCE_COLOR", ""), ("COLORTERM", "truecolor")], false),
@@ -1039,9 +1079,13 @@ mod tests {
         );
         assert_eq!(mode(&[("CLICOLOR_FORCE", "1")], false), ColorMode::Ansi256);
         assert_eq!(mode(&[("CLICOLOR_FORCE", "0")], false), ColorMode::None);
+        assert_eq!(mode(&[("FORCE_COLOR", "1"), ("TERM", "dumb")], true), ColorMode::Ansi16);
+        // 16 colours where TERM says no more and COLORTERM says nothing
+        assert_eq!(mode(&[("TERM", "linux")], true), ColorMode::Ansi16);
+        assert_eq!(mode(&[("TERM", "xterm-256color")], true), ColorMode::Ansi256);
         assert_eq!(
-            mode(&[("FORCE_COLOR", "1"), ("TERM", "dumb")], true),
-            ColorMode::Ansi256
+            mode(&[("TERM", "xterm"), ("COLORTERM", "truecolor")], true),
+            ColorMode::TrueColor
         );
         // turned off
         assert_eq!(
@@ -1135,6 +1179,24 @@ mod tests {
     fn colours_fall_back_to_the_256_palette() {
         let red = with_color_mode(ColorMode::Ansi256, || sgr(Rgb(255, 0, 0), 38));
         assert_eq!(red, "38;5;196");
+    }
+
+    #[test]
+    fn sixteen_colours_keep_pinks_magenta_and_greys_grey() {
+        use palette::*;
+        assert_eq!([ROSE, BLUSH, BERRY].map(ansi16), [13, 13, 5]);
+        assert_eq!([RED, AMBER, SAGE].map(ansi16), [9, 11, 10]);
+        assert_eq!([TEXT, SOFT, MUTED, TRACK].map(ansi16), [15, 7, 8, 8]);
+        assert_eq!([SHINE, Rgb(0, 0, 0), Rgb(40, 60, 200)].map(ansi16), [15, 0, 4]);
+        let codes = with_color_mode(ColorMode::Ansi16, || {
+            [
+                sgr(Rgb(200, 0, 0), 38),
+                sgr(Rgb(200, 0, 0), 48),
+                sgr(Rgb(255, 120, 120), 38),
+                sgr(Rgb(255, 120, 120), 48),
+            ]
+        });
+        assert_eq!(codes, ["31", "41", "91", "101"]);
     }
 
     #[test]
