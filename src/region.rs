@@ -29,6 +29,8 @@ struct State {
     every: Duration,
     /// A panic took over the screen: stop drawing.
     abandoned: bool,
+    /// Questions open over the region: nothing is drawn while any is.
+    paused: u32,
 }
 
 /// Any [`Block`] (a table, a tree, a few lines of status) redrawn in place at a steady rate
@@ -78,23 +80,41 @@ pub struct Region {
     prev_interrupt: Option<usize>,
 }
 
-/// Regions drawing right now, so a panic can stop them.
-static DRAWING: Mutex<Vec<Weak<Mutex<State>>>> = Mutex::new(Vec::new());
-
-/// Stop every region mid-draw, leaving its last frame on screen. Called by the panic hook
+/// Stop every display mid-draw, leaving its last frame on screen. Called by the panic hook
 /// before it prints. Returns whether there were any.
 pub(crate) fn abandon_all() -> bool {
-    let drawing = std::mem::take(&mut *lock(&DRAWING));
-    let mut any = false;
-    for state in drawing.iter().filter_map(Weak::upgrade) {
+    crate::display::abandon_all()
+}
+
+impl crate::display::Shown for Mutex<State> {
+    /// Clear the region away, for the question to go where it was.
+    fn pause(&self) {
+        let mut s = lock(self);
+        if s.paused == 0 && !s.abandoned {
+            output::write(&frame(&mut s, &[], usize::MAX));
+        }
+        s.paused += 1;
+    }
+
+    fn resume(&self) {
+        let mut s = lock(self);
+        s.paused -= 1;
+        if s.paused == 0 && !s.abandoned {
+            output::write("\x1b[?25l");
+        }
+    }
+
+    fn log(&self, line: &str) {
+        lock(self).logs.push(line.to_string());
+    }
+
+    fn abandon(&self) {
         // the panicking thread might be the one holding the lock, so never wait forever
-        if let Some(mut s) = lock_patiently(&state) {
+        if let Some(mut s) = lock_patiently(self) {
             s.abandoned = true;
         }
         output::write("\x1b[?7h\x1b[?25h");
-        any = true;
     }
-    any
 }
 
 impl Region {
@@ -131,6 +151,7 @@ impl Region {
                 drawn: 0,
                 every: Duration::from_secs(1) / DEFAULT_FPS,
                 abandoned: false,
+                paused: 0,
             })),
             view: Arc::new(Mutex::new(view)),
             stop: Arc::new(AtomicBool::new(false)),
@@ -146,7 +167,7 @@ impl Region {
         // settled before the first frame, since finding it out can mean asking the terminal
         crate::style::theme();
         self.prev_interrupt = term::guard_interrupt();
-        lock(&DRAWING).push(Arc::downgrade(&self.state));
+        crate::display::add(Arc::downgrade(&self.state) as Weak<dyn crate::display::Shown>);
         output::write("\x1b[?25l");
         let (state, view, stop) = (self.state.clone(), self.view.clone(), self.stop.clone());
         self.thread = Some(thread::spawn(move || {
@@ -249,7 +270,7 @@ impl Region {
             Vec::new()
         };
         draw(&mut lock(&self.state), &lines, true);
-        lock(&DRAWING).retain(|w| w.upgrade().is_some_and(|s| !Arc::ptr_eq(&s, &self.state)));
+        crate::display::remove(Arc::as_ptr(&self.state));
         output::write("\x1b[?25h");
         term::restore_interrupt(self.prev_interrupt.take());
     }
@@ -262,7 +283,8 @@ impl Drop for Region {
 }
 
 fn draw(s: &mut State, lines: &[String], last: bool) {
-    if s.abandoned {
+    // the last frame is drawn even over a question: nothing would draw it later
+    if s.abandoned || (s.paused > 0 && !last) {
         return;
     }
     let room = term::height().saturating_sub(1).max(1);
@@ -306,6 +328,7 @@ mod tests {
             drawn: 0,
             every: Duration::from_millis(100),
             abandoned: false,
+            paused: 0,
         }
     }
 
