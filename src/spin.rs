@@ -7,6 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::display::{self, lock};
+use crate::live::one_row;
 use crate::output::{self, Val};
 use crate::style::palette::{MUTED, RED, ROSE, SOFT, TEXT};
 use crate::style::{Rgb, mix, paint};
@@ -54,7 +55,9 @@ impl Ticker {
                 {
                     let s = lock(&state);
                     if s.paused == 0 && !s.abandoned {
-                        output::write(&format!("\r{}\x1b[K", frame(t0.elapsed().as_secs_f64())));
+                        // kept to one row: a line break in the label would scroll a line a frame
+                        let line = frame(t0.elapsed().as_secs_f64());
+                        output::write(&format!("\r{}\x1b[K", one_row(&line)));
                     }
                 }
                 thread::sleep(crate::fps::frame(rate.load(Ordering::Relaxed)));
@@ -80,7 +83,7 @@ impl Ticker {
         let mut s = lock(&self.line);
         if !s.abandoned {
             let mut out: String = s.logs.drain(..).map(|l| format!("\r{l}\x1b[K\n")).collect();
-            out += &format!("\r{last}\x1b[K\n{GIVE_BACK}");
+            out += &format!("\r{}\x1b[K\n{GIVE_BACK}", one_row(last));
             output::write(&out);
         }
         drop(s);
@@ -113,13 +116,18 @@ impl display::Shown for Mutex<LineState> {
         }
     }
 
-    fn log(&self, line: &str) {
-        let mut s = lock(self);
+    fn log(&self, lines: &[&str], patient: bool) -> bool {
+        let Some(mut s) = display::lock_if(self, patient) else {
+            return false;
+        };
         if s.paused > 0 || s.abandoned {
-            return s.logs.push(line.to_string());
+            s.logs.extend(lines.iter().map(|l| l.to_string()));
+            return true;
         }
-        // wrapping is back on for the line, which may be long; the next frame goes below it
-        output::write(&format!("\r\x1b[K\x1b[?7h{line}\n\x1b[?7l"));
+        // wrapping is back on for the lines, which may be long; the next frame goes below them
+        let text: String = lines.iter().map(|l| format!("\r\x1b[K{l}\n")).collect();
+        output::write(&format!("\x1b[?7h{text}\x1b[?7l"));
+        true
     }
 
     fn abandon(&self) {
@@ -388,18 +396,23 @@ impl Progress {
 
     /// Stop drawing and leave a `●  label` line, with the time it took on the right.
     pub fn finish(mut self) {
-        self.end();
+        self.end(Ended::Done);
     }
 
-    fn end(&mut self) {
+    fn end(&mut self, ended: Ended) {
         if std::mem::replace(&mut self.finished, true) {
             return;
         }
         let took = self.start.elapsed();
         // finished without an update still ends on its line
         self.show();
+        let label = one_row(&self.label);
         if let Some(t) = lock(&self.ticker).as_mut() {
-            return t.finish(&done_line(&self.label, took));
+            return t.finish(&match ended {
+                Ended::Done => done_line(&label, took),
+                Ended::Stopped => finished_line("⊘", SOFT, &label, SOFT, MUTED, took),
+                Ended::Panicked => finished_line("✕", RED, &label, RED, RED, took),
+            });
         }
         if output::json() {
             let c = lock(&self.counts);
@@ -408,19 +421,57 @@ impl Progress {
                 ("done", Val::Num(c.done as f64)),
                 ("secs", Val::Num(took.as_secs_f64())),
             ];
+            if ended != Ended::Done {
+                fields.push(("outcome", Val::Str(ended.name())));
+            }
             if let Some(total) = c.total {
                 fields.push(("total", Val::Num(total as f64)));
             }
             output::emit("progress", &fields);
+        } else if ended == Ended::Panicked {
+            output::err_line(&format!("  [FAIL] {label} ({})", format::duration(took)));
         } else if !output::quiet() {
-            output::line(&format!("  [ok] {} ({})", self.label, format::duration(took)));
+            output::line(&format!("  [{}] {label} ({})", ended.name(), format::duration(took)));
+        }
+    }
+}
+
+/// How a progress line ended.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    /// Finished, or dropped with all its work done.
+    Done,
+    /// Dropped with work left, by an early return or a `break`.
+    Stopped,
+    /// Dropped while a panic unwinds.
+    Panicked,
+}
+
+impl Ended {
+    fn name(self) -> &'static str {
+        match self {
+            Ended::Done => "ok",
+            Ended::Stopped => "stopped",
+            Ended::Panicked => "fail",
         }
     }
 }
 
 impl Drop for Progress {
     fn drop(&mut self) {
-        self.end();
+        // dropped short of its total (an early return), or by a panic, it doesn't claim success
+        let short = {
+            let c = lock(&self.counts);
+            c.total.is_some_and(|total| c.done < total)
+        };
+        let ended = if thread::panicking() {
+            Ended::Panicked
+        } else if short {
+            Ended::Stopped
+        } else {
+            Ended::Done
+        };
+        self.end(ended);
     }
 }
 
@@ -500,8 +551,13 @@ impl<I: Iterator> Iterator for WithProgress<I> {
                     bar.inc(1);
                 }
             }
-            // finished as soon as it runs out, not whenever the loop's iterator is dropped
-            None => drop(self.bar.take()),
+            // finished as soon as it runs out, not whenever the loop's iterator is dropped, and
+            // done, even if the iterator gave fewer items than it said it would
+            None => {
+                if let Some(bar) = self.bar.take() {
+                    bar.finish();
+                }
+            }
         }
         item
     }
@@ -607,6 +663,64 @@ mod tests {
             })
         });
         assert!(out.contains("p-draw") && out.contains("●   p-draw"), "{out:?}");
+    }
+
+    #[test]
+    fn progress_dropped_short_of_its_total_doesnt_claim_success() {
+        plain();
+        let out = capture(|| {
+            with_terminal(true, || {
+                let p = Progress::new("p-short", 10).fps(240);
+                p.inc(3);
+                std::thread::sleep(Duration::from_millis(20));
+                drop(p);
+                let mut it = [1, 2, 3].iter().progress("p-break");
+                it.next();
+                drop(it);
+                let p = Progress::new("p-whole", 10).fps(240);
+                p.inc(10);
+                drop(p);
+                let p = Progress::new("p-told", 10).fps(240);
+                p.inc(1);
+                p.finish();
+            })
+        });
+        assert!(out.contains("⊘   p-short") && !out.contains("●   p-short"), "{out:?}");
+        assert!(out.contains("⊘   p-break"), "{out:?}");
+        assert!(out.contains("●   p-whole") && out.contains("●   p-told"), "{out:?}");
+
+        let plain_out = capture(|| {
+            with_terminal(false, || {
+                let p = Progress::new("p-plain", 4);
+                p.inc(1);
+                drop(p);
+                let _ = std::panic::catch_unwind(|| {
+                    let p = Progress::new("p-panic", 4);
+                    p.inc(4);
+                    panic!("mid-loop");
+                });
+            })
+        });
+        assert!(plain_out.contains("[stopped] p-plain ("), "{plain_out:?}");
+        assert!(plain_out.contains("[FAIL] p-panic ("), "{plain_out:?}");
+        let json = capture(|| with_output(Output::Json, || drop(Progress::new("pj-short", 4))));
+        assert!(json.contains(r#""outcome":"stopped","total":4}"#), "{json}");
+    }
+
+    #[test]
+    fn a_label_with_a_line_break_stays_on_one_row() {
+        plain();
+        let out = capture(|| {
+            with_terminal(true, || {
+                let p = Progress::new("two\nrows", 1).fps(240);
+                p.set(0);
+                std::thread::sleep(Duration::from_millis(20));
+                p.finish();
+                spin("s-two\nrows", || std::thread::sleep(Duration::from_millis(20)));
+            })
+        });
+        assert!(!out.contains("two\n") && out.contains("two rows"), "{out:?}");
+        assert!(out.contains("s-two rows"), "{out:?}");
     }
 
     #[test]
