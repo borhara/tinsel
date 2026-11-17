@@ -269,6 +269,9 @@ fn run_app(app: &mut dyn App) -> io::Result<()> {
     }
 }
 
+/// Seconds after starting that the window's colour is sent again, once nothing moves.
+const SETTLE: f64 = 0.5;
+
 /// What the key reader sends: an event, or why there'll be no more (the terminal closed).
 type Typed = io::Result<Event>;
 
@@ -293,7 +296,16 @@ fn drive(
     let mut cursor: Option<TerminalCursor> = None;
     let mut cursor_color: Option<crate::style::Rgb> = None;
     let mut window_color: Option<crate::style::Rgb> = None;
+    // whether the window's colour has been sent again once things settled after starting
+    let mut settled = false;
+    let mut moving = false;
     loop {
+        // some terminals (iTerm among them) can keep their old margin colour through the
+        // first busy moments, so it's sent again once nothing moves
+        if !settled && !moving && now() >= SETTLE {
+            settled = true;
+            window_color = None;
+        }
         if REDRAW.with(|r| r.replace(false)) {
             shown = None;
             titled = None;
@@ -342,14 +354,17 @@ fn drive(
         cursor_color = frame.cursor_color().or(cursor_color);
         window_color = frame.window_color().or(window_color);
         let due = schedule::next_frame(frame.wants(), drawn, app.fps(), ambient.focused());
+        moving = frame.wants().motion;
         spare = shown.replace(frame);
 
         // a redraw asked for while drawing comes straight away, but isn't time passing
         let again = REDRAW.with(std::cell::Cell::get);
-        let received = match (again, due) {
+        let settling = (!settled && !moving).then_some(SETTLE);
+        let wake = [due, settling].into_iter().flatten().reduce(f64::min);
+        let received = match (again, wake) {
             (true, _) => rx.try_recv().map_err(|e| e == mpsc::TryRecvError::Disconnected),
-            (false, Some(due)) => {
-                let wait = Duration::from_secs_f64((due - now()).clamp(0.0, 3600.0));
+            (false, Some(wake)) => {
+                let wait = Duration::from_secs_f64((wake - now()).clamp(0.0, 3600.0));
                 rx.recv_timeout(wait)
                     .map_err(|e| e == mpsc::RecvTimeoutError::Disconnected)
             }
@@ -373,6 +388,10 @@ fn drive(
             }
             if let Event::Focus(on) = event {
                 ambient.focus(on, now());
+                // the window's colour too may have been lost while away
+                if on {
+                    window_color = None;
+                }
             }
             let quit = app.event(&event) == Flow::Quit;
             if quit || (event == Event::Key(Key::Ctrl('c')) && app.ctrl_c_quits()) {
@@ -1665,5 +1684,35 @@ mod tests {
         drive(&mut app, &rx, &mut Vec::new(), &mut || (4, 1)).unwrap();
         let (time, ambient) = app.0.get();
         assert!(time - ambient >= 0.1, "{time} {ambient}");
+    }
+
+    #[test]
+    fn the_window_colour_is_sent_again_once_settled_and_on_coming_back() {
+        struct Coloured;
+        impl App for Coloured {
+            fn view(&self, frame: &mut Frame) {
+                frame.set_background(crate::Rgb(1, 2, 3));
+            }
+            fn event(&mut self, event: &Event) -> Flow {
+                if *event == Event::Key(Key::Char('q')) {
+                    Flow::Quit
+                } else {
+                    Flow::Continue
+                }
+            }
+        }
+        crate::with_color_mode(crate::ColorMode::TrueColor, || {
+            let rx = later(vec![
+                (700, Event::Key(Key::Char('x'))),
+                (50, Event::Focus(false)),
+                (50, Event::Focus(true)),
+                (50, Event::Key(Key::Char('q'))),
+            ]);
+            let mut out = Vec::new();
+            drive(&mut Coloured, &rx, &mut out, &mut || (4, 1)).unwrap();
+            let out = String::from_utf8(out).unwrap();
+            // to start, once settled, and on coming back; not for the key or for leaving
+            assert_eq!(out.matches("\x1b]11;").count(), 3, "{out:?}");
+        });
     }
 }
