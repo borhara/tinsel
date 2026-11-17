@@ -95,6 +95,77 @@ impl Rect {
         Rect::new(self.x + (self.width - w) / 2, self.y + (self.height - h) / 2, w, h)
     }
 
+    /// The rectangle cut in two down a column: the first `width` columns (or all of them,
+    /// if it's narrower), and the rest. For a gutter beside text, a sidebar beside a page.
+    ///
+    /// ```
+    /// use tinsel::app::Rect;
+    ///
+    /// let (gutter, text) = Rect::new(0, 0, 80, 24).split_left(6);
+    /// assert_eq!((gutter, text), (Rect::new(0, 0, 6, 24), Rect::new(6, 0, 74, 24)));
+    /// ```
+    #[must_use]
+    pub fn split_left(self, width: usize) -> (Rect, Rect) {
+        let w = width.min(self.width);
+        (
+            Rect::new(self.x, self.y, w, self.height),
+            Rect::new(self.x + w, self.y, self.width - w, self.height),
+        )
+    }
+
+    /// The rectangle cut in two down a column: the last `width` columns, and the rest
+    /// before them. For a scrollbar at the right edge.
+    ///
+    /// ```
+    /// use tinsel::app::Rect;
+    ///
+    /// let (bar, rest) = Rect::new(0, 0, 10, 4).split_right(1);
+    /// assert_eq!((bar, rest), (Rect::new(9, 0, 1, 4), Rect::new(0, 0, 9, 4)));
+    /// ```
+    #[must_use]
+    pub fn split_right(self, width: usize) -> (Rect, Rect) {
+        let w = width.min(self.width);
+        (
+            Rect::new(self.x + self.width - w, self.y, w, self.height),
+            Rect::new(self.x, self.y, self.width - w, self.height),
+        )
+    }
+
+    /// The rectangle cut in two across a row: the first `height` rows, and the rest.
+    ///
+    /// ```
+    /// use tinsel::app::Rect;
+    ///
+    /// let (head, body) = Rect::new(0, 0, 10, 4).split_top(1);
+    /// assert_eq!((head, body), (Rect::new(0, 0, 10, 1), Rect::new(0, 1, 10, 3)));
+    /// ```
+    #[must_use]
+    pub fn split_top(self, height: usize) -> (Rect, Rect) {
+        let h = height.min(self.height);
+        (
+            Rect::new(self.x, self.y, self.width, h),
+            Rect::new(self.x, self.y + h, self.width, self.height - h),
+        )
+    }
+
+    /// The rectangle cut in two across a row: the last `height` rows, and the rest above
+    /// them. For a status line at the bottom.
+    ///
+    /// ```
+    /// use tinsel::app::Rect;
+    ///
+    /// let (status, page) = Rect::new(0, 0, 10, 4).split_bottom(1);
+    /// assert_eq!((status, page), (Rect::new(0, 3, 10, 1), Rect::new(0, 0, 10, 3)));
+    /// ```
+    #[must_use]
+    pub fn split_bottom(self, height: usize) -> (Rect, Rect) {
+        let h = height.min(self.height);
+        (
+            Rect::new(self.x, self.y + self.height - h, self.width, h),
+            Rect::new(self.x, self.y, self.width, self.height - h),
+        )
+    }
+
     /// One row of the rectangle, counted from 0. Empty if it's past the bottom.
     #[must_use]
     pub fn row(self, n: usize) -> Rect {
