@@ -91,7 +91,7 @@ use std::time::{Duration, Instant};
 pub use field::Input;
 pub use frame::{CursorShape, Frame};
 pub use grid::{Cursor, Grid};
-pub use input::{Key, Mouse, MouseKind};
+pub use input::{Key, Mods, Mouse, MouseKind, NamedKey};
 pub use keys::Keys;
 pub use layout::{Rect, Size};
 pub use overlay::{Modal, Toasts};
@@ -171,7 +171,7 @@ pub trait App {
         true
     }
 
-    /// Whether to report clicks and the scroll wheel. Off unless changed, since while it's on
+    /// Whether to report clicks, drags and the scroll wheel. Off unless changed, since while it's on
     /// the terminal can't select text with the mouse.
     fn mouse(&self) -> bool {
         false
@@ -538,10 +538,11 @@ static ON_SCREEN: AtomicBool = AtomicBool::new(false);
 
 // the window title is saved on entering (22t) and put back on leaving (23t)
 // and pastes arrive bracketed (2004), so they can be told apart from typing,
-// and the terminal reports focus coming and going (1004)
+// and the terminal reports focus coming and going (1004); with the mouse on, presses,
+// releases and drags (1000, 1002) come in SGR form (1006)
 const ENTER: &str = "\x1b[22;0t\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?2004h\x1b[2J\x1b[?1004h";
-const LEAVE: &str = "\x1b[0m\x1b]112\x07\x1b]111\x07\x1b[0 q\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t\x1b[?1004l";
-const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1006h";
+const LEAVE: &str = "\x1b[0m\x1b]112\x07\x1b]111\x07\x1b[0 q\x1b[?1002l\x1b[?1000l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b[23;0t\x1b[?1004l";
+const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 
 /// The alternate screen, raw keys and a hidden cursor, for as long as it lives.
 struct Session {
@@ -993,6 +994,20 @@ mod tests {
     }
 
     #[test]
+    fn an_alt_key_is_not_esc_so_it_doesnt_quit() {
+        struct Idle;
+        impl App for Idle {
+            fn view(&self, _: &mut Frame) {}
+        }
+        assert_eq!(Idle.event(&Event::Key(Key::Alt('x'))), Flow::Continue);
+        assert_eq!(
+            Idle.event(&Event::Key(Key::Mod(Mods::ALT, NamedKey::Up))),
+            Flow::Continue
+        );
+        assert_eq!(Idle.event(&Event::Key(Key::Esc)), Flow::Quit);
+    }
+
+    #[test]
     fn ctrl_c_is_a_key_like_any_other_when_the_app_says_so() {
         struct Keeps(Vec<Event>);
         impl App for Keeps {
@@ -1325,7 +1340,7 @@ mod tests {
     #[test]
     fn navigation_covers_every_key() {
         use MouseKind::*;
-        let scroll = |kind| Event::Mouse(Mouse { kind, x: 0, y: 0 });
+        let scroll = |kind| Event::Mouse(Mouse::new(kind, 0, 0));
         let mut at = 5;
         let steps = [
             (Event::Key(Key::Up), 4),

@@ -22,7 +22,7 @@ pub(crate) fn next_scripted() -> Option<crate::app::Key> {
 
 impl From<crate::app::Key> for Key {
     fn from(key: crate::app::Key) -> Key {
-        use crate::app::Key as K;
+        use crate::app::{Key as K, NamedKey};
         match key {
             K::Char(' ') => Key::Space,
             K::Char(c) => Key::Char(c),
@@ -41,7 +41,11 @@ impl From<crate::app::Key> for Key {
             K::End => Key::End,
             K::PageUp => Key::PageUp,
             K::PageDown => Key::PageDown,
-            K::BackTab | K::F(_) => Key::Other,
+            // as a terminal sends them, which the questions read the same way
+            K::Alt('b') | K::Mod(_, NamedKey::Left) => Key::WordLeft,
+            K::Alt('f') | K::Mod(_, NamedKey::Right) => Key::WordRight,
+            K::Mod(_, NamedKey::Backspace) => Key::Ctrl('w'),
+            K::BackTab | K::F(_) | K::Alt(_) | K::Mod(..) => Key::Other,
         }
     }
 }

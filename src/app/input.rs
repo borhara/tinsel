@@ -3,13 +3,37 @@
 use std::time::{Duration, Instant};
 
 /// A key someone pressed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Keys pressed on their own are their own variants, so `Key::Up`, `Key::Char('x')` and
+/// `Key::Ctrl('r')` match as you'd expect. A key held with modifiers comes as one of the
+/// others:
+///
+/// - Alt (Option on a Mac, where the terminal sends it as Meta) and a character is
+///   [`Key::Alt`]: `Key::Alt('b')`.
+/// - Any other key held with Shift, Alt or Ctrl is [`Key::Mod`], the modifiers and the key:
+///   Ctrl-← is `Key::Mod(Mods::CTRL, NamedKey::Left)`, Shift-Alt-↑ is
+///   `Key::Mod(Mods::SHIFT | Mods::ALT, NamedKey::Up)`. Shift-Tab stays [`Key::BackTab`].
+///
+/// [`Key::mods`] and [`Key::unmodified`] take a key apart, for an app that treats Ctrl-→
+/// like → or wants to know whether Shift was down whatever the key.
+///
+/// ```
+/// use tinsel::app::{Key, Mods, NamedKey};
+///
+/// let key = Key::Mod(Mods::CTRL, NamedKey::Left);
+/// assert!(matches!(key, Key::Mod(m, NamedKey::Left) if m.ctrl()));
+/// assert_eq!(key.unmodified(), Key::Left);
+/// assert_eq!(Key::modified(NamedKey::Up, Mods::NONE), Key::Up);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Key {
     /// A printable character, space included.
     Char(char),
     /// Ctrl and a letter, as the lowercase letter. Ctrl-C is `Ctrl('c')`.
     Ctrl(char),
+    /// Alt (or Meta, or Option) and a character, as typed: Alt-Shift-x is `Alt('X')`.
+    Alt(char),
     /// Return.
     Enter,
     /// Tab.
@@ -40,16 +64,183 @@ pub enum Key {
     PageDown,
     /// A function key, F1 to F12.
     F(u8),
+    /// A key that isn't a character, held with modifiers (never [`Mods::NONE`]).
+    Mod(Mods, NamedKey),
+}
+
+impl Key {
+    /// `key` held with `mods`, as the terminal would send it: the plain variant with no
+    /// modifiers, [`Key::BackTab`] for Shift-Tab, and [`Key::Mod`] otherwise.
+    pub fn modified(key: NamedKey, mods: Mods) -> Key {
+        if mods.is_empty() {
+            return key.into();
+        }
+        if mods == Mods::SHIFT && key == NamedKey::Tab {
+            return Key::BackTab;
+        }
+        Key::Mod(mods, key)
+    }
+
+    /// The modifiers held with this key: Ctrl for [`Key::Ctrl`], Alt for [`Key::Alt`],
+    /// Shift for [`Key::BackTab`], none for the rest.
+    pub fn mods(self) -> Mods {
+        match self {
+            Key::Ctrl(_) => Mods::CTRL,
+            Key::Alt(_) => Mods::ALT,
+            Key::BackTab => Mods::SHIFT,
+            Key::Mod(mods, _) => mods,
+            _ => Mods::NONE,
+        }
+    }
+
+    /// The key with its modifiers let go: Ctrl-← is ←, Alt-b and Ctrl-B are `Char('b')`,
+    /// Shift-Tab is Tab.
+    pub fn unmodified(self) -> Key {
+        match self {
+            Key::Ctrl(c) | Key::Alt(c) => Key::Char(c),
+            Key::BackTab => Key::Tab,
+            Key::Mod(_, key) => key.into(),
+            key => key,
+        }
+    }
+}
+
+/// Keys that aren't characters, for [`Key::Mod`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum NamedKey {
+    /// Return.
+    Enter,
+    /// Tab.
+    Tab,
+    /// Backspace.
+    Backspace,
+    /// Forward delete.
+    Delete,
+    /// ↑
+    Up,
+    /// ↓
+    Down,
+    /// ←
+    Left,
+    /// →
+    Right,
+    /// Home.
+    Home,
+    /// End.
+    End,
+    /// Page Up.
+    PageUp,
+    /// Page Down.
+    PageDown,
+    /// A function key, F1 to F12.
+    F(u8),
+}
+
+impl From<NamedKey> for Key {
+    fn from(key: NamedKey) -> Key {
+        match key {
+            NamedKey::Enter => Key::Enter,
+            NamedKey::Tab => Key::Tab,
+            NamedKey::Backspace => Key::Backspace,
+            NamedKey::Delete => Key::Delete,
+            NamedKey::Up => Key::Up,
+            NamedKey::Down => Key::Down,
+            NamedKey::Left => Key::Left,
+            NamedKey::Right => Key::Right,
+            NamedKey::Home => Key::Home,
+            NamedKey::End => Key::End,
+            NamedKey::PageUp => Key::PageUp,
+            NamedKey::PageDown => Key::PageDown,
+            NamedKey::F(n) => Key::F(n),
+        }
+    }
+}
+
+/// Which of Shift, Alt and Ctrl were held, for [`Key::Mod`] and [`Mouse::mods`]. Combine
+/// them with `|`; the constants work in patterns too.
+///
+/// ```
+/// use tinsel::app::Mods;
+///
+/// let held = Mods::CTRL | Mods::SHIFT;
+/// assert!(held.ctrl() && held.shift() && !held.alt());
+/// assert!(held.contains(Mods::CTRL));
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Mods(u8);
+
+impl Mods {
+    /// Nothing held.
+    pub const NONE: Mods = Mods(0);
+    /// Shift.
+    pub const SHIFT: Mods = Mods(1);
+    /// Alt, Meta or Option: terminals don't tell them apart.
+    pub const ALT: Mods = Mods(2);
+    /// Ctrl.
+    pub const CTRL: Mods = Mods(4);
+
+    /// Whether Shift was held.
+    pub fn shift(self) -> bool {
+        self.contains(Mods::SHIFT)
+    }
+
+    /// Whether Alt was held.
+    pub fn alt(self) -> bool {
+        self.contains(Mods::ALT)
+    }
+
+    /// Whether Ctrl was held.
+    pub fn ctrl(self) -> bool {
+        self.contains(Mods::CTRL)
+    }
+
+    /// Whether everything in `other` was held.
+    pub fn contains(self, other: Mods) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Whether nothing was held.
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// From the number xterm puts after a `;` in a key's escape sequence: one more than
+    /// a mask of Shift 1, Alt 2, Ctrl 4 and Meta 8 (taken as Alt).
+    fn from_xterm(param: &str) -> Mods {
+        let bits = param.parse::<u8>().unwrap_or(1).saturating_sub(1);
+        Mods((bits & 7) | if bits & 8 != 0 { 2 } else { 0 })
+    }
+}
+
+impl std::ops::BitOr for Mods {
+    type Output = Mods;
+
+    fn bitor(self, other: Mods) -> Mods {
+        Mods(self.0 | other.0)
+    }
+}
+
+impl std::ops::BitOrAssign for Mods {
+    fn bitor_assign(&mut self, other: Mods) {
+        self.0 |= other.0;
+    }
 }
 
 /// What the mouse did. Only reported when [`App::mouse`](super::App::mouse) says so.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum MouseKind {
     /// A left click.
     Click,
+    /// A middle click (the wheel pressed).
+    MiddleClick,
     /// A right click.
     RightClick,
+    /// A button let go.
+    Release,
+    /// The mouse moved with a button held down.
+    Drag,
     /// The wheel, rolled up.
     ScrollUp,
     /// The wheel, rolled down.
@@ -58,7 +249,7 @@ pub enum MouseKind {
 
 /// A mouse event, at a cell counted from 0 at the top left. Check which panel it landed in
 /// with [`Rect::contains`](super::Rect::contains).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Mouse {
     /// What happened.
@@ -67,12 +258,21 @@ pub struct Mouse {
     pub x: usize,
     /// The row.
     pub y: usize,
+    /// Which of Shift, Alt and Ctrl were held, where the terminal says (many keep
+    /// Shift-click for selecting text themselves).
+    pub mods: Mods,
 }
 
 impl Mouse {
-    /// A mouse event of this kind at column `x` and row `y`, as a test might send one.
+    /// A mouse event of this kind at column `x` and row `y`, with nothing held, as a test
+    /// might send one.
     pub fn new(kind: MouseKind, x: usize, y: usize) -> Self {
-        Mouse { kind, x, y }
+        Mouse {
+            kind,
+            x,
+            y,
+            mods: Mods::NONE,
+        }
     }
 }
 
@@ -189,8 +389,7 @@ pub(crate) fn parse(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, u
                     None => Some((None, 3)),
                 },
             },
-            // Esc then something else (Alt-x): the Esc on its own, the rest read after
-            Some(_) => key(Key::Esc, 1),
+            Some(_) => alt(bytes, done),
         },
         1..=26 => key(Key::Ctrl((b'a' + first - 1) as char), 1),
         b if b < 0x20 => Some((None, 1)),
@@ -210,6 +409,26 @@ pub(crate) fn parse(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, u
                 None => Some((None, 1)),
             }
         }
+    }
+}
+
+/// Esc then a key, which is how terminals send that key pressed with Alt: Alt-x is `ESC x`.
+/// Esc then something that isn't a key (another Esc, a control character) is Esc on its
+/// own, and the rest is read after.
+fn alt(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, usize)> {
+    use super::Event;
+    let alone = Some((Some(Event::Key(Key::Esc)), 1));
+    let with = |k: NamedKey| Some((Some(Event::Key(Key::Mod(Mods::ALT, k))), 2));
+    match bytes[1] {
+        b'\r' | b'\n' => with(NamedKey::Enter),
+        b'\t' => with(NamedKey::Tab),
+        127 | 8 => with(NamedKey::Backspace),
+        b if b < 0x20 => alone,
+        _ => match parse(&bytes[1..], done)? {
+            (Some(Event::Key(Key::Char(c))), n) => Some((Some(Event::Key(Key::Alt(c))), n + 1)),
+            // broken UTF-8 after an Esc: the Esc, then the rest let go as usual
+            _ => alone,
+        },
     }
 }
 
@@ -257,34 +476,39 @@ fn csi(bytes: &[u8], done: bool) -> Option<(Option<super::Event>, usize)> {
     }
     let params = std::str::from_utf8(&bytes[2..end]).unwrap_or("");
     let n = end + 1;
+    // modifiers, if any, come after a `;`: `ESC [ 1 ; 5 D` is Ctrl-←
+    let mut parts = params.split(';');
+    let code = parts.next().unwrap_or("");
+    let mods = parts.next().map_or(Mods::NONE, Mods::from_xterm);
     let key = match (bytes[end], params) {
         (b'M' | b'm', p) if p.starts_with('<') => return Some((mouse(&p[1..], bytes[end] == b'M'), n)),
         (b'I', "") => return Some((Some(Event::Focus(true)), n)),
         (b'O', "") => return Some((Some(Event::Focus(false)), n)),
-        (b'A', _) => Key::Up,
-        (b'B', _) => Key::Down,
-        (b'C', _) => Key::Right,
-        (b'D', _) => Key::Left,
-        (b'H', _) => Key::Home,
-        (b'F', _) => Key::End,
-        (b'Z', _) => Key::BackTab,
-        // modifiers come after a `;`, and are let go
-        (b'~', p) => match p.split(';').next().unwrap_or("") {
-            "1" | "7" => Key::Home,
-            "4" | "8" => Key::End,
-            "3" => Key::Delete,
-            "5" => Key::PageUp,
-            "6" => Key::PageDown,
+        (b'Z', _) => return Some((Some(Event::Key(Key::BackTab)), n)),
+        (b'A', _) => NamedKey::Up,
+        (b'B', _) => NamedKey::Down,
+        (b'C', _) => NamedKey::Right,
+        (b'D', _) => NamedKey::Left,
+        (b'H', _) => NamedKey::Home,
+        (b'F', _) => NamedKey::End,
+        // F1 to F4 with modifiers: `ESC [ 1 ; 2 P` is Shift-F1
+        (b @ b'P'..=b'S', _) if !mods.is_empty() => NamedKey::F(b - b'P' + 1),
+        (b'~', _) => match code {
+            "1" | "7" => NamedKey::Home,
+            "4" | "8" => NamedKey::End,
+            "3" => NamedKey::Delete,
+            "5" => NamedKey::PageUp,
+            "6" => NamedKey::PageDown,
             code => match code.parse::<u8>() {
-                Ok(c @ 11..=15) => Key::F(c - 10),
-                Ok(c @ 17..=21) => Key::F(c - 11),
-                Ok(c @ 23..=24) => Key::F(c - 12),
+                Ok(c @ 11..=15) => NamedKey::F(c - 10),
+                Ok(c @ 17..=21) => NamedKey::F(c - 11),
+                Ok(c @ 23..=24) => NamedKey::F(c - 12),
                 _ => return Some((None, n)),
             },
         },
         _ => return Some((None, n)),
     };
-    Some((Some(Event::Key(key)), n))
+    Some((Some(Event::Key(Key::modified(key, mods))), n))
 }
 
 /// What a terminal sends around pasted text, after `ESC [`, once bracketed paste is on.
@@ -320,21 +544,35 @@ fn ss3(b: u8) -> Option<Key> {
     })
 }
 
-/// `button;x;y` from an SGR mouse report (1-based). Releases and drags are let go.
+/// `button;x;y` from an SGR mouse report (1-based). The button's number carries the
+/// modifiers held (Shift 4, Alt 8, Ctrl 16) and whether the mouse moved (32).
 fn mouse(params: &str, pressed: bool) -> Option<super::Event> {
     let mut it = params.split(';').map(|p| p.parse::<usize>().ok());
     let (button, x, y) = (it.next()??, it.next()??, it.next()??);
-    let kind = match button {
+    let mut mods = Mods::NONE;
+    for (bit, m) in [(4, Mods::SHIFT), (8, Mods::ALT), (16, Mods::CTRL)] {
+        if button & bit != 0 {
+            mods |= m;
+        }
+    }
+    let kind = match button & !(4 | 8 | 16) {
         64 => MouseKind::ScrollUp,
         65 => MouseKind::ScrollDown,
-        0 if pressed => MouseKind::Click,
-        2 if pressed => MouseKind::RightClick,
+        // moving with no button held, which only some modes report
+        35 => return None,
+        32..=34 => MouseKind::Drag,
+        _ if !pressed => MouseKind::Release,
+        0 => MouseKind::Click,
+        1 => MouseKind::MiddleClick,
+        2 => MouseKind::RightClick,
+        3 => MouseKind::Release,
         _ => return None,
     };
     Some(super::Event::Mouse(Mouse {
         kind,
         x: x.saturating_sub(1),
         y: y.saturating_sub(1),
+        mods,
     }))
 }
 
@@ -377,7 +615,7 @@ mod tests {
                 Event::Key(Key::Up),
                 Event::Key(Key::Down),
                 Event::Key(Key::PageUp),
-                Event::Key(Key::Right),
+                Event::Key(Key::Mod(Mods::CTRL, NamedKey::Right)),
                 Event::Key(Key::BackTab),
                 Event::Key(Key::F(5)),
                 Event::Key(Key::F(1)),
@@ -421,11 +659,72 @@ mod tests {
                 &[k(Key::F(1)), k(Key::F(6)), k(Key::F(10)), k(Key::F(11)), k(Key::F(12))],
             ),
             // Alt-x arrives as Esc then x
-            (b"\x1bx", &[k(Key::Esc), k(Key::Char('x'))]),
+            (
+                b"\x1bx\x1bX\x1b\xc3\xa9",
+                &[k(Key::Alt('x')), k(Key::Alt('X')), k(Key::Alt('é'))],
+            ),
+            (
+                b"\x1b\x7f\x1b\r",
+                &[
+                    k(Key::Mod(Mods::ALT, NamedKey::Backspace)),
+                    k(Key::Mod(Mods::ALT, NamedKey::Enter)),
+                ],
+            ),
+            // Esc then Esc, or a control character, is Esc and then that
+            (b"\x1b\x1b", &[k(Key::Esc), k(Key::Esc)]),
+            (b"\x1b\x03", &[k(Key::Esc), k(Key::Ctrl('c'))]),
         ];
         for (bytes, want) in cases {
             assert_eq!(keys(bytes), *want, "{bytes:?}");
         }
+    }
+
+    #[test]
+    fn reads_the_modifiers_held_with_a_key() {
+        let k = |m, n| Event::Key(Key::Mod(m, n));
+        assert_eq!(
+            keys(
+                b"\x1b[1;5D\x1b[1;2A\x1b[1;3H\x1b[1;6F\x1b[3;5~\x1b[5;2~\x1b[6;7~\x1b[15;2~\x1b[1;5P\x1b[1;9C\x1b[1;1B"
+            ),
+            [
+                k(Mods::CTRL, NamedKey::Left),
+                k(Mods::SHIFT, NamedKey::Up),
+                k(Mods::ALT, NamedKey::Home),
+                k(Mods::CTRL | Mods::SHIFT, NamedKey::End),
+                k(Mods::CTRL, NamedKey::Delete),
+                k(Mods::SHIFT, NamedKey::PageUp),
+                k(Mods::CTRL | Mods::ALT, NamedKey::PageDown),
+                k(Mods::SHIFT, NamedKey::F(5)),
+                k(Mods::CTRL, NamedKey::F(1)),
+                // Meta is taken as Alt, and a modifier of 1 means none
+                k(Mods::ALT, NamedKey::Right),
+                Event::Key(Key::Down),
+            ]
+        );
+    }
+
+    #[test]
+    fn keys_come_apart_into_modifiers_and_the_key() {
+        let ctrl_left = Key::Mod(Mods::CTRL, NamedKey::Left);
+        assert_eq!((ctrl_left.mods(), ctrl_left.unmodified()), (Mods::CTRL, Key::Left));
+        assert_eq!(
+            (Key::Alt('b').mods(), Key::Alt('b').unmodified()),
+            (Mods::ALT, Key::Char('b'))
+        );
+        assert_eq!(
+            (Key::Ctrl('r').mods(), Key::BackTab.unmodified()),
+            (Mods::CTRL, Key::Tab)
+        );
+        assert_eq!((Key::Up.mods(), Key::Up.unmodified()), (Mods::NONE, Key::Up));
+        assert_eq!(Key::modified(NamedKey::Tab, Mods::SHIFT), Key::BackTab);
+        assert_eq!(Key::modified(NamedKey::F(3), Mods::NONE), Key::F(3));
+        assert_eq!(
+            Key::modified(NamedKey::Tab, Mods::CTRL),
+            Key::Mod(Mods::CTRL, NamedKey::Tab)
+        );
+        let mut m = Mods::NONE;
+        m |= Mods::SHIFT;
+        assert!(m.shift() && !m.alt() && !m.is_empty() && Mods::default().is_empty());
     }
 
     #[test]
@@ -458,16 +757,9 @@ mod tests {
         assert_eq!(
             keys(b"\x1b[M qA\x1b[M#qA\x1b[Ma!!"),
             [
-                Event::Mouse(Mouse {
-                    kind: MouseKind::Click,
-                    x: 80,
-                    y: 32
-                }),
-                Event::Mouse(Mouse {
-                    kind: MouseKind::ScrollDown,
-                    x: 0,
-                    y: 0
-                }),
+                Event::Mouse(Mouse::new(MouseKind::Click, 80, 32)),
+                Event::Mouse(Mouse::new(MouseKind::Release, 80, 32)),
+                Event::Mouse(Mouse::new(MouseKind::ScrollDown, 0, 0)),
             ]
         );
         assert_eq!(parse(b"\x1b[M q", false), None);
@@ -475,11 +767,21 @@ mod tests {
 
     #[test]
     fn reads_every_kind_of_mouse_report() {
-        let at = |kind| Event::Mouse(Mouse { kind, x: 1, y: 1 });
+        let at = |kind| Event::Mouse(Mouse::new(kind, 1, 1));
         assert_eq!(
-            keys(b"\x1b[<2;2;2M\x1b[<64;2;2M\x1b[<2;2;2m\x1b[<1;2;2M\x1b[<0;;2M"),
-            [at(MouseKind::RightClick), at(MouseKind::ScrollUp)]
+            keys(b"\x1b[<2;2;2M\x1b[<64;2;2M\x1b[<2;2;2m\x1b[<1;2;2M\x1b[<32;2;2M\x1b[<35;2;2M\x1b[<0;;2M"),
+            [
+                at(MouseKind::RightClick),
+                at(MouseKind::ScrollUp),
+                at(MouseKind::Release),
+                at(MouseKind::MiddleClick),
+                at(MouseKind::Drag),
+            ]
         );
+        // with Shift, Alt and Ctrl held
+        let mut held = Mouse::new(MouseKind::Click, 1, 1);
+        held.mods = Mods::SHIFT | Mods::ALT | Mods::CTRL;
+        assert_eq!(keys(b"\x1b[<28;2;2M"), [Event::Mouse(held)]);
     }
 
     #[test]
@@ -487,16 +789,9 @@ mod tests {
         assert_eq!(
             keys(b"\x1b[<0;5;3M\x1b[<0;5;3m\x1b[<65;1;1M"),
             [
-                Event::Mouse(Mouse {
-                    kind: MouseKind::Click,
-                    x: 4,
-                    y: 2
-                }),
-                Event::Mouse(Mouse {
-                    kind: MouseKind::ScrollDown,
-                    x: 0,
-                    y: 0
-                }),
+                Event::Mouse(Mouse::new(MouseKind::Click, 4, 2)),
+                Event::Mouse(Mouse::new(MouseKind::Release, 4, 2)),
+                Event::Mouse(Mouse::new(MouseKind::ScrollDown, 0, 0)),
             ]
         );
     }
