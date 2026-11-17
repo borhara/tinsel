@@ -1467,7 +1467,20 @@ fn render(s: &Shared, now: Instant, width: usize, settled: bool) -> Vec<String> 
         walk(s, idx, &frame, &mut lines);
     }
     lines.extend(s.footer.iter().cloned());
+    // one entry a row, since that's how the next frame counts its way back up
+    if lines.iter().any(|l| l.contains('\n')) {
+        lines = lines.iter().flat_map(|l| l.split('\n')).map(str::to_string).collect();
+    }
     lines
+}
+
+/// Text for a single row: line breaks in it become spaces.
+fn one_row(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains(['\n', '\r']) {
+        text.replace("\r\n", " ").replace(['\n', '\r'], " ").into()
+    } else {
+        text.into()
+    }
 }
 
 /// A step, then its sub-steps unless they've all quietly succeeded.
@@ -1513,10 +1526,11 @@ fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
             .append(mark)
             .space(gutter - 1 - (gutter - 1) / 2)
     };
+    let label = one_row(&st.label);
     let plain = |glyph: &str, glyph_color: Rgb, label_color: Rgb| {
         (
             centred(Line::new().push(glyph, glyph_color)),
-            Line::new().push(&st.label, label_color),
+            Line::new().push(&label, label_color),
         )
     };
     // a note's first line says what happened; any more (a failed command's last output) are quieter
@@ -1532,10 +1546,10 @@ fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
             out.push(row(g, l, MUTED));
         }
         State::Active => {
-            out.push(row(f.spinner.frame(f.t), widgets::shimmer(&st.label, f.t), MUTED));
+            out.push(row(f.spinner.frame(f.t), widgets::shimmer(&label, f.t), MUTED));
             let usual = st.estimate.filter(|e| *e >= MIN_ESTIMATE);
             if let Some((p, text)) = &st.progress {
-                let mut stats = paint(SOFT, &format!("{:>3.0}%  {text}", p * 100.0));
+                let mut stats = paint(SOFT, &format!("{:>3.0}%  {}", p * 100.0, one_row(text)));
                 if let Some(left) = st.started.and_then(|b| time_left((f.now - b).as_secs_f64(), *p)) {
                     stats += &paint(MUTED, &format!(" · {} left", approx(left)));
                 }
@@ -1558,8 +1572,10 @@ fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
                 let bar = f.bar.draw(estimated_fraction(elapsed, usual), 30, f.t);
                 out.push(format!("{indent}{bar}  {}", paint(color, &text)));
             }
-            if st.progress.is_none() && !st.detail.is_empty() {
-                out.push(format!("{indent}{}", paint(MUTED, &st.detail)));
+            if st.progress.is_none() {
+                for line in st.detail.lines() {
+                    out.push(format!("{indent}{}", paint(MUTED, line)));
+                }
             }
         }
         State::Done => {
@@ -1573,7 +1589,7 @@ fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
             let mark = widgets::pop(age)
                 .filter(|_| !f.settled)
                 .unwrap_or_else(|| Line::new().push("●", ROSE));
-            out.push(row(centred(mark), Line::new().push(&st.label, TEXT), MUTED));
+            out.push(row(centred(mark), Line::new().push(&label, TEXT), MUTED));
         }
         State::Warn => {
             let (g, l) = plain("▲", AMBER, TEXT);
@@ -1739,6 +1755,33 @@ mod tests {
         ] {
             assert!(out.contains(want), "{want} in {out:?}");
         }
+    }
+
+    #[test]
+    fn line_breaks_in_steps_are_counted_as_rows() {
+        plain();
+        let live = Live::headless("rows", "x");
+        let (a, b, c) = (live.step("two\nlines"), live.step("b"), live.step("c"));
+        a.start();
+        a.detail("first\nsecond\r\nthird");
+        b.start();
+        b.progress(0.5, "half\nway");
+        c.fail("broke\nbadly");
+        let lines = render(&lock(&live.shared), Instant::now(), 60, true);
+        assert!(lines.iter().all(|l| !l.contains(['\n', '\r'])), "{lines:?}");
+        let plain: Vec<String> = lines.iter().map(|l| crate::text::strip_ansi(l)).collect();
+        assert!(plain[0].contains("two lines"), "{plain:?}");
+        assert_eq!(
+            plain[1..4].iter().map(|l| l.trim()).collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
+        assert!(plain.iter().any(|l| l.contains("half way")), "{plain:?}");
+        // a drawn frame goes back up exactly as many rows as it took
+        let mut s = lock(&live.shared);
+        s.mode = Mode::Draw;
+        let out = capture(|| paint_frame(&mut s, false));
+        let rows = out.split("\x1b[?7l").nth(1).unwrap().matches('\n').count();
+        assert_eq!(rows, s.drawn, "{out:?}");
     }
 
     #[test]
