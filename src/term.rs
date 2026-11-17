@@ -306,8 +306,27 @@ pub(crate) fn measured_size() -> Option<(usize, usize)> {
     ioctl_size()
 }
 
+/// Columns and rows of the terminal on stderr, where questions are drawn, which may be a
+/// terminal while stdout is a pipe. Falls back as [`width`] and [`height`] do.
+pub(crate) fn stderr_size() -> (usize, usize) {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let measured = ioctl_size_on(2).or_else(ioctl_size);
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let measured = ioctl_size();
+    (
+        measured_or(measured.map(|(cols, _)| cols), "COLUMNS", 80),
+        measured_or(measured.map(|(_, rows)| rows), "LINES", 24),
+    )
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn ioctl_size() -> Option<(usize, usize)> {
+    ioctl_size_on(crate::output::fd())
+}
+
+/// The size of the terminal open as `fd`.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn ioctl_size_on(fd: i32) -> Option<(usize, usize)> {
     #[repr(C)]
     #[allow(dead_code)]
     struct WinSize {
@@ -329,7 +348,7 @@ fn ioctl_size() -> Option<(usize, usize)> {
         ypixel: 0,
     };
     // SAFETY: TIOCGWINSZ writes exactly one winsize struct through the pointer.
-    let ok = unsafe { ioctl(crate::output::fd(), TIOCGWINSZ, &mut ws as *mut WinSize) } == 0;
+    let ok = unsafe { ioctl(fd, TIOCGWINSZ, &mut ws as *mut WinSize) } == 0;
     (ok && ws.cols > 0).then_some((ws.cols as usize, ws.rows as usize))
 }
 
