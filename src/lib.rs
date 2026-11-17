@@ -30,7 +30,7 @@
 //! | **documents** | [`markdown`](fn@markdown) (and [`markdown::wrapped`] to a width), [`json`], [`Help`] (with an entrance), and [`Block::page`] for anything long |
 //! | **inline** | [`badge`], [`link`], [`Card`], [`paint`], [`paint_on`], [`paint_bg`], [`bold`] and friends, [`Line`] for text built up in colours |
 //! | **colour** | [`palette`], [`Rgb`], [`mix`]; [`style`] for gradients, blinking and the rest; [`anim`] for the shimmer, twinkle and moving bars tinsel animates with |
-//! | **apps** | [`app`]: full-screen dashboards and tools, with [`app::Panel`]s, [`app::List`]s, [`app::ScrollView`]s, [`app::Tabs`], [`app::Plot`]s, [`app::Stat`]s, [`app::Loading`] and [`app::big`] text laid out in [`app::Rect`]s; [`app::snapshot`] to test them |
+//! | **apps** | [`app`]: full-screen dashboards and tools, with [`app::Panel`]s, [`app::List`]s, [`app::ScrollView`]s, [`app::Tabs`], [`app::Plot`]s, [`app::Stat`]s, [`app::Loading`] and [`app::big`] text laid out in [`app::Rect`]s, drawn only when something changes or a frame asks; [`app::snapshot`] to test them |
 //! | **questions** | [`prompt`]: confirm, input (validation, suggestions, path completion), password, number, date, select and multiselect (filter as you type, headings, disabled options), a dropdown for long lists, editor, confirm by typing; `.back()` to go back a question |
 //! | **helpers** | [`text`] (width-aware pad, truncate, wrap) and [`format`](mod@format) (bytes, durations, ago); [`terminal_width`] |
 //! | **setup** | [`install_panic_hook`], [`set_output`] for `--json` and `--quiet`, [`set_target`] to draw on stderr, [`set_accent`], [`set_theme`], [`set_color_mode`], [`set_fps`], [`set_focus`], [`set_history`] and [`set_ctrl_c`], [`timings`], [`doctor`] |
@@ -66,6 +66,8 @@
 //!
 //! Animations draw 60 frames a second. [`set_fps`] (or `TINSEL_FPS`) changes that for the
 //! whole program, and a display can choose its own: `Live::fps`, `Progress::fps`, `App::fps`.
+//! A full-screen [`app`] is drawn only when something happens or a frame asks for another,
+//! so it rests while nothing moves.
 //!
 //! [`set_color_mode`] overrides all of that, for a `--color` flag or to get predictable text
 //! in tests:

@@ -12,6 +12,13 @@ use crate::text;
 use crate::tree::Tree;
 use crate::widgets::{Card, noise};
 
+/// How often a focused panel's border light moves on, in frames a second.
+const GLINT_FPS: u32 = 20;
+/// The same for spinners, loading bars and placeholder rows.
+pub(super) const BUSY_FPS: u32 = 30;
+/// The same for [`Sparkles`], which change slowly.
+pub(super) const SPARKLE_FPS: u32 = 15;
+
 /// Something that can draw itself into a rectangle of a [`Frame`].
 ///
 /// Implement it for your own pieces; they can then go anywhere a built-in one can, including
@@ -33,7 +40,9 @@ use crate::widgets::{Card, noise};
 /// }
 /// ```
 pub trait Widget {
-    /// Draw into `area` of `frame`. `area` is already clipped to the screen.
+    /// Draw into `area` of `frame`. `area` is already clipped to the screen. A widget that
+    /// moves asks for the frames it needs, with [`Frame::animate`] or
+    /// [`Frame::animate_at`], so whoever draws it needn't.
     fn render(&self, area: Rect, frame: &mut Frame);
 
     /// How many columns and rows it would like, as `(width, height)` like every size in tinsel,
@@ -509,7 +518,11 @@ impl Widget for Panel<'_> {
             return;
         }
         frame.clear(area);
-        let (w, h, t) = (area.width, area.height, frame.time());
+        let (w, h, t) = (area.width, area.height, frame.ambient_time());
+        if self.focused {
+            // the light running round the border
+            frame.animate_at(GLINT_FPS);
+        }
         let perimeter = 2 * (w - 1) + 2 * (h - 1);
         let glint = (t * 18.0).rem_euclid(perimeter as f64) as f32;
         let color = |i: usize| {
@@ -1167,7 +1180,8 @@ impl Widget for Loading {
         if area.is_empty() {
             return;
         }
-        let lines = self.lines(frame.time(), area.width);
+        frame.animate_at(BUSY_FPS);
+        let lines = self.lines(frame.ambient_time(), area.width);
         if !self.centered {
             for (row, line) in lines.iter().enumerate() {
                 frame.print(area, row, line);
@@ -1187,6 +1201,31 @@ impl Widget for Loading {
         let lines = self.lines(0.0, 60);
         let widest = lines.iter().map(|l| text::width(l)).max().unwrap_or(0);
         Some((widest, lines.len()))
+    }
+}
+
+/// A spinner on its own, turning on the [ambient clock](Frame::ambient_time) and asking for
+/// the frames it needs.
+///
+/// ```
+/// use tinsel::Spinner;
+/// use tinsel::app::Frame;
+///
+/// let mut frame = Frame::new(6, 1);
+/// frame.render(frame.area(), Spinner::Dots);
+/// assert!(frame.wants_redraw());
+/// ```
+impl Widget for crate::Spinner {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        if area.is_empty() {
+            return;
+        }
+        frame.animate_at(BUSY_FPS);
+        frame.print(area, 0, &self.frame(frame.ambient_time()).to_string());
+    }
+
+    fn size(&self) -> Option<(usize, usize)> {
+        Some((self.frame(0.0).width(), 1))
     }
 }
 
@@ -1385,7 +1424,11 @@ fn wander(density: f32, area: Rect, frame: &mut Frame, t: f64) {
 impl Widget for Sparkles {
     fn render(&self, area: Rect, frame: &mut Frame) {
         const STARS: [&str; 4] = ["·", "⋆", "✧", "✦"];
-        let t = frame.time();
+        if area.is_empty() {
+            return;
+        }
+        frame.animate_at(SPARKLE_FPS);
+        let t = frame.ambient_time();
         if self.wander {
             return wander(self.density, area, frame, t);
         }
@@ -1412,6 +1455,21 @@ impl Widget for Sparkles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn animated_widgets_ask_for_frames_and_still_ones_dont() {
+        let asks = |w: &dyn Widget| {
+            let mut f = Frame::new(20, 5).at(1.0);
+            w.render(f.area(), &mut f);
+            f.wants_redraw()
+        };
+        assert!(asks(&Panel::new("hi").focused(true)));
+        assert!(!asks(&Panel::new("hi")));
+        assert!(asks(&Loading::new("busy")));
+        assert!(asks(&Sparkles::new()));
+        assert!(asks(&crate::Spinner::Arc));
+        assert!(!asks(&List::new(["a", "b"])));
+    }
 
     #[test]
     fn wandering_stars_go_out_and_come_back_elsewhere() {

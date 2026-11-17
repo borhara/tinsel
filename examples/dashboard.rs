@@ -28,11 +28,13 @@ struct Dashboard {
     help: bool,
     logs: Vec<String>,
     ticks: u64,
-    frames: u64,
+    sampled: f64,
     rng: u64,
 }
 
 const TABS: [&str; 2] = ["overview", "logs"];
+/// Seconds between readings.
+const SAMPLE_EVERY: f64 = 0.2;
 
 impl Dashboard {
     fn new() -> Self {
@@ -56,7 +58,7 @@ impl Dashboard {
             help: false,
             logs: Vec::new(),
             ticks: 0,
-            frames: 0,
+            sampled: 0.0,
             rng: 0x2545_F491_4F6C_DD1D,
         };
         for _ in 0..200 {
@@ -218,6 +220,9 @@ impl Dashboard {
 impl App for Dashboard {
     fn view(&self, frame: &mut Frame) {
         let t = frame.time();
+        // the gauges wobble and the title shimmers, and new readings keep coming in
+        frame.animate_at(20);
+        frame.redraw_at(self.sampled + SAMPLE_EVERY);
         let [header, body, footer] = frame.area().rows([Fixed(3), Fill(1), Fixed(1)]);
 
         // a header of quiet stars, with the name catching the light now and then
@@ -266,9 +271,10 @@ impl App for Dashboard {
     fn event(&mut self, event: &Event) -> Flow {
         match event {
             Event::Tick => {
-                // draw at 20 frames a second, but take a new reading 5 times a second
-                self.frames += 1;
-                if self.frames % 4 == 0 {
+                // drawn up to 20 times a second while focused, but a new reading only 5 times
+                // a second, focused or not
+                if app::time() - self.sampled >= SAMPLE_EVERY {
+                    self.sampled = app::time();
                     self.sample();
                 }
             }
@@ -291,10 +297,6 @@ impl App for Dashboard {
             }
         }
         Flow::Continue
-    }
-
-    fn fps(&self) -> u32 {
-        20
     }
 
     fn mouse(&self) -> bool {

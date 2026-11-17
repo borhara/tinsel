@@ -634,7 +634,8 @@ impl Grid<'_> {
 /// Placeholder rows while the real ones load: a bar per column, catching a light that
 /// sweeps across, with a spinner in the middle.
 fn skeleton(frame: &mut Frame, body: Rect, content: Rect, widths: &[usize], skip: usize) {
-    let t = frame.time();
+    frame.animate_at(super::widgets::BUSY_FPS);
+    let t = frame.ambient_time();
     if color_mode() != ColorMode::None {
         let sweep = (t * 0.8).rem_euclid(1.6) as f32 - 0.3;
         for row in 0..body.height.min(8) {
