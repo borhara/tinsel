@@ -17,7 +17,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tinsel::app::{
-    self, App, Cursor, Event, Flow, Footer, Frame, Grid, Input, Key, List, Modal, Panel, Size::*, Tabs, Toasts, Waker,
+    self, App, Cursor, Event, Flow, Footer, Frame, Grid, Key, List, Modal, Panel, Size::*, Tabs, TextInput, Toasts,
+    Waker,
 };
 use tinsel::{ColorMode, Line, Spinner, Table, Theme, Tone, format, paint, palette, shimmer};
 
@@ -115,7 +116,7 @@ struct Dashboard {
     group: usize,
     pane: Pane,
     cursor: Cursor,
-    filter: Input,
+    filter: TextInput,
     drifted_only: bool,
     env: usize,
     dialog: Option<(Dialog, f32)>,
@@ -136,7 +137,7 @@ impl Dashboard {
             group: 0,
             pane: Pane::Table,
             cursor: Cursor::new(),
-            filter: Input::new().prompt("/").placeholder("filter services by name"),
+            filter: TextInput::new().prompt("/").placeholder("filter services by name"),
             drifted_only: false,
             env: 1,
             dialog: None,
@@ -160,7 +161,7 @@ impl Dashboard {
             group: 0,
             pane: Pane::Table,
             cursor: Cursor::new(),
-            filter: Input::new().prompt("/").placeholder("filter services by name"),
+            filter: TextInput::new().prompt("/").placeholder("filter services by name"),
             drifted_only: false,
             env: 1,
             dialog: None,
