@@ -33,8 +33,7 @@ static OUTPUT: AtomicU8 = AtomicU8::new(0);
 
 /// The output shape in use. Decided once from `TINSEL_OUTPUT`, unless [`set_output`] has chosen one.
 pub fn output() -> Output {
-    #[cfg(test)]
-    if let Some(out) = TEST_OUTPUT.get() {
+    if let Some(out) = SCOPED_OUTPUT.get() {
         return out;
     }
     match OUTPUT.load(Ordering::Relaxed) {
@@ -50,17 +49,33 @@ pub fn output() -> Output {
 }
 
 pub(crate) fn parse_output(env: Option<&str>) -> Output {
-    match env {
-        Some("json") => Output::Json,
-        Some("quiet") => Output::Quiet,
+    match env.map(str::trim) {
+        Some(v) if v.eq_ignore_ascii_case("json") => Output::Json,
+        Some(v) if v.eq_ignore_ascii_case("quiet") => Output::Quiet,
         _ => Output::Pretty,
     }
 }
 
-#[cfg(test)]
 thread_local! {
-    static TEST_OUTPUT: std::cell::Cell<Option<Output>> = const { std::cell::Cell::new(None) };
-    static TEST_TARGET: std::cell::Cell<Option<Target>> = const { std::cell::Cell::new(None) };
+    static SCOPED_OUTPUT: std::cell::Cell<Option<Output>> = const { std::cell::Cell::new(None) };
+    static SCOPED_TARGET: std::cell::Cell<Option<Target>> = const { std::cell::Cell::new(None) };
+}
+
+/// Set `cell` to `value` while `f` runs, putting it back afterwards even if `f` panics, since
+/// tests catch panics and carry on.
+pub(crate) fn scoped<T: Copy + 'static, R>(
+    cell: &'static std::thread::LocalKey<std::cell::Cell<Option<T>>>,
+    value: T,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct Restore<T: Copy + 'static>(&'static std::thread::LocalKey<std::cell::Cell<Option<T>>>, Option<T>);
+    impl<T: Copy + 'static> Drop for Restore<T> {
+        fn drop(&mut self) {
+            self.0.set(self.1);
+        }
+    }
+    let _restore = Restore(cell, cell.replace(Some(value)));
+    f()
 }
 
 thread_local! {
@@ -68,14 +83,19 @@ thread_local! {
     static TERMINAL: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-/// Run `f` with an output shape on this thread alone, so a unit test that wants JSON doesn't
-/// turn it on for the tests running beside it.
-#[cfg(test)]
-pub(crate) fn with_output<T>(out: Output, f: impl FnOnce() -> T) -> T {
-    let before = TEST_OUTPUT.replace(Some(out));
-    let result = f();
-    TEST_OUTPUT.set(before);
-    result
+/// Run `f` with an output shape on this thread alone, leaving the rest of the program as it
+/// was: for a library that wants quiet output from one call, or a test that wants JSON
+/// without turning it on for the tests beside it. Displays started inside keep the shape
+/// they started with; anything drawn on other threads meanwhile uses the program's.
+///
+/// ```
+/// use tinsel::{Output, capture, with_output};
+///
+/// let printed = capture(|| with_output(Output::Quiet, || tinsel::success("deployed")));
+/// assert_eq!(printed, "");
+/// ```
+pub fn with_output<T>(out: Output, f: impl FnOnce() -> T) -> T {
+    scoped(&SCOPED_OUTPUT, out, f)
 }
 
 /// Run `f` as if the stream tinsel draws on were a terminal (or not), on this thread alone.
@@ -160,11 +180,11 @@ fn capture_while(f: &mut dyn FnMut()) -> String {
     CAPTURE_ON.store(true, Ordering::SeqCst);
     // tinsel's own tests ignore TINSEL_OUTPUT and TINSEL_TARGET unless a test chooses
     #[cfg(test)]
-    let before = (TEST_OUTPUT.get(), TEST_TARGET.get());
+    let before = (SCOPED_OUTPUT.get(), SCOPED_TARGET.get());
     #[cfg(test)]
     {
-        TEST_OUTPUT.set(before.0.or(Some(Output::Pretty)));
-        TEST_TARGET.set(before.1.or(Some(Target::Stdout)));
+        SCOPED_OUTPUT.set(before.0.or(Some(Output::Pretty)));
+        SCOPED_TARGET.set(before.1.or(Some(Target::Stdout)));
     }
     let terminal = TERMINAL.get();
     TERMINAL.set(terminal.or(Some(false)));
@@ -172,8 +192,8 @@ fn capture_while(f: &mut dyn FnMut()) -> String {
     TERMINAL.set(terminal);
     #[cfg(test)]
     {
-        TEST_OUTPUT.set(before.0);
-        TEST_TARGET.set(before.1);
+        SCOPED_OUTPUT.set(before.0);
+        SCOPED_TARGET.set(before.1);
     }
     let out = {
         let mut buf = captured();
@@ -226,8 +246,7 @@ static TARGET: AtomicU8 = AtomicU8::new(0);
 /// Where tinsel draws. Decided once from `TINSEL_TARGET` (`stderr` or `stdout`), unless
 /// [`set_target`] has chosen.
 pub fn target() -> Target {
-    #[cfg(test)]
-    if let Some(target) = TEST_TARGET.get() {
+    if let Some(target) = SCOPED_TARGET.get() {
         return target;
     }
     match TARGET.load(Ordering::Relaxed) {
@@ -259,6 +278,21 @@ pub fn set_target(target: Target) {
     if before != target_code(target) {
         crate::style::forget_detected();
     }
+}
+
+/// Run `f` drawing on `target` on this thread alone, as [`with_output`] does for the output
+/// shape: messages and blocks printed inside go there, and the colour mode follows that
+/// stream. Displays that draw from a thread of their own ([`Live`](crate::Live),
+/// [`Region`](crate::Region), spinners and [`Progress`](crate::Progress) bars) draw where
+/// the program is set to, so set that with [`set_target`] for them.
+///
+/// ```
+/// use tinsel::{Target, with_target};
+///
+/// with_target(Target::Stderr, || tinsel::info("progress notes go to stderr"));
+/// ```
+pub fn with_target<T>(target: Target, f: impl FnOnce() -> T) -> T {
+    scoped(&SCOPED_TARGET, target, f)
 }
 
 fn target_code(target: Target) -> u8 {
@@ -399,6 +433,8 @@ mod tests {
     fn output_comes_from_the_environment() {
         assert_eq!(parse_output(None), Output::Pretty);
         assert_eq!(parse_output(Some("json")), Output::Json);
+        assert_eq!(parse_output(Some(" JSON\n")), Output::Json);
+        assert_eq!(parse_output(Some("Quiet")), Output::Quiet);
         assert_eq!(parse_output(Some("quiet")), Output::Quiet);
         assert_eq!(parse_output(Some("loud")), Output::Pretty);
     }

@@ -162,9 +162,9 @@ thread_local! {
     static SCOPED_MODE: std::cell::Cell<Option<ColorMode>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
 thread_local! {
-    static TEST_THEME: std::cell::Cell<Option<Theme>> = const { std::cell::Cell::new(None) };
+    static SCOPED_THEME: std::cell::Cell<Option<Theme>> = const { std::cell::Cell::new(None) };
+    static SCOPED_ACCENT: std::cell::Cell<Option<Accent>> = const { std::cell::Cell::new(None) };
 }
 
 /// Run `f` in a colour mode on this thread alone, leaving the rest of the program as it
@@ -180,16 +180,7 @@ thread_local! {
 /// assert_eq!(with_color_mode(ColorMode::None, || paint(palette::ROSE, "hi")), "hi");
 /// ```
 pub fn with_color_mode<T>(mode: ColorMode, f: impl FnOnce() -> T) -> T {
-    let before = SCOPED_MODE.replace(Some(mode));
-    // put back even if `f` panics, since tests catch panics and carry on
-    struct Restore(Option<ColorMode>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            SCOPED_MODE.set(self.0);
-        }
-    }
-    let _restore = Restore(before);
-    f()
+    crate::output::scoped(&SCOPED_MODE, mode, f)
 }
 
 /// Run `f` without colour on this thread, unless [`with_color_mode`] already chose a mode.
@@ -200,13 +191,34 @@ pub(crate) fn plain_unless_chosen<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
-/// Run `f` in a theme on this thread alone.
-#[cfg(test)]
-pub(crate) fn with_theme<T>(theme: Theme, f: impl FnOnce() -> T) -> T {
-    let before = TEST_THEME.replace(Some(theme));
-    let out = f();
-    TEST_THEME.set(before);
-    out
+/// Run `f` in a theme on this thread alone, as [`with_color_mode`] does for the colour mode:
+/// to check how something looks on a light background without changing it for anything else.
+///
+/// ```
+/// use tinsel::style::{ColorMode, Theme, with_color_mode, with_theme};
+/// use tinsel::{paint, palette};
+///
+/// let dark = with_color_mode(ColorMode::TrueColor, || with_theme(Theme::Dark, || paint(palette::TEXT, "hi")));
+/// let light = with_color_mode(ColorMode::TrueColor, || with_theme(Theme::Light, || paint(palette::TEXT, "hi")));
+/// assert_ne!(dark, light);
+/// ```
+pub fn with_theme<T>(theme: Theme, f: impl FnOnce() -> T) -> T {
+    crate::output::scoped(&SCOPED_THEME, theme, f)
+}
+
+/// Run `f` in an accent on this thread alone, as [`with_color_mode`] does for the colour
+/// mode.
+///
+/// ```
+/// use tinsel::style::{Accent, ColorMode, with_accent, with_color_mode};
+/// use tinsel::{paint, palette};
+///
+/// let pink = with_color_mode(ColorMode::TrueColor, || with_accent(Accent::Pink, || paint(palette::ROSE, "hi")));
+/// let blue = with_color_mode(ColorMode::TrueColor, || with_accent(Accent::Blue, || paint(palette::ROSE, "hi")));
+/// assert_ne!(pink, blue);
+/// ```
+pub fn with_accent<T>(accent: Accent, f: impl FnOnce() -> T) -> T {
+    crate::output::scoped(&SCOPED_ACCENT, accent, f)
 }
 
 /// Why the colour mode is what it is, for [`doctor`](crate::doctor).
@@ -348,8 +360,7 @@ static THEME_DETECTED: std::sync::OnceLock<(Theme, String)> = std::sync::OnceLoc
 /// `COLORFGBG` variable some terminals export, then by asking the terminal for its background
 /// colour. Falls back to [`Theme::Dark`].
 pub fn theme() -> Theme {
-    #[cfg(test)]
-    if let Some(theme) = TEST_THEME.get() {
+    if let Some(theme) = SCOPED_THEME.get() {
         return theme;
     }
     match THEME_CHOSEN.load(Ordering::Relaxed) {
@@ -370,6 +381,9 @@ pub fn set_theme(theme: Theme) {
 
 /// Why the theme is what it is, for [`doctor`](crate::doctor).
 pub(crate) fn theme_why() -> String {
+    if SCOPED_THEME.get().is_some() {
+        return "chosen for this closure, with with_theme".into();
+    }
     match THEME_CHOSEN.load(Ordering::Relaxed) {
         0 => detected_theme().1.clone(),
         _ => "set in code".into(),
@@ -393,9 +407,9 @@ fn pick_theme_why(
     colorfgbg: Option<&str>,
     background: fn() -> Option<(u8, u8, u8)>,
 ) -> (Theme, String) {
-    match name {
-        Some(n @ "light") => return (Theme::Light, format!("TINSEL_THEME={n}")),
-        Some(n @ "dark") => return (Theme::Dark, format!("TINSEL_THEME={n}")),
+    match name.map(str::trim) {
+        Some(n) if n.eq_ignore_ascii_case("light") => return (Theme::Light, format!("TINSEL_THEME={n}")),
+        Some(n) if n.eq_ignore_ascii_case("dark") => return (Theme::Dark, format!("TINSEL_THEME={n}")),
         _ => {}
     }
     // "fg;bg" in the 16-colour palette: 7 and 9-15 are light backgrounds
@@ -523,9 +537,11 @@ pub enum Accent {
 }
 
 impl Accent {
-    /// The accent with this name (`pink`, `violet`, `blue`, `teal`, `orange`), or a hue in degrees.
+    /// The accent with this name (`pink`, `violet`, `blue`, `teal`, `orange`), or a hue in
+    /// degrees. Case and surrounding spaces don't matter.
     pub fn from_name(name: &str) -> Option<Accent> {
-        Some(match name {
+        let name = name.trim().to_ascii_lowercase();
+        Some(match name.as_str() {
             "pink" => Accent::Pink,
             "violet" | "purple" => Accent::Violet,
             "blue" => Accent::Blue,
@@ -576,6 +592,9 @@ fn hue_name(hue: f32) -> String {
 /// The accent in use: from `TINSEL_ACCENT` if set, otherwise [`Accent::Pink`], unless
 /// [`set_accent`] has chosen one.
 fn accent_hue() -> f32 {
+    if let Some(accent) = SCOPED_ACCENT.get() {
+        return accent.hue();
+    }
     match ACCENT.load(Ordering::Relaxed) {
         0 => {
             let name = std::env::var("TINSEL_ACCENT").ok();
@@ -971,6 +990,7 @@ mod tests {
         assert_eq!(for_accent(palette::AMBER, 220.0), palette::AMBER);
         assert_eq!(for_accent(palette::SAGE, 220.0), palette::SAGE);
         assert_eq!(Accent::from_name("200"), Some(Accent::Hue(200.0)));
+        assert_eq!(Accent::from_name(" Blue\n"), Some(Accent::Blue));
     }
 
     fn env(vars: &[(&str, &str)]) -> ColorEnv {
@@ -1071,6 +1091,7 @@ mod tests {
         let (dark, light) = (|| Some((0, 0, 0)), || Some((255, 255, 255)));
         assert_eq!(pick_theme(Some("light"), Some("0;0"), dark), Theme::Light);
         assert_eq!(pick_theme(Some("dark"), None, light), Theme::Dark);
+        assert_eq!(pick_theme(Some(" Light "), None, dark), Theme::Light);
         assert_eq!(pick_theme(Some("sepia"), Some("0;15"), dark), Theme::Light);
         assert_eq!(pick_theme(None, Some("15;7"), dark), Theme::Light);
         assert_eq!(pick_theme(None, Some("15;0"), light), Theme::Dark);
