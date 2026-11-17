@@ -61,7 +61,7 @@ fn dates_round_trip_through_days() {
         (2400, 12, 31),
     ] {
         let date = Date::new(d.0, d.1, d.2).unwrap();
-        assert_eq!(Date::from_days(date.days()), date);
+        assert_eq!(Date::from_days(date.days()), Some(date));
     }
     assert_eq!(Date::new(1970, 1, 1).unwrap().days(), 0);
     // 2026-11-12 is a Thursday
@@ -74,6 +74,33 @@ fn months_clamp_to_their_length() {
     assert_eq!(jan31.add_months(1), Date::new(2027, 2, 28).unwrap());
     assert_eq!(jan31.add_months(-2), Date::new(2026, 11, 30).unwrap());
     assert_eq!(Date::new(2026, 2, 29), None);
+}
+
+#[test]
+fn dates_are_always_real_and_the_calendar_never_panics() {
+    assert_eq!(Date::new(2026, 13, 1), None);
+    assert_eq!(Date::new(2026, 0, 1), None);
+    assert_eq!(Date::new(2026, 2, 31), None);
+    assert_eq!(Date::new(2026, 4, 0), None);
+    assert_eq!(
+        Date::new(2024, 2, 29).map(|d| (d.year(), d.month(), d.day())),
+        Some((2024, 2, 29))
+    );
+    // at the ends of the years an i32 holds, moving stays put rather than overflowing
+    let last = Date::new(i32::MAX, 12, 31).unwrap();
+    assert_eq!(last.add_months(1), last);
+    assert_eq!(last.add_months(i32::MAX), last);
+    assert_eq!(last.add_days(1), last);
+    assert_eq!(last.add_months(-1), Date::new(i32::MAX, 11, 30).unwrap());
+    let first = Date::new(i32::MIN, 1, 1).unwrap();
+    assert_eq!(first.add_months(-1), first);
+    assert_eq!(first.add_months(i32::MIN), first);
+    assert_eq!(first.add_days(-1), first);
+    assert_eq!(Date::from_days(i64::MAX), None);
+    assert_eq!(Date::from_days(i64::MIN), None);
+    for at in [last, first, Date::new(2024, 2, 29).unwrap()] {
+        assert!(calendar(at, at)[0].contains(&at.year().to_string()));
+    }
 }
 
 #[test]
@@ -148,13 +175,45 @@ fn a_paste_is_typed_in_whole_and_never_presses_enter() {
     let typed: String = keys
         .iter()
         .map(|k| match k {
-            Key::Char(c) => *c,
+            Key::Pasted(c) | Key::Char(c) => *c,
             other => panic!("{other:?}"),
         })
         .collect();
     assert_eq!(typed, "one two three!");
+    assert_eq!(keys.last(), Some(&Key::Char('!')));
     let mut ui = Ui::script(&[keys.as_slice(), &[Key::Enter]].concat());
     assert_eq!(Input::new("Paste").run(&mut ui).unwrap(), "one two three!");
+}
+
+#[test]
+fn a_paste_never_answers_a_question() {
+    let paste = |text: &str, then: &[Key]| [pasted_keys(text).as_slice(), then].concat();
+    // `y` in a paste isn't yes, and Enter still takes the default
+    let mut ui = Ui::script(&paste("yarn build", &[Key::Enter]));
+    assert!(!Confirm::new("Go?").run(&mut ui).unwrap());
+    let mut ui = Ui::script(&paste("Yes", &[Key::Char('n')]));
+    assert!(!Confirm::new("Go?").default(true).run(&mut ui).unwrap());
+    // in a short list, j and k don't move, and a and spaces tick nothing
+    let mut ui = Ui::script(&paste("jj kk", &[Key::Enter]));
+    assert_eq!(
+        Select::new("Env").options(["dev", "sit", "prod"]).run(&mut ui).unwrap(),
+        0
+    );
+    let mut ui = Ui::script(&paste("a a", &[Key::Enter]));
+    let none: Vec<usize> = MultiSelect::new("Parts").options(["a", "b"]).run(&mut ui).unwrap();
+    assert!(none.is_empty());
+    // a list long enough to filter takes it as a filter
+    let many: Vec<String> = (0..20).map(|i| format!("region-{i}")).collect();
+    let mut ui = Ui::script(&paste("region-17", &[Key::Enter]));
+    assert_eq!(Select::new("Region").options(many.clone()).run(&mut ui).unwrap(), 17);
+    let mut ui = Ui::script(&paste("o", &[Key::Enter]));
+    assert_eq!(
+        Dropdown::new("Version").options(["one", "two"]).run(&mut ui).unwrap(),
+        "one"
+    );
+    // and an answer typed in takes it as text
+    let mut ui = Ui::script(&paste("y j a\n", &[Key::Enter]));
+    assert_eq!(Input::new("Text").run(&mut ui).unwrap(), "y j a");
 }
 
 #[test]
@@ -729,10 +788,37 @@ fn passwords_show_dots() {
     let mut ui = Ui::script(&[Key::Char('a'), Key::Left]);
     let _ = Input::new("Password").password().run(&mut ui);
     assert_eq!(ui.shown(), ["  ?  Password  ▏•"]);
+    // a default is dots too, as many whatever its length, and Enter still takes it
+    let mut ui = Ui::script(&[Key::Enter]);
+    let secret = Input::new("Password").password().default("hunter2");
+    assert_eq!(secret.run(&mut ui).unwrap(), "hunter2");
+    let mut ui = Ui::script(&[]);
+    let _ = secret.run(&mut ui);
+    assert_eq!(ui.shown(), ["  ?  Password  ▏••••••"]);
     assert!(matches!(
         Input::new("x").run(&mut Ui::script(&[Key::Esc])),
         Err(Error::Cancelled)
     ));
+}
+
+#[test]
+fn passwords_stay_secret() {
+    let secret = Input::new("Token").password().default("hunter2").initial("swordfish");
+    let shown = format!("{secret:?}");
+    assert!(!shown.contains("hunter2") && !shown.contains("swordfish"), "{shown}");
+    let plain = format!("{:?}", Input::new("Name").default("api"));
+    assert!(plain.contains("api"), "{plain}");
+    // never read from a pipe, but a script can still answer
+    let piped = crate::output::with_terminal(false, || Input::new("Token").password().ask());
+    assert!(matches!(piped, Err(Error::NotATerminal)));
+    assert!(matches!(
+        crate::output::with_terminal(false, || password("Token")),
+        Err(Error::NotATerminal)
+    ));
+    let mut keys = crate::prompt::typed("pw");
+    keys.push(K::Enter);
+    let _script = script(keys);
+    assert_eq!(password("Token").unwrap(), "pw");
 }
 
 #[test]
@@ -951,5 +1037,27 @@ fn the_editor_writes_the_answer() {
     assert!(matches!(edit("Notes", "", "/nonexistent/editor"), Err(Error::Io(_))));
     let deletes = tool("deletes", r#"rm "$1""#);
     assert!(matches!(edit("Notes", "", &deletes), Err(Error::Io(_))));
+    // an editor with a space in its path, quoted, with arguments of its own; the file is new,
+    // only ours to read, and gone afterwards
+    let seen = dir.join("seen");
+    let spaced = tool(
+        "my editor",
+        &format!(
+            r#"printf '%s|%s|' "$1" "$2" > '{0}'; ls -l "$2" | cut -c1-10 >> '{0}'"#,
+            seen.display()
+        ),
+    );
+    let answer = edit("Notes", "kept\n", &format!("'{spaced}' --wait")).unwrap();
+    assert_eq!(answer, "kept\n");
+    let seen = std::fs::read_to_string(&seen).unwrap();
+    let parts: Vec<&str> = seen.trim().split('|').collect();
+    assert_eq!((parts[0], parts[2]), ("--wait", "-rw-------"), "{seen}");
+    assert!(!std::path::Path::new(parts[1]).exists());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_editor_cant_be_scripted() {
+    let _script = script([K::Enter]);
+    assert!(matches!(editor("Notes", ""), Err(Error::NotATerminal)));
 }

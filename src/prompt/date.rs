@@ -3,14 +3,24 @@
 use super::*;
 
 /// A calendar date, as returned by [`date`]. Shown and parsed as `YYYY-MM-DD`.
+///
+/// Always a day that exists: make one with [`Date::new`], which turns down a 13th month or a
+/// February 30th, or parse one from text.
+///
+/// ```
+/// use tinsel::prompt::Date;
+///
+/// let pi_day = Date::new(2026, 3, 14).unwrap();
+/// assert_eq!((pi_day.year(), pi_day.month(), pi_day.day()), (2026, 3, 14));
+/// assert_eq!("2026-03-14".parse(), Ok(pi_day));
+/// assert_eq!(Date::new(2026, 2, 30), None);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Date {
-    /// The year, e.g. 2026.
-    pub year: i32,
-    /// The month, 1-12.
-    pub month: u8,
-    /// The day of the month, from 1.
-    pub day: u8,
+    // private, so every date is a real one: the calendar counts on it
+    year: i32,
+    month: u8,
+    day: u8,
 }
 
 pub(super) const MONTHS: [&str; 12] = [
@@ -38,12 +48,32 @@ impl Date {
         })
     }
 
+    /// The year, e.g. 2026.
+    pub fn year(self) -> i32 {
+        self.year
+    }
+
+    /// The month, 1-12.
+    pub fn month(self) -> u8 {
+        self.month
+    }
+
+    /// The day of the month, from 1.
+    pub fn day(self) -> u8 {
+        self.day
+    }
+
     /// Today, in the local time zone where that can be found (Unix), otherwise in UTC.
     pub fn today() -> Date {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
-        Date::from_days((secs + crate::term::utc_offset_secs(secs)).div_euclid(86_400))
+        let days = (secs + crate::term::utc_offset_secs(secs)).div_euclid(86_400);
+        Date::from_days(days).unwrap_or(Date {
+            year: 1970,
+            month: 1,
+            day: 1,
+        })
     }
 
     /// Days since 1970-01-01.
@@ -58,8 +88,9 @@ impl Date {
         era * 146_097 + doe - 719_468
     }
 
-    pub(super) fn from_days(z: i64) -> Date {
-        let z = z + 719_468;
+    /// The date `z` days after 1970-01-01, unless its year doesn't fit in an `i32`.
+    pub(super) fn from_days(z: i64) -> Option<Date> {
+        let z = z.checked_add(719_468)?;
         let era = z.div_euclid(146_097);
         let doe = z - era * 146_097;
         let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
@@ -67,21 +98,24 @@ impl Date {
         let mp = (5 * doy + 2) / 153;
         let day = (doy - (153 * mp + 2) / 5 + 1) as u8;
         let month = if mp < 10 { mp + 3 } else { mp - 9 } as u8;
-        Date {
-            year: (yoe + era * 400 + (month <= 2) as i64) as i32,
-            month,
-            day,
-        }
+        let year = i32::try_from(yoe + era * 400 + (month <= 2) as i64).ok()?;
+        Some(Date { year, month, day })
     }
 
-    fn add_days(self, n: i64) -> Date {
-        Date::from_days(self.days() + n)
+    /// `n` days on, or the same day if that would leave the years an `i32` can hold.
+    pub(super) fn add_days(self, n: i64) -> Date {
+        self.days().checked_add(n).and_then(Date::from_days).unwrap_or(self)
     }
 
-    /// The same day `n` months on, or the month's last day if it's shorter.
+    /// The same day `n` months on, or the month's last day if it's shorter. Stays put if
+    /// that would leave the years an `i32` can hold.
     pub(super) fn add_months(self, n: i32) -> Date {
-        let m = self.year * 12 + self.month as i32 - 1 + n;
-        let (year, month) = (m.div_euclid(12), (m.rem_euclid(12) + 1) as u8);
+        // in i64, where no i32 year and month count can overflow
+        let m = i64::from(self.year) * 12 + i64::from(self.month) - 1 + i64::from(n);
+        let Ok(year) = i32::try_from(m.div_euclid(12)) else {
+            return self;
+        };
+        let month = (m.rem_euclid(12) + 1) as u8;
         Date {
             year,
             month,
@@ -175,7 +209,9 @@ pub fn date(question: &str, default: Option<Date>) -> Result<Date> {
 /// A month laid out Monday to Sunday, the chosen day as a pill and today underlined.
 pub(super) fn calendar(at: Date, today: Date) -> Vec<String> {
     let first = Date { day: 1, ..at };
-    let title = format!("{} {}", MONTHS[at.month as usize - 1], at.year);
+    // a Date's month is always 1-12, but a calendar is no reason to panic
+    let name = MONTHS.get(usize::from(at.month).wrapping_sub(1)).unwrap_or(&"");
+    let title = format!("{name} {}", at.year);
     let mut lines = vec![
         format!("       {}", paint(TEXT, &title)),
         format!("    {}", paint(MUTED, " Mo  Tu  We  Th  Fr  Sa  Su")),

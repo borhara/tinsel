@@ -5,10 +5,15 @@ use super::*;
 /// Raw keyboard input and a hidden cursor for as long as it lives, with every live display
 /// held still meanwhile so the question has the screen and the keys to itself.
 pub(super) struct Raw {
-    // dropped in this order: raw mode off before the displays start watching stdin again
-    _mode: RawMode,
+    // raw mode goes off in drop, before the displays start watching stdin again
+    mode: Option<RawMode>,
     _paused: crate::display::Paused,
+    /// The handlers for hangups and kills from before the question, to put back.
+    termination: [Option<usize>; 2],
 }
+
+/// What a question writes on its way out: pastes no longer marked out, and the cursor back.
+const LEAVE: &str = "\x1b[?2004l\x1b[?25h";
 
 impl Raw {
     fn enter() -> io::Result<Raw> {
@@ -16,20 +21,37 @@ impl Raw {
         crate::style::theme();
         // before raw mode, so each display's focus watch has handed the terminal back first
         let paused = crate::display::pause_all();
-        let mode = RawMode::enter()?;
+        // the settings from before raw mode, for a hangup, a kill or an exit to put back
+        crate::term::remember_terminal();
+        let mode = match RawMode::enter() {
+            Ok(mode) => mode,
+            Err(e) => {
+                crate::term::forget_terminal();
+                return Err(e);
+            }
+        };
+        // what's left behind goes to stdout, so only when that's the terminal too: piped, it
+        // would end up in what the program printed
+        let leave = if io::stdout().is_terminal() { LEAVE } else { "" };
+        let termination = crate::term::guard_termination(leave);
         // the cursor hidden, and pastes marked out, so a line break in one isn't Enter
         eprint!("\x1b[?25l\x1b[?2004h");
         Ok(Raw {
-            _mode: mode,
+            mode: Some(mode),
             _paused: paused,
+            termination,
         })
     }
 }
 
 impl Drop for Raw {
     fn drop(&mut self) {
-        eprint!("\x1b[?2004l\x1b[?25h");
+        eprint!("{LEAVE}");
         let _ = io::stderr().flush();
+        // the terminal put back before the guards come off, so a kill meanwhile still does it
+        drop(self.mode.take());
+        crate::term::unguard_termination(std::mem::take(&mut self.termination));
+        crate::term::forget_terminal();
     }
 }
 
@@ -49,6 +71,9 @@ pub(super) enum Key {
     Backspace,
     Delete,
     Char(char),
+    /// A character of a paste: typed into an answer or a filter, but never a key that
+    /// answers, moves or ticks.
+    Pasted(char),
     /// Ctrl and a letter, as the letter.
     Ctrl(char),
     Esc,
@@ -193,17 +218,16 @@ pub(super) fn paste(read: &mut dyn FnMut() -> io::Result<Option<u8>>) -> io::Res
     Ok(Typed::Paste(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
-/// Pasted text as keys typed into a one-line answer: each line break or tab becomes a space,
-/// so a paste never answers the question by itself, and a line break at the end is left off.
-/// Spaces come as characters rather than [`Key::Space`], so pasting into a filter types
-/// them rather than ticking an option.
+/// Pasted text as [`Key::Pasted`] characters, for a one-line answer: each line break or tab
+/// becomes a space, and a line break at the end is left off. A paste never answers the
+/// question: `y` in one isn't yes, `j` doesn't move and a space doesn't tick an option.
 pub(super) fn pasted_keys(text: &str) -> Vec<Key> {
     let text = text.trim_end_matches(['\r', '\n']).replace("\r\n", "\n");
     text.chars()
         .filter_map(|c| match c {
-            '\n' | '\r' | '\t' => Some(Key::Char(' ')),
+            '\n' | '\r' | '\t' => Some(Key::Pasted(' ')),
             c if c.is_control() => None,
-            c => Some(Key::Char(c)),
+            c => Some(Key::Pasted(c)),
         })
         .collect()
 }
