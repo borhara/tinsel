@@ -6,10 +6,10 @@
 //!
 //! Every question returns a [`Result`], whose error says what happened in a way you can
 //! match on: [`Error::Cancelled`] when someone presses Ctrl-C or Esc, [`Error::NotATerminal`]
-//! when there's no one to ask. Without a terminal on stdin, `confirm` and the text questions
-//! (`input`, `number`, `date`) read a line, so scripts can still drive them
-//! (`echo yes | my-cli`); an answer read that way that doesn't make sense or fails validation
-//! is an [`Error::Invalid`].
+//! when there's no one to ask (no terminal on stdin, or none on stderr to show the question
+//! on). Without a terminal on stdin, `confirm` and the text questions (`input`, `number`,
+//! `date`) read a line, so scripts can still drive them (`echo yes | my-cli`); an answer
+//! read that way that doesn't make sense or fails validation is an [`Error::Invalid`].
 //!
 //! ```no_run
 //! use tinsel::prompt;
@@ -107,8 +107,9 @@ pub enum Error {
     /// question is cleared from the screen. Unlike [`Error::Cancelled`], the person wants to
     /// carry on.
     Back,
-    /// There's no terminal to ask on (stdin is a pipe or a file), and this question has no
-    /// sensible non-interactive answer.
+    /// There's no terminal to ask on (stdin is a pipe or a file, or stderr, where questions
+    /// are drawn, isn't a terminal), and this question has no sensible non-interactive
+    /// answer.
     NotATerminal,
     /// A list question was given nothing to choose from.
     NoOptions,
@@ -428,13 +429,24 @@ fn problem(why: &str) -> String {
     format!("     {} {}", paint(RED, "✕"), paint(mix(RED, SOFT, 0.3), why))
 }
 
-/// Whether there's someone to ask: a terminal on stdin, or a [`script`] of keys.
+/// Whether there's someone to ask: a terminal on stdin and on stderr, where the question is
+/// drawn, or a [`script`] of keys. With stderr sent elsewhere (`2>/dev/null`) the question
+/// couldn't be seen, so it isn't asked.
 fn interactive() -> bool {
     #[cfg(test)]
     if let Some(terminal) = crate::output::pretended_terminal() {
         return scripted() || terminal;
     }
-    scripted() || io::stdin().is_terminal()
+    scripted() || (io::stdin().is_terminal() && io::stderr().is_terminal())
+}
+
+/// Whether stdin is a terminal while the question can't be shown on stderr.
+fn typing_blind() -> bool {
+    #[cfg(test)]
+    if crate::output::pretended_terminal().is_some() {
+        return false;
+    }
+    io::stdin().is_terminal() && !io::stderr().is_terminal()
 }
 
 fn need_terminal() -> Result<()> {
@@ -453,6 +465,11 @@ fn read_piped_line() -> Result<String> {
 
 /// A line read from a pipe or file, or `None` at the end of the input.
 fn read_piped() -> Result<Option<String>> {
+    // stdin is a terminal but stderr isn't: someone is there, but would be typing an answer
+    // to a question they can't see
+    if typing_blind() {
+        return Err(Error::NotATerminal);
+    }
     let mut s = String::new();
     if io::stdin().read_line(&mut s)? == 0 {
         return Ok(None);
