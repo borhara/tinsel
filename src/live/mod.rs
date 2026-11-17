@@ -433,7 +433,7 @@ impl Live {
     }
 
     /// Choose how running steps animate (default: [`Spinner::Sparkle`]).
-    pub fn with_spinner(self, spinner: Spinner) -> Self {
+    pub fn spinner(self, spinner: Spinner) -> Self {
         lock(&self.shared).spinner = spinner;
         self
     }
@@ -443,9 +443,9 @@ impl Live {
     /// ```no_run
     /// use tinsel::{BarStyle, Live};
     ///
-    /// let live = Live::new("render", "intro.mp4").with_bar(BarStyle::Waveform);
+    /// let live = Live::new("render", "intro.mp4").bar(BarStyle::Waveform);
     /// ```
-    pub fn with_bar(self, bar: BarStyle) -> Self {
+    pub fn bar(self, bar: BarStyle) -> Self {
         lock(&self.shared).bar = bar;
         self
     }

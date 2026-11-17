@@ -303,9 +303,9 @@ impl Progress {
     /// ```no_run
     /// use tinsel::{BarStyle, Progress};
     ///
-    /// let p = Progress::new("Encoding", 1_800).with_bar(BarStyle::Waveform);
+    /// let p = Progress::new("Encoding", 1_800).bar(BarStyle::Waveform);
     /// ```
-    pub fn with_bar(self, bar: BarStyle) -> Self {
+    pub fn bar(self, bar: BarStyle) -> Self {
         lock(&self.counts).bar = bar;
         self
     }
@@ -412,16 +412,16 @@ pub struct WithProgress<I> {
 }
 
 impl<I> WithProgress<I> {
-    /// Choose how the bar is drawn: `iter.progress("Encoding").with_bar(BarStyle::Waveform)`.
-    pub fn with_bar(self, bar: BarStyle) -> Self {
+    /// Choose how the bar is drawn: `iter.progress("Encoding").bar(BarStyle::Waveform)`.
+    pub fn bar(self, bar: BarStyle) -> Self {
         if let Some(p) = &self.bar {
             lock(&p.counts).bar = bar;
         }
         self
     }
 
-    /// The progress line, to change its total or show amounts as bytes.
-    pub fn bar(&self) -> Option<&Progress> {
+    /// The progress line behind this iterator, to change its total as more turns up.
+    pub fn as_progress(&self) -> Option<&Progress> {
         self.bar.as_ref()
     }
 }
@@ -536,10 +536,7 @@ mod tests {
         plain();
         let out = capture(|| {
             with_terminal(true, || {
-                let p = Progress::new("p-draw", 100)
-                    .fps(240)
-                    .bytes()
-                    .with_bar(BarStyle::Waveform);
+                let p = Progress::new("p-draw", 100).fps(240).bytes().bar(BarStyle::Waveform);
                 p.inc(30);
                 p.set(50);
                 std::thread::sleep(Duration::from_millis(30));
@@ -594,14 +591,14 @@ mod tests {
     fn iterators_count_as_they_go() {
         let out = capture(|| {
             with_terminal(false, || {
-                let mut it = [1, 2, 3].iter().progress("known").with_bar(BarStyle::Line);
+                let mut it = [1, 2, 3].iter().progress("known").bar(BarStyle::Line);
                 assert_eq!(it.size_hint(), (3, Some(3)));
-                assert_eq!(lock(&it.bar().unwrap().counts).total, Some(3));
+                assert_eq!(lock(&it.as_progress().unwrap().counts).total, Some(3));
                 assert_eq!(it.by_ref().count(), 3);
-                assert!(it.bar().is_none());
-                assert!(it.with_bar(BarStyle::Line).next().is_none());
+                assert!(it.as_progress().is_none());
+                assert!(it.bar(BarStyle::Line).next().is_none());
                 let unknown = (0..10).filter(|n| n % 2 == 0).progress("filtered");
-                assert_eq!(lock(&unknown.bar().unwrap().counts).total, None);
+                assert_eq!(lock(&unknown.as_progress().unwrap().counts).total, None);
                 assert_eq!(unknown.sum::<i32>(), 20);
             })
         });
