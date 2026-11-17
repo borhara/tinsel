@@ -110,7 +110,7 @@ struct Terminal {
     master: File,
     seen: Arc<Mutex<Vec<u8>>>,
     child: Child,
-    reader: JoinHandle<()>,
+    reader: Option<JoinHandle<()>>,
 }
 
 #[cfg(unix)]
@@ -168,7 +168,7 @@ impl Terminal {
             master,
             seen,
             child,
-            reader,
+            reader: Some(reader),
         }
     }
 
@@ -192,12 +192,30 @@ impl Terminal {
         self.master.flush().unwrap();
     }
 
+    /// Wait for the child to end, for a minute at most, and say what it drew.
     fn finish(mut self) -> (ExitStatus, String) {
-        let status = self.child.wait().unwrap();
-        drop(self.master);
-        let _ = self.reader.join();
-        let seen = String::from_utf8_lossy(&self.seen.lock().unwrap()).into_owned();
-        (status, seen)
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                break status;
+            }
+            // dropping self on the way out kills it
+            assert!(Instant::now() < deadline, "the child never finished:\n{}", self.seen());
+            thread::sleep(Duration::from_millis(10));
+        };
+        let _ = self.reader.take().map(JoinHandle::join);
+        (status, self.seen())
+    }
+}
+
+/// A child left running by a failed test is killed rather than left waiting on its terminal.
+#[cfg(unix)]
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
     }
 }
 
