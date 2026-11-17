@@ -1113,10 +1113,10 @@ impl Loading {
     fn lines(&self, t: f32, width: usize) -> Vec<String> {
         let mark = self.spinner.frame(t);
         let indent = " ".repeat(mark.width() + 1);
-        let mut lines = vec![format!("{mark} {}", crate::shimmer(&self.label, t))];
+        let mut lines = vec![format!("{mark} {}", crate::anim::shimmer(&self.label, t))];
         if let Some((p, text)) = &self.progress {
             let room = width.saturating_sub(indent.len() + 2 + text::width(text) + 6);
-            let bar = crate::live_bar(*p, room.clamp(8, 30), t);
+            let bar = crate::anim::bar(*p, room.clamp(8, 30), t);
             let stats = format!("{:>3.0}%  {text}", p * 100.0);
             lines.push(format!("{indent}{bar}  {}", paint(SOFT, stats.trim_end())));
         } else if !self.detail.is_empty() {

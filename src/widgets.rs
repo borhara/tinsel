@@ -190,7 +190,8 @@ pub fn bar(fraction: f32, width: usize) -> Line {
     shiny_bar(fraction, width, None)
 }
 
-/// [`bar`] with a soft glint running along the filled part, for bars that are still moving.
+/// [`tinsel::bar`](crate::bar) with a soft glint running along the filled part, for bars
+/// that are still moving.
 pub fn live_bar(fraction: f32, width: usize, t: f32) -> Line {
     shiny_bar(fraction, width, Some(t))
 }
@@ -221,7 +222,7 @@ fn shiny_bar(fraction: f32, width: usize, t: Option<f32>) -> Line {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BarStyle {
-    /// A thin line with a glint running along it: [`bar`] and [`live_bar`]. The default.
+    /// A thin line with a glint running along it: [`bar`] and [`anim::bar`](crate::anim::bar). The default.
     #[default]
     Line,
     /// A row of bars like an audio track, lit up as it plays through: [`waveform`] and
@@ -258,7 +259,7 @@ pub fn waveform(fraction: f32, width: usize) -> Line {
     wave(fraction, width, None)
 }
 
-/// [`waveform`] still playing: the bars just behind the playhead bounce, and the playhead
+/// [`tinsel::waveform`](crate::waveform) still playing: the bars just behind the playhead bounce, and the playhead
 /// itself glows.
 pub fn live_waveform(fraction: f32, width: usize, t: f32) -> Line {
     wave(fraction, width, Some(t))

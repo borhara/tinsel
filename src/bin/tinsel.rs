@@ -18,11 +18,12 @@ use std::io::{IsTerminal, Write};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+use tinsel::anim::{self, shimmer};
+use tinsel::style::{RAMP, gradient};
 use tinsel::{
-    Accent, Border, Callout, Card, Code, Help, Live, Output, Progress, ProgressIterator, RAMP, Region, Report, Spinner,
-    Step, Table, Target, Tone, Tree, badge, bars, callout, columns, counter, diff, error, format, gradient, heatmap,
-    hint, histogram, info, link, live_bar, live_waveform, meter, paint, pairs, palette, prompt, rule, shimmer,
-    sparkline, spin, success, title, try_spin, warn,
+    Accent, Border, Callout, Card, Code, Help, Live, Output, Progress, ProgressIterator, Region, Report, Spinner, Step,
+    Table, Target, Tone, Tree, badge, bars, callout, columns, counter, diff, error, format, heatmap, hint, histogram,
+    info, link, meter, paint, pairs, palette, prompt, rule, sparkline, spin, success, title, try_spin, warn,
 };
 
 /// What `tinsel help` shows, with an entrance when it's on a terminal.
@@ -446,8 +447,8 @@ fn bar_section() {
         // the waveform plays through like an audio track
         format!(
             "  {}  {pct}\n\n  {}  {pct}",
-            live_bar(p, 36, t),
-            live_waveform(p, 36, t)
+            anim::bar(p, 36, t),
+            anim::waveform(p, 36, t)
         )
     });
     println!();

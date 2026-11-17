@@ -340,12 +340,12 @@ cargo run --example deploy         # small, copyable examples: hello, deploy, pa
 | **data** | `Table` (numbers right-align and sort by value, units and all; borders, wrapping, footers, highlighted rows) · `Tree` · `pairs` · `columns` |
 | **charts** | `sparkline` · `bars` · `meter` · `histogram` · `heatmap` |
 | **code** | `diff` · `Code` excerpts with syntax colouring (Rust, TOML, JSON, YAML, shell, Python, JS), a highlighted line and a caret under the problem |
-| **documents** | `markdown` · `json` · `Help` with an animated entrance · `Block::page` |
-| **inline** | `badge` · `link` (clickable) · `Card` · `paint`, `bold`, `dim`, `italic`, `underline`, `gradient` |
-| **apps** | `app::run` full-screen apps · `Panel` · `List` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys, mouse and resize events · `app::snapshot` for tests · `Frame::html` for screenshots |
+| **documents** | `markdown` (and `markdown::wrapped`) · `json` · `Help` with an animated entrance · `Block::page` |
+| **inline** | `badge` · `link` (clickable) · `Card` · `paint`, `paint_on`, `paint_bg`, `bold`, `dim`, `italic`, `underline` · `style::gradient` · `anim` for shimmering labels and moving bars |
+| **apps** | `app::run` full-screen apps · `Panel` · `List` · `Grid` · `ScrollView` · `TextInput` · `TextArea` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys with their modifiers, mouse and resize events · `app::snapshot` for tests · `Frame::html` for screenshots |
 | **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` / `Select` · `multiselect` / `MultiSelect` (filter as you type, headings, disabled options with a reason, validation) · `Dropdown` for long lists (notes, badges, your own answer) · `.back()` to go back a question · `editor` · suggestions and path completion · `confirm_typing` |
-| **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_focus` · `set_history` · `set_accent` · `set_theme` · `set_color_mode` · `timings` |
-| **helpers** | `text::{width, pad, truncate, wrap, strip_ansi}` · `format::{bytes, duration, count, ago, plural}` |
+| **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_focus` · `set_history` · `set_accent` · `set_theme` · `set_color_mode` · `set_fps` · `set_ctrl_c` · `timings` |
+| **helpers** | `text::{width, pad, truncate, wrap, strip_ansi, content_width}` · `terminal_width` · `format::{bytes, duration, count, ago, plural}` |
 
 Full reference with examples for every item: **[docs.rs/tinsel](https://docs.rs/tinsel)**.
 

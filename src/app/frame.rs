@@ -372,7 +372,7 @@ impl Frame {
     }
 
     /// Seconds since the app started, for anything animated: pass it to
-    /// [`Spinner::frame`](crate::Spinner::frame), [`shimmer`](crate::shimmer) and friends.
+    /// [`Spinner::frame`](crate::Spinner::frame), [`anim::shimmer`](crate::anim::shimmer) and friends.
     pub fn time(&self) -> f32 {
         self.time
     }

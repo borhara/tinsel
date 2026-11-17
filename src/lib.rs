@@ -25,15 +25,16 @@
 //! | **live work** | [`Live`] step lists with sub-steps, parallel steps and [`Live::log`]; a [`Region`] redrawing any block; commands run as steps ([`Step::run`], [`Step::command`]) and [`Step::retry`]; a [`Live::timeline`] of where the time went; [`spin`] / [`try_spin`] around one task; a standalone [`Progress`] bar or [`ProgressIterator`] around any loop, drawn as a line or a [`BarStyle::Waveform`]; seven [`Spinner`]s |
 //! | **messages** | [`success`], [`info`], [`warn`], [`error`], [`hint`], [`counter`], [`title`], [`rule`], [`callout`], [`Report`] |
 //! | **data** | [`Table`] (sorting, borders, wrapping, footers), [`Tree`], [`pairs`], [`columns`] |
-//! | **charts** | [`sparkline`], [`bars`], [`meter`], [`histogram`], [`heatmap`], [`waveform`] |
-//! | **code** | [`diff`], [`Code`] excerpts with syntax colouring ([`Lang`]) and carets under the problem |
-//! | **documents** | [`markdown`](fn@markdown) (and [`markdown::wrapped`]), [`json`], [`Help`] (with an entrance), and [`Block::page`] for anything long |
-//! | **inline** | [`badge`], [`link`], [`Card`], [`paint`], [`bold`] and friends |
+//! | **charts** | [`sparkline`], [`bars`], [`meter`], [`histogram`], [`heatmap`], [`bar`], [`waveform`] |
+//! | **code** | [`diff`], [`Code`] excerpts with syntax colouring ([`Lang`], whose [`Lang::highlight`] colours one line) and carets under the problem |
+//! | **documents** | [`markdown`](fn@markdown) (and [`markdown::wrapped`] to a width), [`json`], [`Help`] (with an entrance), and [`Block::page`] for anything long |
+//! | **inline** | [`badge`], [`link`], [`Card`], [`paint`], [`paint_on`], [`paint_bg`], [`bold`] and friends, [`Line`] for text built up in colours |
+//! | **colour** | [`palette`], [`Rgb`], [`mix`]; [`style`] for gradients, blinking and the rest; [`anim`] for the shimmer, twinkle and moving bars tinsel animates with |
 //! | **apps** | [`app`]: full-screen dashboards and tools, with [`app::Panel`]s, [`app::List`]s, [`app::ScrollView`]s, [`app::Tabs`], [`app::Plot`]s, [`app::Stat`]s, [`app::Loading`] and [`app::big`] text laid out in [`app::Rect`]s; [`app::snapshot`] to test them |
 //! | **questions** | [`prompt`]: confirm, input (validation, suggestions, path completion), password, number, date, select and multiselect (filter as you type, headings, disabled options), a dropdown for long lists, editor, confirm by typing; `.back()` to go back a question |
-//! | **helpers** | [`text`] (width-aware pad, truncate, wrap) and [`format`](mod@format) (bytes, durations, ago) |
-//! | **setup** | [`install_panic_hook`], [`set_output`] for `--json` and `--quiet`, [`set_target`] to draw on stderr, [`set_accent`], [`set_theme`], [`set_color_mode`], [`set_focus`] and [`set_history`], [`timings`] |
-//!
+//! | **helpers** | [`text`] (width-aware pad, truncate, wrap) and [`format`](mod@format) (bytes, durations, ago); [`terminal_width`] |
+//! | **setup** | [`install_panic_hook`], [`set_output`] for `--json` and `--quiet`, [`set_target`] to draw on stderr, [`set_accent`], [`set_theme`], [`set_color_mode`], [`set_fps`], [`set_focus`], [`set_history`] and [`set_ctrl_c`], [`timings`], [`doctor`] |
+
 //! # How the pieces fit
 //!
 //! - **One-liners print.** [`success`], [`warn`] and the rest print straight away. Use a
@@ -84,6 +85,7 @@
 
 #![warn(missing_docs)]
 
+pub mod anim;
 pub mod app;
 mod block;
 mod chart;
@@ -92,7 +94,7 @@ mod doctor;
 pub mod format;
 mod fps;
 mod help;
-mod highlight;
+pub mod highlight;
 mod history;
 mod json;
 mod layout;
@@ -107,7 +109,7 @@ mod processes;
 pub mod prompt;
 mod region;
 mod spin;
-mod style;
+pub mod style;
 mod table;
 mod term;
 pub mod text;
@@ -118,12 +120,12 @@ mod widgets;
 pub use block::Block;
 pub use chart::{bars, heatmap, histogram, meter, sparkline};
 pub use doctor::doctor;
-pub use fps::{DEFAULT_FPS, fps, set_fps};
+pub use fps::{fps, set_fps};
 pub use help::Help;
 pub use highlight::Lang;
 pub use history::set_history;
 pub use json::{JsonError, json};
-pub use layout::{Code, IntoLang, badge, columns, diff, link, pairs};
+pub use layout::{Code, badge, columns, diff, link, pairs};
 pub use live::{Live, RunError, Step, StepCommand};
 pub use markdown::markdown;
 pub use message::{Callout, Report, Tone, callout, counter, error, hint, info, rule, success, title, warn};
@@ -141,7 +143,7 @@ pub use term::width as terminal_width;
 pub use term::{CtrlC, set_ctrl_c};
 pub use tree::Tree;
 pub use watch::set_focus;
-pub use widgets::{BarStyle, Card, Label, Spinner, bar, live_bar, live_waveform, pop, shimmer, waveform};
+pub use widgets::{BarStyle, Card, Label, Spinner, bar, waveform};
 
 /// What [`Live`] displays have learned about how long steps take, as a table per program:
 /// recent runs as a sparkline, the usual time, the last run, and whether it was unusually

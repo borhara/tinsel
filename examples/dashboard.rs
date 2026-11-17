@@ -9,10 +9,11 @@
 //!
 //!   cargo run --example dashboard -- --html 120x36 > dashboard.html
 
+use tinsel::anim::shimmer;
 use tinsel::app::{
     self, App, Event, Flow, Footer, Frame, Key, Keymap, List, MouseKind, Panel, Plot, Size::*, Sparkles, Stat, Tabs,
 };
-use tinsel::{ColorMode, Line, Table, Theme, badge, meter, paint, palette, shimmer};
+use tinsel::{ColorMode, Line, Table, Theme, badge, meter, paint, palette};
 
 struct Service {
     name: &'static str,
