@@ -166,7 +166,8 @@ impl Raw {
         // before raw mode, so each display's focus watch has handed the terminal back first
         let paused = crate::display::pause_all();
         let mode = RawMode::enter()?;
-        eprint!("\x1b[?25l");
+        // the cursor hidden, and pastes marked out, so a line break in one isn't Enter
+        eprint!("\x1b[?25l\x1b[?2004h");
         Ok(Raw {
             _mode: mode,
             _paused: paused,
@@ -176,7 +177,7 @@ impl Raw {
 
 impl Drop for Raw {
     fn drop(&mut self) {
-        eprint!("\x1b[?25h");
+        eprint!("\x1b[?2004l\x1b[?25h");
         let _ = io::stderr().flush();
     }
 }
@@ -200,55 +201,43 @@ enum Key {
     /// Ctrl and a letter, as the letter.
     Ctrl(char),
     Esc,
+    /// Alt-← or Ctrl-←, or Alt-b: back a word.
+    WordLeft,
+    /// Alt-→ or Ctrl-→, or Alt-f: on a word.
+    WordRight,
     /// Ctrl-C.
     Interrupt,
     Other,
 }
 
-/// The next key, from bytes that `read` gives one at a time (`None` after a pause).
-fn read_key(read: &mut dyn FnMut() -> io::Result<Option<u8>>) -> io::Result<Key> {
+/// What a terminal sends: a key, or text pasted all at once.
+#[derive(Debug, PartialEq, Eq)]
+enum Typed {
+    Key(Key),
+    Paste(String),
+}
+
+/// The longest escape sequence read as one: anything longer is noise, not a key.
+const LONGEST_SEQUENCE: usize = 32;
+/// Pauses (of 0.1s each) a paste may take to arrive in full, over a slow link, before what
+/// came is taken as all of it.
+const PASTE_PATIENCE: usize = 30;
+
+/// The next key or paste, from bytes that `read` gives one at a time (`None` after a pause).
+fn read_key(read: &mut dyn FnMut() -> io::Result<Option<u8>>) -> io::Result<Typed> {
     let first = loop {
         // reads time out every 0.1s, which is what lets a lone Esc be told apart
         if let Some(b) = read()? {
             break b;
         }
     };
-    Ok(match first {
+    let key = match first {
         3 => Key::Interrupt,
         b'\r' | b'\n' => Key::Enter,
         b'\t' => Key::Tab,
         b' ' => Key::Space,
         127 | 8 => Key::Backspace,
-        27 => match read()? {
-            Some(b'[' | b'O') => match read()? {
-                Some(b'A') => Key::Up,
-                Some(b'B') => Key::Down,
-                Some(b'C') => Key::Right,
-                Some(b'D') => Key::Left,
-                Some(b'H') => Key::Home,
-                Some(b'F') => Key::End,
-                // ESC [ n ~
-                Some(n @ b'1'..=b'8') => {
-                    let mut code = vec![n];
-                    while let Some(b) = read()? {
-                        if b == b'~' {
-                            break;
-                        }
-                        code.push(b);
-                    }
-                    match code.as_slice() {
-                        b"1" | b"7" => Key::Home,
-                        b"4" | b"8" => Key::End,
-                        b"3" => Key::Delete,
-                        b"5" => Key::PageUp,
-                        b"6" => Key::PageDown,
-                        _ => Key::Other,
-                    }
-                }
-                _ => Key::Other,
-            },
-            _ => Key::Esc,
-        },
+        27 => return escape(read),
         b @ 1..=26 => Key::Ctrl((b'a' + b - 1) as char),
         b if b.is_ascii_graphic() => Key::Char(b as char),
         b if b >= 0xC0 => {
@@ -269,7 +258,103 @@ fn read_key(read: &mut dyn FnMut() -> io::Result<Option<u8>>) -> io::Result<Key>
                 .map_or(Key::Other, Key::Char)
         }
         _ => Key::Other,
-    })
+    };
+    Ok(Typed::Key(key))
+}
+
+/// What follows an Esc: nothing (Esc itself), a sequence the terminal sends for a key or a
+/// paste, or a key pressed with Alt (Option on a Mac), which terminals send as Esc then the key.
+fn escape(read: &mut dyn FnMut() -> io::Result<Option<u8>>) -> io::Result<Typed> {
+    let key = match read()? {
+        None | Some(27) => Key::Esc,
+        Some(b'[') => return csi(read),
+        Some(b'O') => match read()? {
+            Some(b'A') => Key::Up,
+            Some(b'B') => Key::Down,
+            Some(b'C') => Key::Right,
+            Some(b'D') => Key::Left,
+            Some(b'H') => Key::Home,
+            Some(b'F') => Key::End,
+            _ => Key::Other,
+        },
+        // Alt-← and Alt-→ in most Mac terminals, and readline's word keys everywhere
+        Some(b'b') => Key::WordLeft,
+        Some(b'f') => Key::WordRight,
+        Some(127 | 8) => Key::Ctrl('w'),
+        // any other Alt key: not typing, and not a reason to give up on the question
+        Some(_) => Key::Other,
+    };
+    Ok(Typed::Key(key))
+}
+
+/// `ESC [`, then parameters, then one final byte: arrows and the keys around them, with or
+/// without modifiers (`ESC [ 1 ; 5 C` is Ctrl-→), and the start of a paste.
+fn csi(read: &mut dyn FnMut() -> io::Result<Option<u8>>) -> io::Result<Typed> {
+    let mut params = String::new();
+    let last = loop {
+        match read()? {
+            Some(b @ 0x40..=0x7E) => break b,
+            Some(b @ 0x20..=0x3F) if params.len() < LONGEST_SEQUENCE => params.push(b as char),
+            // cut short, or not a sequence after all: nothing anyone meant to type
+            _ => return Ok(Typed::Key(Key::Other)),
+        }
+    };
+    let mut parts = params.split(';');
+    let code = parts.next().unwrap_or("");
+    // 3 is Alt, 5 Ctrl, and so on: either moves a word at a time
+    let modified = parts.next().is_some_and(|m| m != "1");
+    let key = match (last, code) {
+        (b'C', _) if modified => Key::WordRight,
+        (b'D', _) if modified => Key::WordLeft,
+        (b'A', _) => Key::Up,
+        (b'B', _) => Key::Down,
+        (b'C', _) => Key::Right,
+        (b'D', _) => Key::Left,
+        (b'H', _) => Key::Home,
+        (b'F', _) => Key::End,
+        (b'~', "1" | "7") => Key::Home,
+        (b'~', "4" | "8") => Key::End,
+        (b'~', "3") => Key::Delete,
+        (b'~', "5") => Key::PageUp,
+        (b'~', "6") => Key::PageDown,
+        (b'~', "200") => return paste(read),
+        _ => Key::Other,
+    };
+    Ok(Typed::Key(key))
+}
+
+/// What comes after `ESC [ 200 ~`, up to `ESC [ 201 ~`: pasted text, all of it. It's waited
+/// for through a pause or two, since a big paste can arrive in pieces.
+fn paste(read: &mut dyn FnMut() -> io::Result<Option<u8>>) -> io::Result<Typed> {
+    const END: &[u8] = b"\x1b[201~";
+    let mut bytes = Vec::new();
+    let mut pauses = 0;
+    while !bytes.ends_with(END) {
+        match read()? {
+            Some(b) => bytes.push(b),
+            None if pauses < PASTE_PATIENCE => pauses += 1,
+            None => break,
+        }
+    }
+    if bytes.ends_with(END) {
+        bytes.truncate(bytes.len() - END.len());
+    }
+    Ok(Typed::Paste(String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+/// Pasted text as keys typed into a one-line answer: each line break or tab becomes a space,
+/// so a paste never answers the question by itself, and a line break at the end is left off.
+/// Spaces come as characters rather than [`Key::Space`], so pasting into a filter types
+/// them rather than ticking an option.
+fn pasted_keys(text: &str) -> Vec<Key> {
+    let text = text.trim_end_matches(['\r', '\n']).replace("\r\n", "\n");
+    text.chars()
+        .filter_map(|c| match c {
+            '\n' | '\r' | '\t' => Some(Key::Char(' ')),
+            c if c.is_control() => None,
+            c => Some(Key::Char(c)),
+        })
+        .collect()
 }
 
 /// Redraws a block of lines on stderr in place.
@@ -345,8 +430,20 @@ impl Ui {
 
     fn terminal() -> io::Result<Ui> {
         let raw = Raw::enter()?;
+        // a paste, handed out a key at a time
+        let mut pasted = std::collections::VecDeque::new();
         Ok(Ui {
-            keys: Box::new(|| read_key(&mut read_byte)),
+            keys: Box::new(move || {
+                loop {
+                    if let Some(key) = pasted.pop_front() {
+                        return Ok(key);
+                    }
+                    match read_key(&mut read_byte)? {
+                        Typed::Key(key) => return Ok(key),
+                        Typed::Paste(text) => pasted.extend(pasted_keys(&text)),
+                    }
+                }
+            }),
             frame: Frame::default(),
             _raw: Some(raw),
             record: false,
@@ -1012,6 +1109,18 @@ impl LineEdit {
             }
             Key::End | Key::Ctrl('e') => {
                 self.at = self.text.len();
+                return false;
+            }
+            Key::WordLeft => {
+                let before = self.text[..self.at].trim_end();
+                self.at = before.rfind(' ').map_or(0, |i| i + 1);
+                return false;
+            }
+            Key::WordRight => {
+                let after = &self.text[self.at..];
+                let skipped = after.len() - after.trim_start().len();
+                let word = after[skipped..].find(' ').unwrap_or(after.len() - skipped);
+                self.at += skipped + word;
                 return false;
             }
             _ => return false,
@@ -2550,9 +2659,49 @@ mod tests {
         };
         let mut keys = Vec::new();
         while at.get() < bytes.len() {
-            keys.push(read_key(&mut read).unwrap());
+            match read_key(&mut read).unwrap() {
+                Typed::Key(key) => keys.push(key),
+                Typed::Paste(text) => keys.extend(pasted_keys(&text)),
+            }
         }
         keys
+    }
+
+    #[test]
+    fn alt_keys_move_by_words_rather_than_giving_up() {
+        assert_eq!(keys_of(b"\x1bbx"), [Key::WordLeft, Key::Char('x')]);
+        assert_eq!(keys_of(b"\x1bf\x1b\x7f"), [Key::WordRight, Key::Ctrl('w')]);
+        assert_eq!(keys_of(b"\x1bzq"), [Key::Other, Key::Char('q')]);
+        // with modifiers, read to the end of the sequence and no further
+        assert_eq!(keys_of(b"\x1b[1;5Ca"), [Key::WordRight, Key::Char('a')]);
+        assert_eq!(keys_of(b"\x1b[1;3D\x1b[1;2A"), [Key::WordLeft, Key::Up]);
+        assert_eq!(keys_of(b"\x1b[3;5~b"), [Key::Delete, Key::Char('b')]);
+        let mut e = LineEdit::default();
+        e.set("deploy my app");
+        e.key(Key::WordLeft);
+        assert_eq!(e.split().1, "app");
+        e.key(Key::WordLeft);
+        e.key(Key::WordLeft);
+        assert_eq!(e.at, 0);
+        e.key(Key::WordRight);
+        assert_eq!(e.split().1, " my app");
+        e.key(Key::WordRight);
+        assert_eq!(e.split().1, " app");
+    }
+
+    #[test]
+    fn a_paste_is_typed_in_whole_and_never_presses_enter() {
+        let keys = keys_of(b"\x1b[200~one\r\ntwo\tthree\n\x1b[201~!");
+        let typed: String = keys
+            .iter()
+            .map(|k| match k {
+                Key::Char(c) => *c,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(typed, "one two three!");
+        let mut ui = Ui::script(&[keys.as_slice(), &[Key::Enter]].concat());
+        assert_eq!(Input::new("Paste").run(&mut ui).unwrap(), "one two three!");
     }
 
     #[test]
