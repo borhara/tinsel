@@ -245,6 +245,8 @@ fn drive(
     let mut ticked = start;
     let mut size = screen();
     let mut shown: Option<Frame> = None;
+    // the frame before last, whose cells the next frame reuses
+    let mut spare: Option<Frame> = None;
     let mut titled: Option<String> = None;
     let mut cursor: Option<(usize, usize, CursorShape)> = None;
     let mut cursor_color: Option<crate::style::Rgb> = None;
@@ -276,7 +278,11 @@ fn drive(
                 return Ok(());
             }
         }
-        let mut frame = Frame::new(size.0, size.1).at(start.elapsed().as_secs_f32());
+        let blank = match spare.take() {
+            Some(old) => old.renew(size.0, size.1),
+            None => Frame::new(size.0, size.1),
+        };
+        let mut frame = blank.at(start.elapsed().as_secs_f32());
         app.view(&mut frame);
         let diff = frame.diff(shown.as_ref());
         let (hide, place) = frame.cursor_escape(cursor, !diff.is_empty());
@@ -288,7 +294,7 @@ fn drive(
         cursor = frame.cursor();
         cursor_color = frame.cursor_color().or(cursor_color);
         window_color = frame.window_color().or(window_color);
-        shown = Some(frame);
+        spare = shown.replace(frame);
 
         let tick = Duration::from_secs_f64(1.0 / app.fps().clamp(1, 240) as f64);
         let next_tick = ticked + tick;
