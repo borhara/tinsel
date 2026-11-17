@@ -219,12 +219,23 @@ pub trait App {
 ///
 /// The screen is put back as it was afterwards, whether the app quits, returns an error or
 /// panics. If the terminal goes away (its window closed), that's the error. When stdout isn't a terminal, one frame is printed instead, at the terminal's
-/// size (or 80×24), and the app is returned straight away.
+/// size (or 80×24), after the app is told that size with an [`Event::Resize`], and the app is
+/// returned straight away.
+///
+/// One app runs at a time: the screen and keyboard are the whole process's, so `run` called
+/// while another app is running (from its [`App::event`], or another thread) is an error, and
+/// the app already running carries on as it was. To show something else for a while, draw
+/// it in the same app, or hand the terminal over with [`suspend`].
+///
+/// A panic on another thread while the app runs (in a [`Job`]'s work, say) leaves the app
+/// running, and its message is kept until the app has left the screen, rather than written
+/// over what the app shows.
 ///
 /// # Errors
 ///
 /// An I/O error if the terminal can't be set up or drawn on, or once it goes away (its window
-/// closed). The terminal is put back as it was either way.
+/// closed), or if another app is already running. The terminal is put back as it was either
+/// way.
 pub fn run<A: App>(mut app: A) -> io::Result<A> {
     run_app(&mut app)?;
     Ok(app)
@@ -233,9 +244,15 @@ pub fn run<A: App>(mut app: A) -> io::Result<A> {
 /// [`run`], for any app.
 fn run_app(app: &mut dyn App) -> io::Result<()> {
     if !term::interactive() {
-        snapshot(app, term::width(), term::height()).print();
+        let (width, height) = (term::width(), term::height());
+        // told its size first, as it would be on a terminal; one frame is printed whatever
+        // it says, since that's all there is
+        app.event(&Event::Resize { width, height });
+        snapshot(app, width, height).print();
         return Ok(());
     }
+    // before anything is touched, so the app already running keeps the terminal as it is
+    let _only = Only::claim()?;
     // decide these before stdin is in raw mode: finding out may mean asking the terminal
     crate::style::theme();
     crate::style::color_mode();
@@ -291,6 +308,8 @@ fn drive(
 ) -> io::Result<()> {
     let start = Instant::now();
     let _clock = Clock::start(start);
+    // left from an app before that quit straight after it
+    LOST.with(|l| l.borrow_mut().take());
     let now = || start.elapsed().as_secs_f64();
     let mut ambient = schedule::Ambient::default();
     let mut size = screen();
@@ -320,7 +339,7 @@ fn drive(
             settled = true;
             window_color = None;
         }
-        if REDRAW.with(|r| r.replace(false)) {
+        if redraw_asked(true) {
             shown = None;
             titled = None;
             cursor = None;
@@ -351,6 +370,10 @@ fn drive(
                 return Ok(());
             }
         }
+        // the terminal couldn't be taken back after a suspend, so the app can't go on
+        if let Some(lost) = LOST.with(|l| l.borrow_mut().take()) {
+            return Err(lost);
+        }
         let blank = match spare.take() {
             Some(old) => old.renew(size.0, size.1),
             None => Frame::new(size.0, size.1),
@@ -373,7 +396,7 @@ fn drive(
         spare = shown.replace(frame);
 
         // a redraw asked for while drawing comes straight away, but isn't time passing
-        let again = REDRAW.with(std::cell::Cell::get);
+        let again = redraw_asked(false);
         let settling = (!settled && !moving).then_some(SETTLE);
         let wake = [due, settling].into_iter().flatten().reduce(f64::min);
         let received = match (again, wake) {
@@ -561,14 +584,39 @@ impl Drop for Clock {
 }
 
 /// Send the whole screen again with the next frame, colours and cursor included, as after
-/// [`suspend`]: for a terminal that may have lost track of what it shows. Does nothing when no
-/// app is running.
+/// [`suspend`]: for a terminal that may have lost track of what it shows. Works from any
+/// thread: called from another, it wakes the app to draw. Does nothing when no app is running.
 ///
 /// ```
 /// tinsel::app::redraw();
 /// ```
 pub fn redraw() {
-    REDRAW.with(|r| r.set(true));
+    // on the app's own thread, while it runs
+    if STARTED.with(std::cell::Cell::get).is_some() {
+        REDRAW.with(|r| r.set(true));
+        return;
+    }
+    let wake = WAKE.lock().unwrap_or_else(PoisonError::into_inner);
+    // nobody to tell, and nothing for a later app to redraw
+    let Some(tx) = wake.as_ref() else { return };
+    REDRAW_ELSEWHERE.store(true, Ordering::SeqCst);
+    // a resize is only a nudge to the loop, which looks at the size itself, so this wakes
+    // it to draw without telling the app anything
+    let _ = tx.send(Ok(Event::Resize { width: 0, height: 0 }));
+}
+
+/// Whether the screen is to be sent again from scratch, asked on this thread or, if this is
+/// the running app's, on another. `take` lowers it again.
+fn redraw_asked(take: bool) -> bool {
+    let here = REDRAW.with(|r| if take { r.replace(false) } else { r.get() });
+    let ours = RUNNING.with(|r| r.borrow().is_some());
+    let elsewhere = ours
+        && if take {
+            REDRAW_ELSEWHERE.swap(false, Ordering::SeqCst)
+        } else {
+            REDRAW_ELSEWHERE.load(Ordering::SeqCst)
+        };
+    here || elsewhere
 }
 
 /// Seconds since the app started, on the same clock as [`Frame::time`], so something that
@@ -700,6 +748,30 @@ fn step(at: usize, last: usize, page: usize, wheel: usize, event: &Event, keymap
 
 /// Whether an app has the screen, so a panic can give it back before its message is printed.
 static ON_SCREEN: AtomicBool = AtomicBool::new(false);
+/// Whether an app is running, anywhere in the process.
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Set by [`redraw`] on a thread other than the app's.
+static REDRAW_ELSEWHERE: AtomicBool = AtomicBool::new(false);
+/// Panic messages from other threads while an app had the screen, to print once it's left.
+static KEPT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The one app allowed to run at a time, for as long as it lives.
+struct Only;
+
+impl Only {
+    fn claim() -> io::Result<Only> {
+        if ACTIVE.swap(true, Ordering::SeqCst) {
+            return Err(io::Error::other("an app is already running"));
+        }
+        Ok(Only)
+    }
+}
+
+impl Drop for Only {
+    fn drop(&mut self) {
+        ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
 
 // the window title is saved on entering (22t) and put back on leaving (23t)
 // and pastes arrive bracketed (2004), so they can be told apart from typing,
@@ -743,6 +815,8 @@ thread_local! {
     static RUNNING: std::cell::RefCell<Option<Running>> = const { std::cell::RefCell::new(None) };
     /// Set when the screen has to be drawn again from scratch.
     static REDRAW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Why the terminal couldn't be taken back after a suspend, for the loop to end with.
+    static LOST: std::cell::RefCell<Option<io::Error>> = const { std::cell::RefCell::new(None) };
 }
 
 type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
@@ -751,19 +825,10 @@ impl Session {
     fn enter(mouse: bool) -> io::Result<Session> {
         term::enable_escapes();
         term::remember_terminal();
-        let raw = term::RawMode::enter()?;
-        // give the screen back before any panic message, which would otherwise be drawn on
-        // the alternate screen and vanish with it. Only a panic on this thread ends the app: a
-        // worker thread panicking leaves it running, so it has to keep the screen
+        // let go of the saved settings if raw mode can't be had, or the count never gets back to zero
+        let raw = term::RawMode::enter().inspect_err(|_| term::forget_terminal())?;
         let owner = std::thread::current().id();
-        let hook = Hook::install(move || {
-            if std::thread::current().id() == owner {
-                leave_screen();
-                // unwinding drops the session, which puts the terminal back once the reader
-                // has stopped; with panic = "abort" nothing else will
-                cfg!(panic = "abort").then(term::restore_saved_terminal);
-            }
-        });
+        let hook = Hook::install(move |info| on_panic(info, owner));
         ON_SCREEN.store(true, Ordering::SeqCst);
         // made before writing anything, so a failed write still puts everything back
         let session = Session {
@@ -802,13 +867,14 @@ impl Drop for Session {
         leave_screen();
         // out of line mode, unless a suspended closure panicked and it's already there
         RUNNING.with(|r| r.borrow_mut().take());
+        print_kept();
         term::unguard_termination(std::mem::take(&mut self.termination));
         term::forget_terminal();
     }
 }
 
-/// A panic hook that does something first and then hands on to the one it replaced, which is
-/// put back when this is dropped.
+/// A panic hook that does something first and then, if that says to, hands on to the one it
+/// replaced, which is put back when this is dropped.
 struct Hook {
     /// Lowered once dropped, for when the hook can't be taken out again.
     active: Arc<AtomicBool>,
@@ -818,15 +884,14 @@ struct Hook {
 }
 
 impl Hook {
-    fn install(first: impl Fn() + Sync + Send + 'static) -> Hook {
+    fn install(first: impl Fn(&std::panic::PanicHookInfo<'_>) -> bool + Sync + Send + 'static) -> Hook {
         let previous: Arc<PanicHook> = Arc::new(std::panic::take_hook());
         let active = Arc::new(AtomicBool::new(true));
         let (on, next) = (active.clone(), previous.clone());
         let hook: PanicHook = Box::new(move |info| {
-            if on.load(Ordering::SeqCst) {
-                first();
+            if !on.load(Ordering::SeqCst) || first(info) {
+                next(info);
             }
-            next(info);
         });
         let ours = hook_address(&hook);
         std::panic::set_hook(hook);
@@ -864,6 +929,63 @@ impl Drop for Hook {
             Err(previous) => std::panic::set_hook(Box::new(move |info| previous(info))),
         }
     }
+}
+
+/// What the app's panic hook does first, on the app's thread `owner` or any other. Gives
+/// whether to hand on to the hook before, which prints the message.
+fn on_panic(info: &std::panic::PanicHookInfo<'_>, owner: std::thread::ThreadId) -> bool {
+    // give the screen back before the message, which would otherwise be drawn on the
+    // alternate screen and vanish with it. Only a panic on the app's thread ends the app (or
+    // any panic, with panic = "abort")
+    if std::thread::current().id() == owner || cfg!(panic = "abort") {
+        leave_screen();
+        // unwinding drops the session, which puts the terminal back once the reader has
+        // stopped; with panic = "abort" nothing else will
+        if cfg!(panic = "abort") {
+            term::restore_saved_terminal();
+            print_kept();
+        }
+        return true;
+    }
+    // a worker thread panicking leaves the app running, so its message would be written
+    // over the app, and stay there: it's kept for later instead
+    !(ON_SCREEN.load(Ordering::SeqCst) && keep(info))
+}
+
+/// Keep a panic's message, as Rust would print it, for [`print_kept`]. Gives whether it was kept.
+fn keep(info: &std::panic::PanicHookInfo<'_>) -> bool {
+    let payload = info.payload();
+    let message = payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "Box<dyn Any>".into());
+    let thread = std::thread::current();
+    let at = info.location().map(|at| format!(" at {at}")).unwrap_or_default();
+    let mut text = format!(
+        "thread '{}' panicked{at}:\n{message}\n",
+        thread.name().unwrap_or("<unnamed>")
+    );
+    let backtrace = std::backtrace::Backtrace::capture();
+    if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
+        text += &format!("stack backtrace:\n{backtrace}\n");
+    }
+    // nothing panics while this is held, so it's never held by the thread panicking now
+    KEPT.lock().unwrap_or_else(PoisonError::into_inner).push(text);
+    true
+}
+
+/// Print the panic messages kept while an app had the screen, once it's left it.
+fn print_kept() {
+    let kept = std::mem::take(&mut *KEPT.lock().unwrap_or_else(PoisonError::into_inner));
+    if kept.is_empty() {
+        return;
+    }
+    let mut err = io::stderr();
+    for text in kept {
+        let _ = err.write_all(text.as_bytes());
+    }
+    let _ = err.flush();
 }
 
 fn leave_screen() {
@@ -937,19 +1059,32 @@ fn suspended(f: &mut dyn FnMut()) -> io::Result<()> {
     }
     leave_screen();
     RUNNING.with(|r| r.borrow_mut().as_mut().map(|r| r.raw.take()));
+    print_kept();
 
     {
         let _ctrl_c = interrupt::Pass::new();
         f();
     }
 
-    let raw = term::RawMode::enter()?;
-    RUNNING.with(|r| r.borrow_mut().as_mut().map(|r| r.raw = Some(raw)));
-    ON_SCREEN.store(true, Ordering::SeqCst);
-    enter_screen(mouse)?;
+    let back = term::RawMode::enter().and_then(|raw| {
+        RUNNING.with(|r| r.borrow_mut().as_mut().map(|r| r.raw = Some(raw)));
+        ON_SCREEN.store(true, Ordering::SeqCst);
+        enter_screen(mouse)
+    });
+    if let Err(e) = back {
+        // the reader stays paused, and the loop ends with this before drawing again, so the
+        // app doesn't run on half put back whatever it does with the error
+        lose(io::Error::new(e.kind(), e.to_string()));
+        return Err(e);
+    }
     REDRAW.with(|r| r.set(true));
     control.pause.store(false, Ordering::SeqCst);
     Ok(())
+}
+
+/// End the running app's loop with `error`, before its next frame.
+fn lose(error: io::Error) {
+    LOST.with(|l| *l.borrow_mut() = Some(error));
 }
 
 /// Ctrl-C while suspended: the app survives it, and whatever it's running gets it.
@@ -1426,19 +1561,23 @@ pub(crate) mod tests {
         WOKEN.store(false, Ordering::SeqCst);
     }
 
+    /// Held by tests that set the panic hook, which is the whole process's.
+    static HOOKS: Mutex<()> = Mutex::new(());
+
     #[test]
     fn the_panic_hook_is_put_back_unless_another_was_set_since() {
+        let _hooks = HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
         let theirs: PanicHook = Box::new(|_| {});
         let theirs_at = hook_address(&theirs);
         let before = std::panic::take_hook();
         std::panic::set_hook(theirs);
 
-        drop(Hook::install(|| {}));
+        drop(Hook::install(|_| true));
         let now = std::panic::take_hook();
         assert_eq!(hook_address(&now), theirs_at, "theirs again, exactly");
         std::panic::set_hook(now);
 
-        let hook = Hook::install(|| {});
+        let hook = Hook::install(|_| true);
         let later: PanicHook = Box::new(|_| {});
         let later_at = hook_address(&later);
         std::panic::set_hook(later);
@@ -1650,9 +1789,144 @@ pub(crate) mod tests {
         crate::set_color_mode(crate::ColorMode::None);
         let out = crate::output::capture(|| {
             let app = crate::output::with_terminal(false, || run(Recorder::default())).unwrap();
-            assert!(app.seen.is_empty());
+            // told its size first, as on a terminal
+            assert_eq!(
+                app.seen,
+                [Event::Resize {
+                    width: term::width(),
+                    height: term::height()
+                }]
+            );
         });
-        assert!(out.starts_with("seen 0"), "{out:?}");
+        assert!(out.starts_with("seen 1"), "{out:?}");
+    }
+
+    #[test]
+    fn only_one_app_runs_at_a_time() {
+        let only = Only::claim().unwrap();
+        // refused before the terminal is touched, so this is safe on a real one
+        let nested = crate::output::with_terminal(true, || run(Recorder::default()));
+        let err = nested.err().expect("a second app shouldn't start");
+        assert_eq!(err.to_string(), "an app is already running");
+        assert!(Only::claim().is_err());
+        drop(only);
+        assert!(Only::claim().is_ok());
+    }
+
+    #[test]
+    fn a_panic_on_another_thread_is_kept_until_the_screen_is_left() {
+        let _hooks = HOOKS.lock().unwrap_or_else(PoisonError::into_inner);
+        static HANDED_ON: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        const MARK: &str = "tinsel test: a worker broke";
+        let before = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|info| {
+            if info.payload().downcast_ref::<&str>().is_some_and(|s| s.contains(MARK)) {
+                HANDED_ON.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        let owner = std::thread::current().id();
+        let hook = Hook::install(move |info| on_panic(info, owner));
+        let worker = || {
+            std::thread::spawn(|| panic!("tinsel test: a worker broke"))
+                .join()
+                .unwrap_err()
+        };
+
+        // while an app has the screen, the message is kept rather than printed over it
+        ON_SCREEN.store(true, Ordering::SeqCst);
+        worker();
+        ON_SCREEN.store(false, Ordering::SeqCst);
+        let on_screen = HANDED_ON.load(Ordering::SeqCst);
+        // and with no app on the screen, printed as usual
+        worker();
+        let off_screen = HANDED_ON.load(Ordering::SeqCst) - on_screen;
+        drop(hook);
+        std::panic::set_hook(before);
+
+        assert_eq!((on_screen, off_screen), (0, 1));
+        let mut kept = KEPT.lock().unwrap();
+        let ours: Vec<String> = kept.iter().filter(|t| t.contains(MARK)).cloned().collect();
+        kept.retain(|t| !t.contains(MARK));
+        assert_eq!(ours.len(), 1, "{ours:?}");
+        assert!(
+            ours[0].starts_with("thread '<unnamed>' panicked at src/app/mod.rs:"),
+            "{ours:?}"
+        );
+        assert!(ours[0].contains(&format!(":\n{MARK}\n")), "{ours:?}");
+    }
+
+    #[test]
+    fn a_redraw_from_another_thread_wakes_the_app_to_send_everything_again() {
+        let _wakes = WAKES.lock().unwrap_or_else(PoisonError::into_inner);
+        WOKEN.store(false, Ordering::SeqCst);
+        /// Says when it's drawn, and quits when woken.
+        struct Shows(mpsc::Sender<()>);
+        impl App for Shows {
+            fn view(&self, frame: &mut Frame) {
+                frame.print(frame.area(), 0, "same");
+                let _ = self.0.send(());
+            }
+            fn event(&mut self, event: &Event) -> Flow {
+                if *event == Event::Wake {
+                    Flow::Quit
+                } else {
+                    Flow::Continue
+                }
+            }
+        }
+        // as the app's own thread is while it runs
+        RUNNING.with(|r| {
+            *r.borrow_mut() = Some(Running {
+                raw: None,
+                control: Arc::default(),
+                mouse: false,
+            })
+        });
+        let (tx, rx) = mpsc::channel();
+        let waking = Waking::listen(tx);
+        let (drawn_tx, drawn) = mpsc::channel();
+        let other = std::thread::spawn(move || {
+            let wait = Duration::from_secs(5);
+            drawn.recv_timeout(wait).unwrap();
+            redraw();
+            let again = drawn.recv_timeout(wait).is_ok();
+            Waker::new().wake();
+            again
+        });
+        let mut out = Vec::new();
+        drive(&mut Shows(drawn_tx), &rx, &mut out, &mut || (4, 1)).unwrap();
+        drop(waking);
+        RUNNING.with(|r| r.borrow_mut().take());
+        WOKEN.store(false, Ordering::SeqCst);
+        assert!(other.join().unwrap(), "drawn again");
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(out.matches("same").count(), 2, "{out:?}");
+    }
+
+    #[test]
+    fn the_loop_ends_if_the_terminal_cant_be_taken_back() {
+        struct Suspends(usize);
+        impl App for Suspends {
+            fn view(&self, frame: &mut Frame) {
+                frame.print(frame.area(), 0, "shown");
+            }
+            fn event(&mut self, event: &Event) -> Flow {
+                // as `suspend` does when it can't
+                if *event == Event::Key(Key::Char('s')) {
+                    lose(io::Error::other("no terminal"));
+                }
+                self.0 += 1;
+                Flow::Continue
+            }
+        }
+        let rx = keys(&[Event::Key(Key::Char('s')), Event::Key(Key::Char('x'))]);
+        let mut out = Vec::new();
+        let mut app = Suspends(0);
+        let err = drive(&mut app, &rx, &mut out, &mut || (10, 1)).unwrap_err();
+        assert_eq!(err.to_string(), "no terminal");
+        // not drawn again after
+        assert_eq!(String::from_utf8(out).unwrap().matches("shown").count(), 1);
+        assert!(LOST.with(|l| l.borrow().is_none()));
     }
 
     #[cfg(unix)]
