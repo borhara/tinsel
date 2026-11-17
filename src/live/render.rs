@@ -62,7 +62,7 @@ pub(super) struct Frame {
     spinner: Spinner,
     bar: BarStyle,
     now: Instant,
-    t: f32,
+    t: f64,
     width: usize,
     settled: bool,
     /// If someone just came back to the window: when they left and when they returned.
@@ -75,7 +75,7 @@ pub(super) fn render(s: &Shared, now: Instant, width: usize, settled: bool) -> V
         spinner: s.spinner,
         bar: s.bar,
         now,
-        t: (now - s.t0).as_secs_f32(),
+        t: (now - s.t0).as_secs_f64(),
         width,
         settled,
         returned: s.focus.as_ref().and_then(|f| f.just_returned(now)),
@@ -197,11 +197,11 @@ pub(super) fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
             }
         }
         State::Done => {
-            let mut age = st.ended.map_or(f32::MAX, |e| (f.now - e).as_secs_f32());
+            let mut age = st.ended.map_or(f64::MAX, |e| (f.now - e).as_secs_f64());
             // finished while you were away? twinkle again now you're back
             if let (Some((left, back)), Some(ended)) = (f.returned, st.ended) {
                 if ended >= left && ended <= back {
-                    age = (f.now - back).as_secs_f32();
+                    age = (f.now - back).as_secs_f64();
                 }
             }
             let mark = widgets::pop(age)
@@ -239,7 +239,7 @@ pub(super) fn step_lines(st: &StepData, f: &Frame, out: &mut Vec<String>) {
             let glow = if f.settled {
                 AMBER
             } else {
-                mix(AMBER, MUTED, 0.5 - 0.5 * (f.t * 2.4).cos())
+                mix(AMBER, MUTED, 0.5 - 0.5 * widgets::turn(f.t, 2.4).cos())
             };
             let (g, l) = plain("◌", glow, TEXT);
             let waited = st

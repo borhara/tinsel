@@ -204,7 +204,7 @@ fn every_piece_together_in_plain_text() {
         .join("\n")
     );
 
-    app.toasts.push(tinsel::Tone::Success, "restarted web");
+    app.toasts.push(0.0, tinsel::Tone::Success, "restarted web");
     app.confirm = true;
     let mut frame = Frame::new(44, 9).at(1.0);
     app.view(&mut frame);

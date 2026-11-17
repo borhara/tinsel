@@ -621,7 +621,7 @@ impl Grid<'_> {
 fn skeleton(frame: &mut Frame, body: Rect, content: Rect, widths: &[usize], skip: usize) {
     let t = frame.time();
     if color_mode() != ColorMode::None {
-        let sweep = (t * 0.8).rem_euclid(1.6) - 0.3;
+        let sweep = (t * 0.8).rem_euclid(1.6) as f32 - 0.3;
         for row in 0..body.height.min(8) {
             let mut line = String::new();
             let mut col: usize = 0;

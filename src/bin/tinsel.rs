@@ -294,7 +294,7 @@ fn main() {
 }
 
 /// Redraw a block of lines in place for `secs`, then leave its final frame behind.
-fn animate(secs: f32, frame: impl Fn(f32) -> String) {
+fn animate(secs: f64, frame: impl Fn(f64) -> String) {
     if !std::io::stdout().is_terminal() {
         println!("{}", frame(secs));
         return;
@@ -314,8 +314,8 @@ fn animate(secs: f32, frame: impl Fn(f32) -> String) {
         let _ = out.flush();
     };
     let _ = write!(out, "\x1b[?25l");
-    while start.elapsed().as_secs_f32() < secs {
-        draw(frame(start.elapsed().as_secs_f32()), &mut out);
+    while start.elapsed().as_secs_f64() < secs {
+        draw(frame(start.elapsed().as_secs_f64()), &mut out);
         sleep(Duration::from_millis(33));
     }
     draw(frame(secs), &mut out);
@@ -442,7 +442,7 @@ fn shimmer_section() {
 
 fn bar_section() {
     animate(2.5, |t| {
-        let p = (t / 2.3).min(1.0);
+        let p = (t / 2.3).min(1.0) as f32;
         let pct = paint(palette::SOFT, &format!("{:>3.0}%", p * 100.0));
         // the waveform plays through like an audio track
         format!(
@@ -847,7 +847,7 @@ fn region_section() {
     let started = Instant::now();
     let region = Region::new(move || {
         let ready = *shown.lock().unwrap_or_else(|e| e.into_inner());
-        let t = started.elapsed().as_secs_f32();
+        let t = started.elapsed().as_secs_f64();
         let mut table = Table::new(["service", "status"]);
         for (i, name) in services.iter().enumerate() {
             let status = match i.cmp(&ready) {

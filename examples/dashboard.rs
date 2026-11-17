@@ -201,7 +201,7 @@ impl Dashboard {
         );
 
         let [gauges, table] = details.columns_gap(1, [Fill(1), Fill(1)]);
-        let wobble = |seed: f64| 50.0 + 30.0 * (frame.time() as f64 / 3.0 + seed).sin();
+        let wobble = |seed: f64| 50.0 + 30.0 * (frame.time() / 3.0 + seed).sin();
         let lines: tinsel::Block = [("cpu   ", wobble(0.0)), ("memory", wobble(2.0)), ("disk  ", 88.0)]
             .iter()
             .map(|(label, v)| meter(label, *v, 100.0, 14))
