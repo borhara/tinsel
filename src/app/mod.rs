@@ -114,7 +114,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
-pub use field::TextInput;
+pub use field::{Edit, History, TextInput};
 pub use frame::{CursorShape, Frame, TerminalCursor};
 pub use grid::{Grid, GridState};
 pub use input::{Key, Mods, Mouse, MouseKind, NamedKey};

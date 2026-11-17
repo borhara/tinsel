@@ -213,7 +213,7 @@ impl TextArea {
             }
             Key::Right if col < self.lines[row].len() => self.col += 1,
             Key::Right if row < last => (self.row, self.col) = (row + 1, 0),
-            key if edit_line(&mut self.lines[row], &mut self.col, key) => {}
+            key if edit_line(&mut self.lines[row], &mut self.col, key, |c| !c.is_whitespace()) => {}
             Key::Backspace | Key::Delete | Key::Left | Key::Right => {}
             _ => return false,
         }
