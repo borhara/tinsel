@@ -244,7 +244,7 @@ impl Help {
             let (mark, name) = match anim {
                 Some((t, since)) if since < 0.0 => (
                     Spinner::Sparkle.frame(t as f64).to_string(),
-                    crate::style::gradient(&self.name, &RAMP, t * 0.9),
+                    crate::style::gradient(&self.name, RAMP, t * 0.9),
                 ),
                 Some((_, since)) => {
                     let m = pop(since as f64).map_or_else(|| paint(ROSE, "✦"), |l| l.to_string());
