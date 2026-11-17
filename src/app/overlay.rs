@@ -90,6 +90,9 @@ impl Widget for Modal<'_> {
         frame.fade(area);
         if let Some(opened) = self.opened {
             let p = ((frame.time() - opened) as f32 / ENTRANCE).clamp(0.0, 1.0);
+            if p < 1.0 {
+                frame.animate();
+            }
             let rise = (1.0 - p).powi(3) * 2.0;
             at.y = (at.y + rise.round() as usize).min((area.y + area.height).saturating_sub(at.height));
         }
@@ -121,6 +124,8 @@ fn shadow(frame: &mut Frame, area: Rect) {
 
 /// How long a toast takes to slide in, and out again.
 const SLIDE: f32 = 0.25;
+/// How often the line along a toast's foot moves on, in frames a second.
+const COUNTDOWN_FPS: u32 = 30;
 
 /// Short messages that slide into a corner, stay a few seconds and go: "saved", "couldn't
 /// connect". Keep one in your app, [`push`](Toasts::push) to it from
@@ -210,8 +215,22 @@ impl Widget for Toasts {
         let mut bottom = area.y + area.height;
         // newest at the bottom, older ones stacked above until there's no more room
         for toast in self.shown.iter().rev() {
-            if !(0.0..self.life).contains(&(now - toast.at)) {
+            if now < toast.at {
+                // pushed for later: it comes in then
+                frame.redraw_at(toast.at);
                 continue;
+            }
+            if now - toast.at >= self.life {
+                continue;
+            }
+            // sliding in or out is motion; in between, only the line along its foot moves,
+            // which can rest while nobody is looking, but it still goes on time
+            let leaving = toast.at + self.life - f64::from(SLIDE);
+            if now - toast.at < f64::from(SLIDE) || now >= leaving {
+                frame.animate();
+            } else {
+                frame.animate_at(COUNTDOWN_FPS);
+                frame.redraw_at(leaving);
             }
             // small once it's known to be within the toast's life
             let (age, life) = ((now - toast.at) as f32, self.life as f32);
@@ -359,6 +378,26 @@ mod tests {
         // the rows below and beside the dialog read just as they did
         assert_eq!(rows[5], "api ok web ok db ok!", "{shown}");
         assert!(rows[3].ends_with("│ ok!"), "{shown}");
+    }
+
+    #[test]
+    fn toasts_and_modals_ask_for_the_frames_they_need() {
+        let mut toasts = Toasts::new().life(2.0);
+        toasts.push(1.0, Tone::Info, "hello");
+        let asks = |t: f64, w: &dyn Widget| {
+            let mut f = Frame::new(40, 6).at(t);
+            w.render(f.area(), &mut f);
+            (f.wants().motion, f.wants().ambient.is_some(), f.wants().at)
+        };
+        assert_eq!(asks(0.5, &toasts), (false, false, Some(1.0)), "comes in when pushed");
+        assert_eq!(asks(1.1, &toasts), (true, false, None), "sliding in");
+        assert_eq!(asks(2.0, &toasts), (false, true, Some(2.75)), "counting down");
+        assert_eq!(asks(2.9, &toasts), (true, false, None), "sliding out");
+        assert_eq!(asks(3.1, &toasts), (false, false, None), "gone");
+
+        let modal = Modal::new("hi").opened(1.0);
+        assert!(asks(1.1, &modal).0);
+        assert_eq!(asks(2.0, &modal), (false, false, None));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 use std::fmt::Write;
 
 use super::Rect;
+use super::schedule::Wants;
 use super::widgets::Widget;
 use crate::block::Block;
 use crate::style::Rgb;
@@ -286,6 +287,8 @@ pub struct Frame {
     height: usize,
     cells: Vec<Cell>,
     time: f64,
+    ambient: f64,
+    wants: Wants,
     cursor: Option<TerminalCursor>,
     cursor_color: Option<Rgb>,
     window_color: Option<Rgb>,
@@ -338,6 +341,8 @@ impl Frame {
             height,
             cells: vec![EMPTY; width * height],
             time: 0.0,
+            ambient: 0.0,
+            wants: Wants::default(),
             cursor: None,
             cursor_color: None,
             window_color: None,
@@ -376,6 +381,13 @@ impl Frame {
     #[must_use]
     pub fn at(mut self, seconds: f64) -> Self {
         self.time = seconds;
+        self.ambient = seconds;
+        self
+    }
+
+    /// The frame with its [ambient clock](Frame::ambient_time) reading `seconds`.
+    pub(super) fn ambient_at(mut self, seconds: f64) -> Self {
+        self.ambient = seconds;
         self
     }
 
@@ -388,6 +400,88 @@ impl Frame {
     /// [`Spinner::frame`](crate::Spinner::frame), [`anim::shimmer`](crate::anim::shimmer) and friends.
     pub fn time(&self) -> f64 {
         self.time
+    }
+
+    /// Seconds on the ambient clock, for animation that only decorates (twinkling stars, a
+    /// light running round a border): the app's clock, standing still while the terminal is
+    /// in the background. Ambient animation pauses then, as [`animate_at`](Frame::animate_at)
+    /// says, and this clock lets it carry on from where it was when focus comes back rather
+    /// than jumping ahead. The same as [`time`](Frame::time) until focus first goes.
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// assert_eq!(Frame::new(4, 1).at(2.5).ambient_time(), 2.5);
+    /// ```
+    pub fn ambient_time(&self) -> f64 {
+        self.ambient
+    }
+
+    /// Ask for the next frame as soon as the app's [`fps`](super::App::fps) allows, because
+    /// something is moving: a glide, a scroll, a dialog rising into place. Ask in every frame
+    /// for as long as it moves; once a frame stops asking, the app waits for the next key.
+    /// Motion carries on while the terminal is in the background, so whatever is moving can
+    /// finish.
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(4, 1);
+    /// assert!(!frame.wants_redraw());
+    /// frame.animate();
+    /// assert!(frame.wants_redraw());
+    /// ```
+    pub fn animate(&mut self) {
+        self.wants.animate();
+    }
+
+    /// Ask for another frame `fps` times a second, for ambient animation: something that
+    /// drifts or twinkles while nothing else happens, which needn't be as smooth as motion.
+    /// It pauses while the terminal reports it's in the background
+    /// ([`Event::Focus`](super::Event::Focus)) and carries on when focus comes back; time it
+    /// with [`ambient_time`](Frame::ambient_time) so it doesn't jump then. The fastest rate
+    /// asked for in a frame wins, and it's never faster than the app's
+    /// [`fps`](super::App::fps).
+    pub fn animate_at(&mut self, fps: u32) {
+        self.wants.animate_at(fps);
+    }
+
+    /// Ask to be drawn again `seconds` from this frame's [`time`](Frame::time), whether
+    /// anything happens or not: for something that changes on its own, like a countdown.
+    /// Unlike [`animate_at`](Frame::animate_at), it comes even while the terminal is in the
+    /// background. The earliest moment asked for in a frame wins.
+    pub fn redraw_in(&mut self, seconds: f64) {
+        self.wants.redraw_at(self.time + seconds.max(0.0));
+    }
+
+    /// Ask to be drawn again at `seconds` on the app's clock (the clock of
+    /// [`time`](Frame::time)), whether anything happens or not: a clock on the screen asks
+    /// for the start of the next minute. Like [`redraw_in`](Frame::redraw_in), it comes even
+    /// while the terminal is in the background.
+    ///
+    /// ```
+    /// use tinsel::app::Frame;
+    ///
+    /// let mut frame = Frame::new(5, 1).at(61.5);
+    /// // the next whole minute
+    /// frame.redraw_at((frame.time() / 60.0).floor() * 60.0 + 60.0);
+    /// assert!(frame.wants_redraw());
+    /// ```
+    pub fn redraw_at(&mut self, seconds: f64) {
+        self.wants.redraw_at(seconds);
+    }
+
+    /// Whether anything drawn in this frame asked for another one, with
+    /// [`animate`](Frame::animate), [`animate_at`](Frame::animate_at),
+    /// [`redraw_in`](Frame::redraw_in) or [`redraw_at`](Frame::redraw_at): for tests that
+    /// check an app rests when nothing changes.
+    pub fn wants_redraw(&self) -> bool {
+        self.wants.any()
+    }
+
+    /// What this frame asked of the frames after it.
+    pub(super) fn wants(&self) -> Wants {
+        self.wants
     }
 
     /// Draw a widget into part of the screen. Anything that doesn't fit is cut off.

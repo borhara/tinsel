@@ -242,7 +242,8 @@ impl Dashboard {
     // MARK: drawing
 
     fn header(&self, frame: &mut Frame, area: app::Rect) {
-        let t = frame.time();
+        let t = frame.ambient_time();
+        frame.animate_at(10);
         let title = Line::new().push(palette::ROSE, "✦ ").append(shimmer("services", t));
         frame.render(area, title);
         let tabs = self.environments();
@@ -393,7 +394,8 @@ impl Dashboard {
 
     fn footer(&self, frame: &mut Frame, area: app::Rect) {
         let status = if self.loading {
-            format!("{} refreshing", Spinner::Sparkle.frame(frame.time()))
+            frame.animate_at(30);
+            format!("{} refreshing", Spinner::Sparkle.frame(frame.ambient_time()))
         } else {
             String::new()
         };
@@ -575,10 +577,6 @@ impl App for Dashboard {
             }
         }
         Flow::Continue
-    }
-
-    fn fps(&self) -> u32 {
-        10
     }
 
     fn title(&self) -> Option<String> {
