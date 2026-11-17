@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, Once, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -160,11 +160,15 @@ impl Shared {
 pub struct Live {
     shared: Arc<Mutex<Shared>>,
     stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    /// Set once the display has started: its header shown, and drawing begun.
+    started: Once,
+    thread: Mutex<Option<JoinHandle<()>>>,
     notify_after: Option<Duration>,
+    /// The name step timings are kept under: the program's own unless chosen, none if off.
+    history: Option<String>,
     mode: Mode,
     closed: bool,
-    prev_interrupt: Option<usize>,
+    prev_interrupt: Mutex<Option<usize>>,
 }
 
 /// A handle to one step of a [`Live`] display. Cheap to clone and safe to move to other threads.
@@ -267,28 +271,34 @@ impl display::Shown for Mutex<Shared> {
 }
 
 impl Live {
-    /// Start a live display headed `title  target`, e.g. `deploy  my-app → production`.
+    /// A live display headed `title  subject`, e.g. `deploy  my-app → production`: what's
+    /// being done, and to what.
     ///
-    /// It starts drawing straight away; add steps with [`Live::step`].
-    pub fn new(title: impl Into<String>, target: impl Into<String>) -> Self {
-        let mode = Mode::now();
-        let mut live = Live::with_mode(title.into(), target.into(), mode);
-        match mode {
+    /// Nothing is drawn until the first [`step`](Live::step) or [`log`](Live::log), so
+    /// everything chosen with the builder methods ([`fps`](Live::fps),
+    /// [`remember_as`](Live::remember_as), [`spinner`](Live::spinner) and the rest) holds from
+    /// the first frame. Its clock starts here.
+    pub fn new(title: impl Into<String>, subject: impl Into<String>) -> Self {
+        Live::with_mode(title.into(), subject.into(), Mode::now())
+    }
+
+    /// Show the header and start drawing, once.
+    fn start(&self) {
+        self.started.call_once(|| match self.mode {
             Mode::Plain => {
-                let s = lock(&live.shared);
+                let s = lock(&self.shared);
                 output::line(&format!("{} {}", s.title, s.target));
             }
             Mode::Json => {
-                let s = lock(&live.shared);
+                let s = lock(&self.shared);
                 output::emit(
                     "live",
                     &[("title", Val::Str(&s.title)), ("target", Val::Str(&s.target))],
                 );
             }
-            Mode::Draw => live.start_drawing(),
+            Mode::Draw => self.start_drawing(),
             Mode::Quiet | Mode::Headless => {}
-        }
-        live
+        });
     }
 
     /// A display that never draws, on a clock that only moves when you call
@@ -309,8 +319,8 @@ impl Live {
     /// assert!(live.snapshot().plain().contains("●   Build"));
     /// assert!(live.snapshot().plain().ends_with("1.2s"));
     /// ```
-    pub fn headless(title: impl Into<String>, target: impl Into<String>) -> Self {
-        let live = Live::with_mode(title.into(), target.into(), Mode::Headless);
+    pub fn headless(title: impl Into<String>, subject: impl Into<String>) -> Self {
+        let live = Live::with_mode(title.into(), subject.into(), Mode::Headless);
         lock(&live.shared).clock = Some(Duration::ZERO);
         live
     }
@@ -337,33 +347,34 @@ impl Live {
                 history: None,
                 focus: None,
                 watch: None,
-                wants_focus: false,
+                wants_focus: mode == Mode::Draw,
                 paused: 0,
                 refocus: false,
             })),
             stop: Arc::new(AtomicBool::new(false)),
-            thread: None,
+            started: Once::new(),
+            thread: Mutex::new(None),
             notify_after: Some(DEFAULT_NOTIFY_AFTER),
+            history: Some(History::default_app()),
             mode,
             closed: false,
-            prev_interrupt: None,
+            prev_interrupt: Mutex::new(None),
         }
     }
 
-    fn start_drawing(&mut self) {
+    fn start_drawing(&self) {
         // the theme has to be settled before the focus watcher starts reading stdin, because
         // finding it out can mean asking the terminal and reading its reply
         crate::style::theme();
-        self.prev_interrupt = term::guard_interrupt();
+        *lock(&self.prev_interrupt) = term::guard_interrupt();
         {
             let mut s = lock(&self.shared);
-            s.history = History::open(&History::default_app());
-            s.wants_focus = true;
+            s.history = self.history.as_deref().and_then(History::open);
         }
         display::add(Arc::downgrade(&self.shared) as Weak<dyn display::Shown>);
         output::write(HIDE_CURSOR);
         let (shared, stop) = (self.shared.clone(), self.stop.clone());
-        self.thread = Some(thread::spawn(move || {
+        *lock(&self.thread) = Some(thread::spawn(move || {
             let mut first = true;
             while !stop.load(Ordering::Relaxed) {
                 // held for a question: look again a frame on, so the answer is followed at once
@@ -409,6 +420,7 @@ impl Live {
             s.focus = None;
             s.watch.take()
         };
+        // stopped here only if the display had started already
         if let Some(mut watch) = watch {
             watch.stop();
         }
@@ -417,7 +429,9 @@ impl Live {
 
     /// Add a pending step. Declaring every step up front shows the whole plan from the start.
     pub fn step(&self, label: impl Into<String>) -> Step {
-        add_step(&self.shared, None, label.into())
+        let step = add_step(&self.shared, None, label.into());
+        self.start();
+        step
     }
 
     /// Print a line above the display, which carries on drawing underneath it: for output
@@ -429,6 +443,7 @@ impl Live {
     /// live.log("using cached dependencies from yesterday");
     /// ```
     pub fn log(&self, text: impl AsRef<str>) {
+        self.start();
         log(&self.shared, None, text.as_ref());
     }
 
@@ -457,17 +472,16 @@ impl Live {
     /// Timings live in `$XDG_CACHE_HOME/tinsel` (or `~/.cache/tinsel`), one small file per
     /// name. Only runs drawn on a terminal are recorded, and only steps that succeed.
     /// [`timings`](crate::timings) shows what's been learned.
-    pub fn remember_as(self, name: &str) -> Self {
-        if self.mode == Mode::Draw {
-            lock(&self.shared).history = History::open(name);
-        }
+    pub fn remember_as(mut self, name: &str) -> Self {
+        self.history = Some(name.to_string());
         self
     }
 
     /// Don't remember step timings, or show estimates from earlier runs.
     /// [`set_history`](crate::set_history) or the `TINSEL_NO_HISTORY` environment variable
     /// does the same for every display.
-    pub fn no_history(self) -> Self {
+    pub fn no_history(mut self) -> Self {
+        self.history = None;
         lock(&self.shared).history = None;
         self
     }
@@ -561,6 +575,8 @@ impl Live {
         if std::mem::replace(&mut self.closed, true) {
             return;
         }
+        // a display finished before anything was added still shows its header and footer
+        self.start();
         match self.mode {
             Mode::Plain => {
                 for line in &lock(&self.shared).footer {
@@ -585,7 +601,7 @@ impl Live {
             Mode::Draw => {}
         }
         self.stop.store(true, Ordering::Relaxed);
-        let _ = self.thread.take().map(JoinHandle::join);
+        let _ = lock(&self.thread).take().map(JoinHandle::join);
         // the last frame is drawn settled, so a step that just finished shows ● rather than mid-twinkle
         draw(&self.shared, true);
         display::remove(Arc::as_ptr(&self.shared));
@@ -595,7 +611,7 @@ impl Live {
             watch.stop();
         }
         output::write(SHOW_CURSOR);
-        term::restore_interrupt(self.prev_interrupt.take());
+        term::restore_interrupt(lock(&self.prev_interrupt).take());
 
         let mut s = lock(&self.shared);
         if away && self.notify_after.is_some_and(|after| s.t0.elapsed() >= after) {

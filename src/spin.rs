@@ -2,7 +2,7 @@
 
 use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, Once, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -246,12 +246,20 @@ pub struct Progress {
     counts: Arc<Mutex<Counts>>,
     label: String,
     start: Instant,
-    ticker: Option<Ticker>,
+    /// Whether it's drawn and redrawn, rather than reported once at the end.
+    drawn: bool,
+    /// Set once drawing has begun, at the first update.
+    shown: Once,
+    ticker: Mutex<Option<Ticker>>,
+    fps: u32,
     finished: bool,
 }
 
 impl Progress {
-    /// Start a progress line for `total` units of work. It starts drawing straight away.
+    /// A progress line for `total` units of work. It's drawn from the first update
+    /// ([`inc`](Progress::inc), [`set`](Progress::set) or a change of total), so everything
+    /// chosen with [`bytes`](Progress::bytes), [`bar`](Progress::bar) and [`fps`](Progress::fps)
+    /// holds from its first frame; `set(0)` shows it before any work is done.
     pub fn new(label: impl Into<String>, total: u64) -> Self {
         Progress::start(label.into(), Some(total))
     }
@@ -269,25 +277,36 @@ impl Progress {
             bytes: false,
             bar: BarStyle::default(),
         }));
-        let start = Instant::now();
-        let drawn = output::output() == output::Output::Pretty && crate::display::animated();
-        let ticker = drawn.then(|| {
-            let (counts, label) = (counts.clone(), label.clone());
-            Ticker::start(move |t| progress_line(&label, &lock(&counts), start.elapsed(), t))
-        });
         Progress {
             counts,
             label,
-            start,
-            ticker,
+            start: Instant::now(),
+            drawn: output::output() == output::Output::Pretty && crate::display::animated(),
+            shown: Once::new(),
+            ticker: Mutex::new(None),
+            fps: 0,
             finished: false,
         }
     }
 
+    /// Start drawing, once, if it's drawn at all.
+    fn show(&self) {
+        if !self.drawn {
+            return;
+        }
+        self.shown.call_once(|| {
+            let (counts, label, start) = (self.counts.clone(), self.label.clone(), self.start);
+            let ticker = Ticker::start(move |t| progress_line(&label, &lock(&counts), start.elapsed(), t));
+            ticker.fps.store(self.fps, Ordering::Relaxed);
+            *lock(&self.ticker) = Some(ticker);
+        });
+    }
+
     /// Draw this many frames a second, rather than [`fps`](crate::fps) for every display.
-    pub fn fps(self, fps: u32) -> Self {
-        if let Some(ticker) = &self.ticker {
-            ticker.fps.store(fps.clamp(1, 240), Ordering::Relaxed);
+    pub fn fps(mut self, fps: u32) -> Self {
+        self.fps = fps.clamp(1, 240);
+        if let Some(ticker) = lock(&self.ticker).as_ref() {
+            ticker.fps.store(self.fps, Ordering::Relaxed);
         }
         self
     }
@@ -312,31 +331,43 @@ impl Progress {
 
     /// Record `n` more units done.
     pub fn inc(&self, n: u64) {
-        let mut c = lock(&self.counts);
-        c.done += n;
-        if let Some(total) = c.total {
-            c.done = c.done.min(total);
+        {
+            let mut c = lock(&self.counts);
+            c.done += n;
+            if let Some(total) = c.total {
+                c.done = c.done.min(total);
+            }
         }
+        self.show();
     }
 
     /// Set how many units are done in total.
     pub fn set(&self, n: u64) {
-        let mut c = lock(&self.counts);
-        c.done = c.total.map_or(n, |total| n.min(total));
+        {
+            let mut c = lock(&self.counts);
+            c.done = c.total.map_or(n, |total| n.min(total));
+        }
+        self.show();
     }
 
     /// Say how much work there is after all, or that there's a different amount than first thought.
     pub fn set_total(&self, total: u64) {
-        let mut c = lock(&self.counts);
-        c.total = Some(total);
-        c.done = c.done.min(total);
+        {
+            let mut c = lock(&self.counts);
+            c.total = Some(total);
+            c.done = c.done.min(total);
+        }
+        self.show();
     }
 
     /// Add to the total, for work that's discovered as it goes (pages of results, nested
     /// folders). On an unknown total, this makes it known.
     pub fn add_total(&self, n: u64) {
-        let mut c = lock(&self.counts);
-        c.total = Some(c.total.unwrap_or(0) + n);
+        {
+            let mut c = lock(&self.counts);
+            c.total = Some(c.total.unwrap_or(0) + n);
+        }
+        self.show();
     }
 
     /// Stop drawing and leave a `●  label` line, with the time it took on the right.
@@ -349,7 +380,9 @@ impl Progress {
             return;
         }
         let took = self.start.elapsed();
-        if let Some(t) = self.ticker.as_mut() {
+        // finished without an update still ends on its line
+        self.show();
+        if let Some(t) = lock(&self.ticker).as_mut() {
             return t.finish(&done_line(&self.label, took));
         }
         if output::json() {
@@ -430,6 +463,10 @@ impl<I: Iterator> Iterator for WithProgress<I> {
     type Item = I::Item;
 
     fn next(&mut self) -> Option<I::Item> {
+        // shown from the first look for an item, at 0, rather than once one has been through
+        if let Some(bar) = &self.bar {
+            bar.show();
+        }
         let item = self.inner.next();
         match &item {
             Some(_) => {
@@ -544,6 +581,26 @@ mod tests {
             })
         });
         assert!(out.contains("p-draw") && out.contains("●   p-draw"), "{out:?}");
+    }
+
+    #[test]
+    fn progress_draws_from_its_first_update_so_its_settings_hold_from_the_start() {
+        plain();
+        let out = capture(|| {
+            with_terminal(true, || {
+                let p = Progress::new("p-lazy", 100).fps(240).bytes();
+                std::thread::sleep(Duration::from_millis(30));
+                assert!(lock(&p.ticker).is_none(), "nothing drawn before an update");
+                p.inc(1_000);
+                assert!(lock(&p.ticker).is_some());
+                std::thread::sleep(Duration::from_millis(30));
+                p.finish();
+            })
+        });
+        // every frame in bytes, the first included
+        let frames = out.split('\r').filter(|f| f.contains("p-lazy") && f.contains('%'));
+        assert!(frames.clone().count() > 0, "{out:?}");
+        assert!(frames.clone().all(|f| f.contains("100 B / 100 B")), "{out:?}");
     }
 
     #[test]
