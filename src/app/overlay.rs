@@ -254,8 +254,8 @@ impl Widget for Toasts {
                     paint(TRACK, &"─".repeat((w - 2).saturating_sub(run + 1))),
                     paint(edge, "╯")
                 )));
-            frame.clear(visible);
-            frame.tint(visible, mix(Rgb(20, 16, 18), color, 0.08));
+            // no fill: the rows overwrite what's behind, and a filled border would show as a square
+            // frame around the round corners, since the line runs through the middle of its cells
             for (row, line) in rows.enumerate() {
                 frame.print(visible, row, &line);
             }
