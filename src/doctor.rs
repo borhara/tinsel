@@ -211,6 +211,9 @@ fn problems(vars: &[(String, String)]) -> Vec<String> {
             {
                 format!("{name}={value} still turns it off: being set is what counts, whatever the value")
             }
+            "TINSEL_NO_FOCUS" | "TINSEL_NO_HISTORY" if value.is_empty() => {
+                format!("{name} is set but empty, which leaves it on, as an empty NO_COLOR does")
+            }
             "NO_COLOR" if value.is_empty() => "NO_COLOR is set but empty, which leaves colour on".into(),
             n if n.starts_with("TINSEL_") && !SETTINGS.contains(&n) => match closest(n) {
                 Some(near) => format!("{n} isn't a setting tinsel knows: did you mean {near}?"),
@@ -283,6 +286,7 @@ mod tests {
             ("TINSEL_TARGET", "stdrr"),
             ("TINSEL_FPS", "fast"),
             ("TINSEL_NO_FOCUS", "0"),
+            ("TINSEL_NO_HISTORY", ""),
             ("NO_COLOR", ""),
             ("TINSEL_THEMES", "dark"),
             ("TINSEL_SOMETHING_ELSE", "x"),
@@ -293,6 +297,7 @@ mod tests {
             "TINSEL_ACCENT=pinkish is ignored: it can be pink, violet, blue, teal, orange or a hue in degrees",
             "TINSEL_FPS=fast is ignored: it's a number of frames a second",
             "TINSEL_NO_FOCUS=0 still turns it off: being set is what counts, whatever the value",
+            "TINSEL_NO_HISTORY is set but empty, which leaves it on, as an empty NO_COLOR does",
             "TINSEL_OUTPUT=jsn is ignored: it can be json, quiet or pretty",
             "TINSEL_SOMETHING_ELSE isn't a setting tinsel knows",
             "TINSEL_TARGET=stdrr is ignored: it can be stdout or stderr",

@@ -400,7 +400,7 @@ fn deploy_shows_the_build_time() {
 `$XDG_CACHE_HOME/tinsel`), one small file per program. A step with no progress of its own
 gets an estimate bar from its recent median, and says `slower than usual` when it is. Only
 successful steps on a terminal are recorded. `Live::remember_as("name")` picks the file,
-`.no_history()`, `tinsel::set_history(false)` or `TINSEL_NO_HISTORY=1` turns it off. `tinsel::timings(Some("my-app"))`
+`.no_history()`, `tinsel::set_history(false)` or `TINSEL_NO_HISTORY=1` (any value but an empty one) turns it off. `tinsel::timings(Some("my-app"))`
 shows what's been learned, and flags a step whose last run was unusually slow.
 
 **Focus.** In terminals that report window focus (iTerm2, kitty, WezTerm, Ghostty,

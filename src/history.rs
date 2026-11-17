@@ -25,7 +25,7 @@ static ENABLED: AtomicU8 = AtomicU8::new(0);
 
 /// Turn remembered step timings on or off for every [`Live`](crate::Live) display: with it
 /// off, nothing is read from or written to the cache, and steps show no estimates. Without
-/// this, setting `TINSEL_NO_HISTORY` turns it off. [`Live::no_history`](crate::Live::no_history)
+/// this, setting `TINSEL_NO_HISTORY` to anything but an empty value turns it off. [`Live::no_history`](crate::Live::no_history)
 /// turns it off for one display.
 ///
 /// ```
@@ -216,7 +216,7 @@ pub(crate) fn key(parent: &str, label: &str) -> String {
 pub(crate) fn why() -> (bool, String) {
     match (ENABLED.load(Ordering::Relaxed), cache_dir()) {
         (2, _) => (false, "set in code".into()),
-        (0, None) if std::env::var_os("TINSEL_NO_HISTORY").is_some() => (false, "TINSEL_NO_HISTORY is set".into()),
+        (0, None) if crate::term::env_flag("TINSEL_NO_HISTORY") => (false, "TINSEL_NO_HISTORY is set".into()),
         (_, None) if cfg!(windows) => (false, "there's no HOME or LOCALAPPDATA to keep it in".into()),
         (_, None) => (false, "there's no HOME or XDG_CACHE_HOME to keep it in".into()),
         (_, Some(dir)) => (true, format!("in {}", dir.display())),
@@ -227,7 +227,7 @@ fn cache_dir() -> Option<PathBuf> {
     let on = match ENABLED.load(Ordering::Relaxed) {
         1 => true,
         2 => false,
-        _ => std::env::var_os("TINSEL_NO_HISTORY").is_none(),
+        _ => !crate::term::env_flag("TINSEL_NO_HISTORY"),
     };
     let local = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA")
