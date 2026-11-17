@@ -62,7 +62,7 @@ pub enum Key {
     PageUp,
     /// Page Down.
     PageDown,
-    /// A function key, F1 to F12.
+    /// A function key, F1 to F24.
     F(u8),
     /// A key that isn't a character, held with modifiers (never [`Mods::NONE`]).
     Mod(Mods, NamedKey),
@@ -134,7 +134,7 @@ pub enum NamedKey {
     PageUp,
     /// Page Down.
     PageDown,
-    /// A function key, F1 to F12.
+    /// A function key, F1 to F24.
     F(u8),
 }
 
