@@ -236,7 +236,7 @@ mod tests {
         let mut s = Scroll::new();
         assert!(!s.event(&key(Key::Down)), "nothing drawn yet, so nowhere to go");
         drawn(ScrollView::new(&lines).scroll(&s), 6, 5);
-        let wheel = |kind| Event::Mouse(super::super::Mouse { kind, x: 0, y: 0 });
+        let wheel = |kind| Event::Mouse(super::super::Mouse::new(kind, 0, 0));
         let steps = [
             (key(Key::Down), 1),
             (key(Key::Char('j')), 2),
@@ -281,11 +281,7 @@ mod tests {
         assert!(s.event(&key(Key::Char('k'))) && !s.is_following());
         s.scroll_to_end();
         assert!(s.is_following());
-        let wheel = Event::Mouse(super::super::Mouse {
-            kind: MouseKind::ScrollUp,
-            x: 0,
-            y: 0,
-        });
+        let wheel = Event::Mouse(super::super::Mouse::new(MouseKind::ScrollUp, 0, 0));
         drawn(ScrollView::new(&lines).scroll(&s), 6, 3);
         assert!(s.event(&wheel) && !s.is_following());
         lines.push("newer".into());

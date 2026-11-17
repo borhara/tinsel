@@ -136,7 +136,8 @@ impl TextArea {
     /// characters and pastes, Enter for a new line, Backspace and Delete (joining lines at
     /// their ends), ←→↑↓, Page Up/Down ten lines, Home and End (or Ctrl-A and Ctrl-E) for
     /// the line's ends, Ctrl-U and Ctrl-K to clear the line before or after the cursor, and
-    /// Ctrl-W to delete a word. Returns whether it used the event, so Esc and Tab are left
+    /// Ctrl-W or Alt-Backspace to delete a word, and Alt or Ctrl with ←→ to move by words.
+    /// Returns whether it used the event, so Esc and Tab are left
     /// for the app, to leave the box with.
     ///
     /// ```
