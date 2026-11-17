@@ -2,6 +2,7 @@
 
 use std::io::Write;
 use std::panic::PanicHookInfo;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::message::Report;
 use crate::style::paint;
@@ -11,8 +12,9 @@ use crate::style::palette::MUTED;
 /// back first if a [`Live`](crate::Live) display or a [`Region`](crate::Region) was mid-draw: running steps are marked as
 /// interrupted, the last frame is left on screen, and the cursor comes back.
 ///
-/// Call it once, early in `main`. With `RUST_BACKTRACE` set the backtrace is printed under
-/// the report, dimmed.
+/// Call it once, early in `main`; calling it again does nothing. A hook set before it still
+/// runs, after the report. With `RUST_BACKTRACE` set the backtrace is printed under the
+/// report, dimmed.
 ///
 /// ```
 /// tinsel::install_panic_hook();
@@ -25,7 +27,22 @@ use crate::style::palette::MUTED;
 ///   →  run with RUST_BACKTRACE=1 to see where it came from
 /// ```
 pub fn install_panic_hook() {
-    std::panic::set_hook(Box::new(hook));
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    if INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let previous = std::panic::take_hook();
+    // taking the hook puts Rust's own back, so taking it again shows what that looks like
+    let default = std::panic::take_hook();
+    let previous = (!std::ptr::eq(&*previous, &*default)).then_some(previous);
+    std::panic::set_hook(Box::new(move |info| {
+        hook(info);
+        // a hook the program set before (crash reporting, say) still hears about it; Rust's
+        // own would only say it all again
+        if let Some(previous) = &previous {
+            previous(info);
+        }
+    }));
 }
 
 fn hook(info: &PanicHookInfo<'_>) {
