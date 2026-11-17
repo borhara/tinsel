@@ -132,6 +132,12 @@ impl FromStr for Date {
 /// println!("{when}");   // 2026-11-12
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::NotATerminal`] when there's no terminal to ask
+/// on and no line to read, [`Error::Invalid`] when a line read from a pipe isn't an answer it
+/// takes, and [`Error::Io`] when the terminal can't be used.
 pub fn date(question: &str, default: Option<Date>) -> Result<Date> {
     let today = Date::today();
     let start = default.unwrap_or(today);

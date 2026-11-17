@@ -60,6 +60,10 @@ enum Value<'a> {
 /// assert_eq!(pretty.plain().lines().nth(2), Some(r#"    "ports": [80, 443],"#));
 /// # Ok::<(), tinsel::JsonError>(())
 /// ```
+///
+/// # Errors
+///
+/// A [`JsonError`] saying what's wrong and where, if `src` isn't valid JSON.
 pub fn json(src: &str) -> Result<Block, JsonError> {
     let mut p = Parser { src, at: 0, depth: 0 };
     p.space();

@@ -192,6 +192,11 @@ pub trait App {
 /// The screen is put back as it was afterwards, whether the app quits, returns an error or
 /// panics. If the terminal goes away (its window closed), that's the error. When stdout isn't a terminal, one frame is printed instead, at the terminal's
 /// size (or 80×24), and the app is returned straight away.
+///
+/// # Errors
+///
+/// An I/O error if the terminal can't be set up or drawn on, or once it goes away (its window
+/// closed). The terminal is put back as it was either way.
 pub fn run<A: App>(mut app: A) -> io::Result<A> {
     run_app(&mut app)?;
     Ok(app)
@@ -783,6 +788,10 @@ fn leave_screen() {
 ///     }
 /// }
 /// ```
+///
+/// # Errors
+///
+/// An I/O error if the app can't take the terminal back afterwards.
 pub fn suspend<T>(f: impl FnOnce() -> T) -> io::Result<T> {
     let mut f = Some(f);
     let mut out = None;

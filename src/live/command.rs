@@ -98,6 +98,11 @@ impl StepCommand<'_, '_> {
 
     /// Run the command, marking the step done or failed. Returns everything the command
     /// printed, stdout and stderr together.
+    ///
+    /// # Errors
+    ///
+    /// A [`RunError`] if the command can't be started, exits unsuccessfully or runs past its timeout,
+    /// on its last attempt.
     pub fn run(mut self) -> Result<String, RunError> {
         self.step.start_if_pending();
         let stdin = self.stdin.take().unwrap_or_else(Stdio::null);

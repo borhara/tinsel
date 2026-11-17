@@ -91,6 +91,7 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::return_self_not_must_use)]
+#![warn(clippy::missing_errors_doc)]
 
 pub mod anim;
 pub mod app;
