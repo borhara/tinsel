@@ -41,6 +41,7 @@ pub fn doctor() -> Block {
     let colour = match crate::style::color_mode() {
         ColorMode::TrueColor => "truecolor",
         ColorMode::Ansi256 => "256 colours",
+        ColorMode::Ansi16 => "16 colours",
         ColorMode::None => "off",
     };
     rows.push(("colour", colour.into(), crate::style::color_why()));

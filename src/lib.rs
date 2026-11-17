@@ -55,8 +55,9 @@
 //!
 //! # Colour, terminals and tests
 //!
-//! tinsel draws in truecolor when `COLORTERM` says the terminal supports it, otherwise in
-//! 256 colours. It respects `NO_COLOR`, and when stdout isn't a terminal (CI, a pipe, a log
+//! tinsel draws in truecolor when `COLORTERM` says the terminal supports it, in the 16
+//! basic colours when `TERM` names one without `256color` (or `FORCE_COLOR=1`), and
+//! otherwise in 256 colours. It respects `NO_COLOR`, and when stdout isn't a terminal (CI, a pipe, a log
 //! file) it drops colour and animation and writes plain lines like `[ok] Build (1.2s)`.
 //!
 //! Everything is drawn on stdout unless [`set_target`] (or `TINSEL_TARGET=stderr`) moves it
