@@ -87,6 +87,7 @@
 pub mod app;
 mod block;
 mod chart;
+mod display;
 mod doctor;
 pub mod format;
 mod fps;

@@ -1,45 +1,21 @@
 //! A live region: any [`Block`], redrawn in place while something runs.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::block::Block;
-use crate::output::{self, Output, Val};
+use crate::display::{Mode, lock, lock_patiently};
+use crate::output::{self, Val};
 use crate::term;
 
 const DEFAULT_FPS: u32 = 10;
 
-/// How a region shows itself, decided once when it starts.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Mode {
-    /// Redrawn in place on a terminal.
-    Draw,
-    /// Logs as they come, then the last frame if it's kept.
-    Plain,
-    /// A `"log"` event per log line, then the last frame as a `"block"` event if it's kept.
-    Json,
-    /// Nothing.
-    Quiet,
-    /// Nothing, but a snapshot whenever asked: for tests.
-    Headless,
-}
-
-impl Mode {
-    fn pick(out: Output, terminal: bool) -> Mode {
-        match out {
-            Output::Json => Mode::Json,
-            Output::Quiet => Mode::Quiet,
-            Output::Pretty if terminal => Mode::Draw,
-            Output::Pretty => Mode::Plain,
-        }
-    }
-
-    /// Whether the last frame is printed when the region finishes, off a terminal.
-    fn prints_last_frame(self, keep: bool) -> bool {
-        keep && matches!(self, Mode::Plain | Mode::Json)
-    }
+/// Whether the last frame is printed when the region finishes, off a terminal: logs come as
+/// they're made, then the last frame (as a `"block"` event in JSON) if it's kept.
+fn prints_last_frame(mode: Mode, keep: bool) -> bool {
+    keep && matches!(mode, Mode::Plain | Mode::Json)
 }
 
 type View = Box<dyn FnMut() -> Block + Send>;
@@ -102,10 +78,6 @@ pub struct Region {
     prev_interrupt: Option<usize>,
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 /// Regions drawing right now, so a panic can stop them.
 static DRAWING: Mutex<Vec<Weak<Mutex<State>>>> = Mutex::new(Vec::new());
 
@@ -116,16 +88,8 @@ pub(crate) fn abandon_all() -> bool {
     let mut any = false;
     for state in drawing.iter().filter_map(Weak::upgrade) {
         // the panicking thread might be the one holding the lock, so never wait forever
-        for _ in 0..50 {
-            match state.try_lock() {
-                Ok(mut s) => s.abandoned = true,
-                Err(TryLockError::Poisoned(e)) => e.into_inner().abandoned = true,
-                Err(TryLockError::WouldBlock) => {
-                    thread::sleep(Duration::from_millis(2));
-                    continue;
-                }
-            }
-            break;
+        if let Some(mut s) = lock_patiently(&state) {
+            s.abandoned = true;
         }
         output::write("\x1b[?7h\x1b[?25h");
         any = true;
@@ -137,7 +101,7 @@ impl Region {
     /// Start a region drawing `view`, ten times a second unless [`fps`](Region::fps) says
     /// otherwise. It starts straight away.
     pub fn new(view: impl FnMut() -> Block + Send + 'static) -> Self {
-        let mode = Mode::pick(output::output(), output::is_terminal());
+        let mode = Mode::now();
         let mut region = Region::with_mode(Box::new(view), mode);
         if mode == Mode::Draw {
             region.start_drawing();
@@ -268,7 +232,7 @@ impl Region {
         if std::mem::replace(&mut self.closed, true) {
             return;
         }
-        if self.mode.prints_last_frame(self.keep) {
+        if prints_last_frame(self.mode, self.keep) {
             return (lock(&self.view))().print();
         }
         if self.mode != Mode::Draw {
@@ -387,19 +351,17 @@ mod tests {
 
     #[test]
     fn the_last_frame_prints_off_a_terminal_only_when_kept() {
-        assert_eq!(Mode::pick(Output::Pretty, true), Mode::Draw);
-        assert_eq!(Mode::pick(Output::Pretty, false), Mode::Plain);
-        assert!(Mode::Plain.prints_last_frame(true));
-        assert!(Mode::Json.prints_last_frame(true));
-        assert!(!Mode::Plain.prints_last_frame(false));
-        assert!(!Mode::Json.prints_last_frame(false));
-        assert!(!Mode::Quiet.prints_last_frame(true));
-        assert!(!Mode::Headless.prints_last_frame(true));
+        assert!(prints_last_frame(Mode::Plain, true));
+        assert!(prints_last_frame(Mode::Json, true));
+        assert!(!prints_last_frame(Mode::Plain, false));
+        assert!(!prints_last_frame(Mode::Json, false));
+        assert!(!prints_last_frame(Mode::Quiet, true));
+        assert!(!prints_last_frame(Mode::Headless, true));
         // a terminal keeps it by drawing it, not by printing it again
-        assert!(!Mode::Draw.prints_last_frame(true));
+        assert!(!prints_last_frame(Mode::Draw, true));
     }
 
-    use crate::output::{capture, with_output, with_terminal};
+    use crate::output::{Output, capture, with_output, with_terminal};
 
     fn view(text: &'static str) -> impl FnMut() -> Block + Send + 'static {
         move || Block::from(vec![text.to_string()])

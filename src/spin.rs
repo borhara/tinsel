@@ -2,10 +2,11 @@
 
 use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::display::lock;
 use crate::output::{self, Val};
 use crate::style::palette::{MUTED, RED, ROSE, SOFT, TEXT};
 use crate::style::{Rgb, mix, paint};
@@ -378,10 +379,6 @@ impl<I: Iterator> Iterator for WithProgress<I> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.inner.size_hint()
     }
-}
-
-fn lock(counts: &Mutex<Counts>) -> std::sync::MutexGuard<'_, Counts> {
-    counts.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn progress_line(label: &str, c: &Counts, elapsed: Duration, t: f32) -> String {
