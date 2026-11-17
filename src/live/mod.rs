@@ -924,6 +924,10 @@ impl Step {
     /// live.step("Load config").try_run(load_config)?;
     /// # Ok::<(), std::io::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Whatever `f` fails with, once the step is marked failed with it.
     pub fn try_run<T, E: std::fmt::Display>(&self, f: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
         self.start_if_pending();
         let result = f();
@@ -943,6 +947,10 @@ impl Step {
     /// waiting a little longer each time (0.5s, 1s, 2s, … up to 8s). The step's detail shows
     /// which attempt it's on. Succeeding after a retry ends on a warning, so flaky steps
     /// get noticed.
+    ///
+    /// # Errors
+    ///
+    /// The last attempt's error, once every retry has failed too.
     pub fn retry<T, E: std::fmt::Display>(&self, retries: u32, mut f: impl FnMut() -> Result<T, E>) -> Result<T, E> {
         self.start_if_pending();
         let mut attempt = 0;
@@ -987,6 +995,10 @@ impl Step {
     /// those settings afterwards.
     ///
     /// For a timeout, retries or input, use [`command`](Step::command).
+    ///
+    /// # Errors
+    ///
+    /// A [`RunError`] if the command can't be started or exits unsuccessfully.
     pub fn run<'c>(&self, command: impl BorrowMut<Command> + 'c) -> Result<String, RunError> {
         self.command(command).run()
     }

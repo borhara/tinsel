@@ -521,6 +521,12 @@ pub(super) fn pointer(here: bool) -> String {
 /// One of a list, moved through with ↑↓ (or j/k). Returns the chosen index. In lists longer
 /// than eight, typing narrows the list to options containing those letters in order, and
 /// Esc clears what's typed before it cancels. [`Select`] has more options.
+///
+/// # Errors
+///
+/// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::NoOptions`] when there's nothing to choose,
+/// [`Error::NotATerminal`] when there's no terminal to ask on, and [`Error::Io`] when the
+/// terminal can't be used.
 pub fn select(question: &str, options: &[&str]) -> Result<usize> {
     Select::new(question).options(options.iter().copied()).ask()
 }
@@ -608,6 +614,13 @@ impl<'a> Select<'a> {
 
     /// Ask the question. The answer is the chosen option's number, counted from 0 in the
     /// order options were added (headings don't count).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::Back`] on ← when asked with `.back()`,
+    /// [`Error::NoOptions`] when there's nothing to choose, [`Error::NotATerminal`] when there's no
+    /// terminal to ask on (unless an option is [`selected`](Select::selected)), and [`Error::Io`] when
+    /// the terminal can't be used.
     pub fn ask(self) -> Result<usize> {
         if !interactive() {
             return self.unasked();
@@ -673,6 +686,12 @@ impl<'a> Select<'a> {
 /// Several of a list: space toggles, `a` toggles all, enter confirms. Returns the chosen
 /// indices in order. In lists longer than eight, typing filters and Ctrl-A toggles all of
 /// what's shown. [`MultiSelect`] has more options.
+///
+/// # Errors
+///
+/// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::NoOptions`] when there's nothing to choose,
+/// [`Error::NotATerminal`] when there's no terminal to ask on, and [`Error::Io`] when the
+/// terminal can't be used.
 pub fn multiselect(question: &str, options: &[&str], selected: &[usize]) -> Result<Vec<usize>> {
     need_terminal()?;
     MultiSelect::new(question)
@@ -759,6 +778,13 @@ impl<'a> MultiSelect<'a> {
 
     /// Ask the question. The answer is the numbers of the ticked options, in order, counted
     /// as [`Select::ask`] counts them.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::Back`] on ← when asked with `.back()`,
+    /// [`Error::NoOptions`] when there's nothing to choose, [`Error::NotATerminal`] when there's no
+    /// terminal to ask on (unless options are [`selected`](MultiSelect::selected)), and [`Error::Io`]
+    /// when the terminal can't be used.
     pub fn ask(self) -> Result<Vec<usize>> {
         if !interactive() {
             return self.unasked();
@@ -957,6 +983,13 @@ impl<'a> Dropdown<'a> {
 
     /// Ask the question. The answer is the chosen option's text rather than its number,
     /// since with [`allow_custom`](Dropdown::allow_custom) it may be typed and have none.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::Back`] on ← when asked with `.back()`,
+    /// [`Error::NoOptions`] when there's nothing to choose, [`Error::NotATerminal`] when there's no
+    /// terminal to ask on (unless an option is [`selected`](Dropdown::selected)), and [`Error::Io`]
+    /// when the terminal can't be used.
     pub fn ask(self) -> Result<String> {
         if !interactive() {
             return self.unasked();

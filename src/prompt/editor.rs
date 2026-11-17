@@ -10,6 +10,11 @@ use super::*;
 /// let notes = tinsel::prompt::editor("Release notes", "## What's new\n\n")?;
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// [`Error::NotATerminal`] without a terminal, [`Error::Cancelled`] if the editor exits with an
+/// error (`:cq` in vim), and [`Error::Io`] if it can't be started or its file read.
 pub fn editor(question: &str, initial: &str) -> Result<String> {
     need_terminal()?;
     let command = editor_command(std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok());
