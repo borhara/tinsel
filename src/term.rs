@@ -29,12 +29,21 @@ fn measured_or(measured: Option<usize>, var: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-/// Whether both ends are a terminal: something to draw on, and someone typing.
+/// Whether both ends are a terminal: stdout to draw a full-screen app on, and someone typing.
 pub(crate) fn interactive() -> bool {
     if let Some(terminal) = crate::output::pretended_terminal() {
         return terminal;
     }
     io::stdin().is_terminal() && io::stdout().is_terminal()
+}
+
+/// Whether the stream tinsel draws on (stdout, or the [`Target`](crate::Target)) and stdin
+/// are both a terminal, so the terminal can be asked something and answer.
+fn can_ask() -> bool {
+    if let Some(terminal) = crate::output::pretended_terminal() {
+        return terminal;
+    }
+    io::stdin().is_terminal() && crate::output::is_terminal()
 }
 
 /// Run `stty` against the terminal on stdin. `stty` is used rather than termios structs
@@ -248,11 +257,12 @@ pub(crate) fn read_byte() -> io::Result<Option<u8>> {
 /// Ask the terminal for its background colour (OSC 11). Most modern terminals answer within
 /// a few milliseconds; ones that don't are given 150ms.
 pub(crate) fn query_background() -> Option<(u8, u8, u8)> {
-    if !interactive() || !answers_queries() {
+    if !can_ask() || !answers_queries() {
         return None;
     }
     let cbreak = Cbreak::enter().ok()?;
-    let mut out = io::stdout();
+    // asked on the stream tinsel draws on: with TINSEL_TARGET=stderr, stdout may be a pipe
+    let mut out = crate::output::writer();
     let _ = out.write_all(b"\x1b]11;?\x1b\\");
     let _ = out.flush();
     let deadline = Instant::now() + Duration::from_millis(150);
@@ -1019,7 +1029,7 @@ mod tests {
 
     #[test]
     fn nothing_is_asked_with_no_one_there() {
-        let _ = interactive();
+        let _ = (interactive(), can_ask());
         assert_eq!(crate::output::with_terminal(false, query_background), None);
     }
 
