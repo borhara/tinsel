@@ -18,6 +18,12 @@ pub fn width() -> usize {
 }
 
 /// Rows in the terminal tinsel draws on, falling back to `$LINES`, then 24.
+/// Whether a switch like `TINSEL_NO_FOCUS` is on: set to anything, as long as it isn't
+/// empty, the way `NO_COLOR` is read.
+pub(crate) fn env_flag(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|v| !v.is_empty())
+}
+
 pub(crate) fn height() -> usize {
     measured_or(ioctl_size().map(|(_, rows)| rows), "LINES", 24)
 }
