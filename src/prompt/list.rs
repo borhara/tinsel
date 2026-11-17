@@ -336,7 +336,8 @@ impl<'a> Picker<'a> {
             Key::PageDown => self.page(true),
             Key::Char('k') if !self.filterable => self.step(false),
             Key::Char('j') if !self.filterable => self.step(true),
-            Key::Char(c) if self.filterable => self.type_char(c),
+            // a paste only ever filters: in a short list its letters aren't keys
+            Key::Char(c) | Key::Pasted(c) if self.filterable => self.type_char(c),
             Key::Backspace if self.filterable => {
                 self.filter.pop();
                 self.refilter();

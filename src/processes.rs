@@ -441,7 +441,6 @@ fn with_answers_piped_in() {
         "",
         "",
         "bad",
-        "pw",
         "nope",
         "12",
         "abc",
@@ -745,7 +744,8 @@ mod child {
         assert_eq!(Input::new("f").initial("init").ask().unwrap(), "init");
         let strict = Input::new("g").validate(|s| if s == "good" { Ok(()) } else { Err("not good".into()) });
         assert!(matches!(strict.ask(), Err(Error::Invalid(why)) if why == "not good"));
-        assert_eq!(prompt::password("h").unwrap(), "pw");
+        // a secret is never read from a pipe
+        assert!(matches!(prompt::password("h"), Err(Error::NotATerminal)));
         assert!(prompt::confirm_typing("i", "yes").is_err());
         assert_eq!(prompt::number::<u32>("j", None).unwrap(), 12);
         assert!(prompt::number::<i8>("k", None).is_err());

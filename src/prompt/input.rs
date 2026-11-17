@@ -180,10 +180,14 @@ pub struct Input<'a> {
 
 impl std::fmt::Debug for Input<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // a password's default or starting text is a secret too
+        fn hide(s: &Option<String>, secret: bool) -> Option<&str> {
+            s.as_deref().map(|s| if secret { "…" } else { s })
+        }
         f.debug_struct("Input")
             .field("question", &self.question)
-            .field("default", &self.default)
-            .field("initial", &self.initial)
+            .field("default", &hide(&self.default, self.secret))
+            .field("initial", &hide(&self.initial, self.secret))
             .field("placeholder", &self.placeholder)
             .field("password", &self.secret)
             .field("back", &self.back)
@@ -269,7 +273,9 @@ impl<'a> Input<'a> {
         self
     }
 
-    /// Show what's typed as dots.
+    /// Show what's typed as dots. A password is never read from a pipe: without a terminal,
+    /// [`ask`](Input::ask) is an [`Error::NotATerminal`]. A [`default`](Input::default) shows
+    /// as dots too, and how long it is stays hidden.
     #[must_use]
     pub fn password(mut self) -> Self {
         self.secret = true;
@@ -323,9 +329,14 @@ impl<'a> Input<'a> {
     /// [`Error::Cancelled`] on Ctrl-C or Esc, [`Error::Back`] on ← when asked with `.back()`,
     /// [`Error::NotATerminal`] when there's no terminal to ask on and no line to read,
     /// [`Error::Invalid`] when a line read from a pipe isn't an answer it takes, and [`Error::Io`] when
-    /// the terminal can't be used.
+    /// the terminal can't be used. A [`password`](Input::password) is never read from a pipe, so
+    /// without a terminal it's an [`Error::NotATerminal`].
     pub fn ask(self) -> Result<String> {
         if !interactive() {
+            // a secret piped in could have come from anywhere, and would sit in shell history
+            if self.secret {
+                return Err(Error::NotATerminal);
+            }
             let line = read_piped_line()?;
             let value = match &self.initial {
                 Some(initial) if line.is_empty() => initial.clone(),
@@ -365,12 +376,13 @@ impl<'a> Input<'a> {
                 .unwrap_or_default();
             let caret = paint(ROSE, "▏");
             let shown = if edit.is_empty() {
-                let hint = self
-                    .default
-                    .as_deref()
-                    .or(self.placeholder.as_deref())
-                    .unwrap_or_default();
-                format!("{caret}{}", paint(MUTED, hint))
+                let hint = match (&self.default, &self.placeholder) {
+                    // a password's default as dots, as many whatever its length
+                    (Some(_), _) if self.secret => dots(6),
+                    (Some(d), _) => d.clone(),
+                    (None, p) => p.clone().unwrap_or_default(),
+                };
+                format!("{caret}{}", paint(MUTED, &hint))
             } else {
                 let (before, after) = edit.split();
                 let color = if self.secret { BLUSH } else { TEXT };
@@ -541,7 +553,7 @@ impl LineEdit {
     /// Apply a key; returns whether the text changed.
     pub(super) fn key(&mut self, key: Key) -> bool {
         match key {
-            Key::Char(c) => {
+            Key::Char(c) | Key::Pasted(c) => {
                 self.text.insert(self.at, c);
                 self.at += c.len_utf8();
             }
