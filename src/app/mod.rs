@@ -202,7 +202,7 @@ fn run_app(app: &mut dyn App) -> io::Result<()> {
     let _waking = Waking::listen(tx.clone());
     let control = session.control.clone();
     session.reader = Some(std::thread::spawn(move || {
-        listen(&mut term::read_byte, &tx, &control);
+        listen(&mut term::read_some, &tx, &control);
         control.idle.store(true, Ordering::SeqCst);
     }));
     drive(app, &rx, &mut io::stdout(), &mut || (term::width(), term::height()))?;
@@ -720,10 +720,11 @@ mod interrupt {
     }
 }
 
-/// Read keys and mouse reports until told to stop, sending each as an event. `read` gives
-/// one byte, or `None` after a short pause with nothing typed.
-fn listen(read: &mut dyn FnMut() -> io::Result<Option<u8>>, tx: &mpsc::Sender<Event>, control: &Control) {
-    let mut pending: Vec<u8> = Vec::new();
+/// Read keys and mouse reports until told to stop, sending each as an event. `read` fills
+/// some of the buffer, or gives 0 after a short pause with nothing typed.
+fn listen(read: &mut dyn FnMut(&mut [u8]) -> io::Result<usize>, tx: &mpsc::Sender<Event>, control: &Control) {
+    let mut decoder = input::Decoder::new();
+    let mut buf = [0u8; 4096];
     while !control.stop.load(Ordering::SeqCst) {
         // busy first, then a look for a pause: a pause asked for before the look is seen,
         // and one asked for after it waits for this read, which `suspend` sees as busy
@@ -734,16 +735,12 @@ fn listen(read: &mut dyn FnMut() -> io::Result<Option<u8>>, tx: &mpsc::Sender<Ev
             continue;
         }
         // reads give up after 0.1s, so `stop` is checked often and a pause can end a sequence
-        let paused = match read() {
-            Ok(Some(b)) => {
-                pending.push(b);
-                false
-            }
-            Ok(None) => true,
+        let n = match read(&mut buf) {
+            Ok(n) => n,
             Err(_) => return,
         };
-        while let Some((event, used)) = input::parse(&pending, paused) {
-            pending.drain(..used);
+        decoder.push(&buf[..n]);
+        while let Some(event) = decoder.next(n == 0) {
             if let Some(event) = event {
                 if tx.send(event).is_err() {
                     return;
@@ -781,6 +778,16 @@ mod tests {
 
         fn fps(&self) -> u32 {
             240
+        }
+    }
+
+    /// A reader that gives these reads in turn, as the terminal would.
+    fn reads(script: Vec<io::Result<&'static [u8]>>) -> impl FnMut(&mut [u8]) -> io::Result<usize> {
+        let mut script = script.into_iter();
+        move |buf| {
+            let bytes = script.next().unwrap_or(Ok(b""))?;
+            buf[..bytes.len()].copy_from_slice(bytes);
+            Ok(bytes.len())
         }
     }
 
@@ -1041,18 +1048,15 @@ mod tests {
 
     #[test]
     fn the_reader_turns_bytes_into_events_and_pauses_into_esc() {
-        let mut script = vec![
-            Ok(Some(b'a')),
-            Ok(Some(0x1b)),
-            Ok(None),
-            Ok(Some(0x1b)),
-            Ok(Some(b'[')),
-            Ok(Some(b'A')),
+        let mut script = reads(vec![
+            Ok(b"a\x1b"),
+            Ok(b""),
+            Ok(b"\x1b["),
+            Ok(b"A"),
             Err(io::Error::other("closed")),
-        ]
-        .into_iter();
+        ]);
         let (tx, rx) = mpsc::channel();
-        listen(&mut move || script.next().unwrap(), &tx, &Control::default());
+        listen(&mut script, &tx, &Control::default());
         let got: Vec<Event> = rx.try_iter().collect();
         assert_eq!(
             got,
@@ -1067,9 +1071,10 @@ mod tests {
         stopped.stop.store(true, Ordering::SeqCst);
         // one reader for both, so it can count its reads
         let mut reads = 0;
-        let mut read = || {
+        let mut read = |buf: &mut [u8]| {
             reads += 1;
-            Ok(Some(b'q'))
+            buf[0] = b'q';
+            Ok(1)
         };
         listen(&mut read, &tx, &stopped);
 
@@ -1086,7 +1091,16 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let reader = {
             let control = control.clone();
-            std::thread::spawn(move || listen(&mut || Ok(Some(b'x')), &tx, &control))
+            std::thread::spawn(move || {
+                listen(
+                    &mut |buf: &mut [u8]| {
+                        buf[0] = b'x';
+                        Ok(1)
+                    },
+                    &tx,
+                    &control,
+                )
+            })
         };
         while !control.idle.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(1));
@@ -1183,15 +1197,16 @@ mod tests {
             unpause.pause.store(false, Ordering::SeqCst);
         });
         // a byte that's no key, a key, then nobody to send the next one to
-        let mut script = vec![Ok(Some(0x1c)), Ok(Some(b'a')), Ok(Some(b'b'))].into_iter();
+        let mut script = vec![&[0x1c][..], b"a", b"b"].into_iter();
         let mut rx = Some(rx);
         listen(
-            &mut || {
-                let next = script.next().unwrap_or(Err(io::Error::other("done")));
-                if matches!(next, Ok(Some(b'b'))) {
+            &mut |buf: &mut [u8]| {
+                let next = script.next().ok_or(io::Error::other("done"))?;
+                if next == b"b" {
                     assert_eq!(rx.take().unwrap().try_recv().unwrap(), Event::Key(Key::Char('a')));
                 }
-                next
+                buf[..next.len()].copy_from_slice(next);
+                Ok(next.len())
             },
             &tx,
             &control,
