@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/borhara/tinsel/compare/v1.0.0...v1.0.1) - 2026-11-18
+
+### Fixed
+
+- a progress bar is one unbroken line, its tip fading in rather than leaving a half-cell gap
+
+### Other
+
+- mention full-screen apps in crate metadata
+
 ## [1.0.0](https://github.com/borhara/tinsel/compare/v0.5.0...v1.0.0) - 2026-11-17
 
 tinsel is stable: from here on, breaking changes wait for 2.0. Enums that may grow are
