@@ -3,13 +3,13 @@ name = "tinsel"
 version = "1.0.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Clean terminal output with a little sparkle: live step lists, spinners, tables, trees, prompts and more."
+description = "Clean terminal output with a little sparkle: live step lists, spinners, tables, trees, prompts and full-screen apps."
 authors = ["borhara"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/borhara/tinsel"
 documentation = "https://docs.rs/tinsel"
-keywords = ["cli", "terminal", "spinner", "progress", "prompt"]
+keywords = ["cli", "terminal", "tui", "spinner", "prompt"]
 categories = ["command-line-interface"]
 exclude = ["/.github", "/docs", "/scripts", "demo.tape", "demo.gif", "release-plz.toml", "rustfmt.toml", "CONTRIBUTING.md"]
 
