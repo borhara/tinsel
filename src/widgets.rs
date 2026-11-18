@@ -199,7 +199,8 @@ pub fn pop(age: f64) -> Option<Line> {
     Some(Line::new().push(color, glyph))
 }
 
-/// A thin line that fills berry → blush, with half-cell precision.
+/// A thin line that fills berry → blush, its leading cell fading in as it fills so the line
+/// grows smoothly and never breaks.
 pub fn bar(fraction: f32, width: usize) -> Line {
     shiny_bar(fraction, width, None)
 }
@@ -217,17 +218,16 @@ pub(crate) fn fraction(f: f32) -> f32 {
 }
 
 fn shiny_bar(fraction: f32, width: usize, t: Option<f64>) -> Line {
-    let halves = (self::fraction(fraction) * width as f32 * 2.0).round() as usize;
-    let filled = halves.div_ceil(2) as f32;
+    let cells = self::fraction(fraction) * width as f32;
+    let filled = cells.ceil();
     let glint = t.map(|t| (t * 16.0).rem_euclid(filled as f64 + 10.0) as f32 - 5.0);
     (0..width).fold(Line::new(), |line, i| {
         let base = sample(RAMP, i as f32 / width.saturating_sub(1).max(1) as f32);
         let c = glint.map_or(base, |g| mix(base, SHINE, (-(i as f32 - g).powi(2) / 3.0).exp() * 0.75));
-        match halves.saturating_sub(i * 2) {
-            0 => line.push(TRACK, "━"),
-            1 => line.push(c, "╸"),
-            _ => line.push(c, "━"),
-        }
+        // a part-filled cell is a whole line part way from the track's colour, as a half
+        // line would leave a gap before the track
+        let full = (cells - i as f32).clamp(0.0, 1.0);
+        line.push(mix(TRACK, c, full), "━")
     })
 }
 
@@ -591,6 +591,17 @@ impl fmt::Display for Card {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bar_is_one_unbroken_line_whatever_its_fill() {
+        crate::set_color_mode(crate::ColorMode::None);
+        for f in [0.0, 0.05, 0.1, 0.33, 0.5, 0.51, 0.99, 1.0] {
+            assert_eq!(bar(f, 10).to_string(), "━".repeat(10), "{f}");
+        }
+        let draw = |f| crate::style::with_color_mode(crate::ColorMode::TrueColor, || bar(f, 10).to_string());
+        assert_ne!(draw(0.52), draw(0.58), "the leading cell fades in between whole cells");
+        assert_eq!(draw(f32::NAN), draw(0.0));
+    }
 
     #[test]
     fn a_waveform_bar_bounces_behind_the_playhead() {
