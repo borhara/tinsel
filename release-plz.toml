@@ -1,3 +1,4 @@
 [workspace]
-# feat commits bump the minor version even before 1.0
 features_always_increment_minor = true
+# only feat, fix, perf and breaking (!) commits open a release; the rest ride along with the next one
+release_commits = "^(feat|fix|perf)(\\(.*\\))?!?:|^[a-z]+(\\(.*\\))?!:"
