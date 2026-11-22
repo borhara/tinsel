@@ -245,6 +245,13 @@ their own colour and a mark:
 
 ![A services dashboard drawn with tinsel: groups on the left, a table of services grouped under core, data and edge with one row chosen, staging and production tabs, and details for the chosen service](https://raw.githubusercontent.com/borhara/tinsel/main/docs/services.png)
 
+Whole programs fit too: [tvim](https://github.com/borhara/tvim) is a vim-like text editor
+built on tinsel's full-screen apps:
+
+![tvim's start screen: the project's files in a sidebar on the left, and the logo and its keys in a sky of twinkling stars](https://raw.githubusercontent.com/borhara/tinsel/main/docs/tvim-home.png)
+
+![tvim editing Rust: the project tree with src open and motion.rs chosen, tabs for the open files, syntax colouring, indent guides, blame on the cursor's line and the function under the cursor named at the bottom](https://raw.githubusercontent.com/borhara/tinsel/main/docs/tvim-code.jpg)
+
 Anything tinsel draws (tables, trees, cards, any `Block`) goes straight into a panel, next to
 `List`, `Tabs`, `Plot`, `Stat`, `big` text, `hints` and twinkling `Sparkles`.
 `app::snapshot(&app, 80, 24)` draws a frame without a terminal, for tests, and
