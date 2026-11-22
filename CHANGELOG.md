@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.0.2](https://github.com/borhara/tinsel/compare/v1.0.1...v1.0.2) - 2026-11-22
+
+### Other
+
+- list every example in the readme, and add contributing and license sections
+- "docs: tidy MSRV wording in readme"
+- tidy MSRV wording in readme
+
 ## [1.0.1](https://github.com/borhara/tinsel/compare/v1.0.0...v1.0.1) - 2026-11-18
 
 ### Fixed
