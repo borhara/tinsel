@@ -248,9 +248,10 @@ their own colour and a mark:
 Whole programs fit too: [tvim](https://github.com/borhara/tvim) is a vim-like text editor
 built on tinsel's full-screen apps:
 
-![tvim's start screen: the project's files in a sidebar on the left, and the logo and its keys in a sky of twinkling stars](https://raw.githubusercontent.com/borhara/tinsel/main/docs/tvim-home.png)
-
-![tvim editing Rust: the project tree with src open and motion.rs chosen, tabs for the open files, syntax colouring, indent guides, blame on the cursor's line and the function under the cursor named at the bottom](https://raw.githubusercontent.com/borhara/tinsel/main/docs/tvim-code.jpg)
+<p>
+  <img src="https://raw.githubusercontent.com/borhara/tinsel/main/docs/tvim-home.png" width="49%" alt="tvim's start screen: the project's files in a sidebar on the left, and the logo and its keys in a sky of twinkling stars">
+  <img src="https://raw.githubusercontent.com/borhara/tinsel/main/docs/tvim-code.jpg" width="49%" alt="tvim editing Rust: the project tree with src open and motion.rs chosen, tabs for the open files, syntax colouring, indent guides, blame on the cursor's line and the function under the cursor named at the bottom">
+</p>
 
 Anything tinsel draws (tables, trees, cards, any `Block`) goes straight into a panel, next to
 `List`, `Tabs`, `Plot`, `Stat`, `big` text, `hints` and twinkling `Sparkles`.
