@@ -454,4 +454,4 @@ likely to grow are `#[non_exhaustive]`, so a new key, colour mode or event can a
 minor release; match them with a `_` arm.
 
 The minimum supported Rust version is 1.85. Raising it is a minor release, not a major
-one, and is said so in the changelog.
+one, and is noted in the changelog.
