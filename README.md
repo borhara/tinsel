@@ -324,10 +324,21 @@ cargo run -- demo --bar waveform     # the deploy with waveform progress bars
 cargo run -- help                  # the CLI's own help, with its entrance
 cargo run -- prompts               # the interactive questions
 cargo run -- timings               # what Live has learned about your step durations
-cargo run --example dashboard      # a live full-screen dashboard
-cargo run --example services       # services by group, with a filter, dialogs and toasts
-cargo run --example deploy         # small, copyable examples: hello, deploy, parallel, status, questions, errors
 ```
+
+The [`examples`](examples) are small and meant to be copied. Run any of them with
+`cargo run --example <name>`:
+
+| example | what it shows |
+|---|---|
+| [`hello`](examples/hello.rs) | the smallest useful program: a spinner around some work, then a message |
+| [`deploy`](examples/deploy.rs) | a live step list that closes with a card; `-- --fail` to see a step fail |
+| [`parallel`](examples/parallel.rs) | steps at the same time, with sub-steps, a log line and a panic hook; `-- --json` for the same run as JSON |
+| [`status`](examples/status.rs) | a read-only status command: a table, details, a chart and a tree; pipe it to `cat` for plain text |
+| [`questions`](examples/questions.rs) | asking questions, and handling Ctrl-C partway through |
+| [`errors`](examples/errors.rs) | a Rust error turned into a report with its whole cause chain |
+| [`dashboard`](examples/dashboard.rs) | a live full-screen dashboard: stats, a service list, a chart that follows the selection, logs |
+| [`services`](examples/services.rs) | services by group with a column per environment, a filter, dialogs and toasts |
 
 ---
 
@@ -400,8 +411,9 @@ fn deploy_shows_the_build_time() {
 `$XDG_CACHE_HOME/tinsel`), one small file per program. A step with no progress of its own
 gets an estimate bar from its recent median, and says `slower than usual` when it is. Only
 successful steps on a terminal are recorded. `Live::remember_as("name")` picks the file,
-`.no_history()`, `tinsel::set_history(false)` or `TINSEL_NO_HISTORY=1` (any value but an empty one) turns it off. `tinsel::timings(Some("my-app"))`
-shows what's been learned, and flags a step whose last run was unusually slow.
+`.no_history()`, `tinsel::set_history(false)` or `TINSEL_NO_HISTORY=1` (any value but an
+empty one) turns it off. `tinsel::timings(Some("my-app"))` shows what's been learned, and
+flags a step whose last run was unusually slow.
 
 **Focus.** In terminals that report window focus (iTerm2, kitty, WezTerm, Ghostty,
 Alacritty, foot, …), animation slows while you're away, a run of 10s or more that finishes
@@ -425,6 +437,8 @@ in the greys; red, amber and sage keep their meaning.
 isn't a terminal`, `theme light: COLORFGBG=0;15`) and warns about any setting it can't use,
 like a misspelt `TINSEL_THEMES` or `TINSEL_OUTPUT=jsn`. `tinsel::doctor()` gives you the same
 report, to print from a `--debug-terminal` flag of your own.
+
+---
 
 ## Platform notes
 
@@ -455,3 +469,16 @@ minor release; match them with a `_` arm.
 
 The minimum supported Rust version is 1.85. Raising it is a minor release, not a major
 one, and is said so in the changelog.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. tinsel is small on purpose: no dependencies, one
+visual language, and every component reads well as plain text too.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the ground rules, the commands CI runs and how
+commits become the changelog.
+
+## License
+
+[MIT](LICENSE)
