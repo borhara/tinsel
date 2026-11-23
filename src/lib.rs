@@ -99,6 +99,7 @@ pub mod anim;
 pub mod app;
 mod block;
 mod chart;
+mod cli;
 pub mod clipboard;
 mod display;
 mod doctor;
@@ -130,6 +131,7 @@ mod widgets;
 
 pub use block::Block;
 pub use chart::{bars, heatmap, histogram, meter, sparkline};
+pub use cli::{Args, Cli, CliError, CliErrorKind};
 pub use doctor::doctor;
 pub use fps::{fps, set_fps};
 pub use help::Help;
