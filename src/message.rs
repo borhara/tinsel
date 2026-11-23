@@ -290,6 +290,11 @@ impl Report {
         self
     }
 
+    /// What went wrong, as the report is headed.
+    pub(crate) fn title(&self) -> &str {
+        &self.title
+    }
+
     /// The report as lines.
     pub fn lines(&self) -> Block {
         let mut out = Block::new();
