@@ -66,6 +66,9 @@
 //!
 //! # Going back
 //!
+//! A [`Form`] asks several questions as one, going back and forth between them, and shows
+//! all the answers at the end to change any of them.
+//!
 //! For questions asked one after another, `.back()` lets ← go back: the question returns
 //! [`Error::Back`] and you ask the one before it again. → always answers, as Enter does (in
 //! typed answers, from the end of the line), so a flow can be stepped through with the arrows.
@@ -157,6 +160,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 mod date;
 mod editor;
+mod form;
 mod input;
 mod list;
 mod script;
@@ -165,4 +169,4 @@ mod tests;
 mod ui;
 
 use self::ui::*;
-pub use self::{date::*, editor::*, input::*, list::*, script::*};
+pub use self::{date::*, editor::*, form::*, input::*, list::*, script::*};
