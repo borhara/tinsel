@@ -35,9 +35,9 @@ pub fn confirm(question: &str, default: bool) -> Result<bool> {
 /// ```
 #[derive(Clone, Debug)]
 pub struct Confirm {
-    question: String,
-    default: bool,
-    back: bool,
+    pub(super) question: String,
+    pub(super) default: bool,
+    pub(super) back: bool,
     at_end: Option<bool>,
     lenient: bool,
 }
@@ -104,12 +104,17 @@ impl Confirm {
     /// the terminal can't be used.
     pub fn ask(self) -> Result<bool> {
         if !interactive() {
-            return match read_piped()? {
-                Some(line) => yes_or_no(&line, self.default, self.lenient),
-                None => Ok(self.at_end.unwrap_or(self.default)),
-            };
+            return self.unasked();
         }
         self.run(&mut Ui::open()?)
+    }
+
+    /// The answer without a terminal: a line read from stdin.
+    pub(super) fn unasked(&self) -> Result<bool> {
+        match read_piped()? {
+            Some(line) => yes_or_no(&line, self.default, self.lenient),
+            None => Ok(self.at_end.unwrap_or(self.default)),
+        }
     }
 
     pub(super) fn run(&self, ui: &mut Ui) -> Result<bool> {
@@ -168,14 +173,14 @@ pub(super) type Completer<'a> = Box<dyn Fn(&str) -> Vec<String> + 'a>;
 /// [`complete`](Input::complete) or [`paths`](Input::paths), the best match shows dim
 /// after the cursor; Tab takes it, and pressing Tab again moves through the others.
 pub struct Input<'a> {
-    question: String,
+    pub(super) question: String,
     default: Option<String>,
-    initial: Option<String>,
+    pub(super) initial: Option<String>,
     placeholder: Option<String>,
-    secret: bool,
+    pub(super) secret: bool,
     validate: Option<Validator<'a>>,
     complete: Option<Completer<'a>>,
-    back: bool,
+    pub(super) back: bool,
 }
 
 impl std::fmt::Debug for Input<'_> {
@@ -333,19 +338,24 @@ impl<'a> Input<'a> {
     /// without a terminal it's an [`Error::NotATerminal`].
     pub fn ask(self) -> Result<String> {
         if !interactive() {
-            // a secret piped in could have come from anywhere, and would sit in shell history
-            if self.secret {
-                return Err(Error::NotATerminal);
-            }
-            let line = read_piped_line()?;
-            let value = match &self.initial {
-                Some(initial) if line.is_empty() => initial.clone(),
-                _ => self.resolve(line),
-            };
-            self.check(&value).map_err(Error::Invalid)?;
-            return Ok(value);
+            return self.unasked();
         }
         self.run(&mut Ui::open()?)
+    }
+
+    /// The answer without a terminal: a line read from stdin.
+    pub(super) fn unasked(&self) -> Result<String> {
+        // a secret piped in could have come from anywhere, and would sit in shell history
+        if self.secret {
+            return Err(Error::NotATerminal);
+        }
+        let line = read_piped_line()?;
+        let value = match &self.initial {
+            Some(initial) if line.is_empty() => initial.clone(),
+            _ => self.resolve(line),
+        };
+        self.check(&value).map_err(Error::Invalid)?;
+        Ok(value)
     }
 
     pub(super) fn run(&self, ui: &mut Ui) -> Result<String> {

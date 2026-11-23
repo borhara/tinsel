@@ -30,7 +30,7 @@ pub(super) fn fuzzy(option: &str, query: &str) -> Option<Vec<usize>> {
 /// One option in a list question.
 #[derive(Default)]
 pub(super) struct Choice {
-    label: String,
+    pub(super) label: String,
     /// A heading drawn above this option, starting a group.
     heading: Option<String>,
     /// Why it can't be picked.
@@ -42,12 +42,12 @@ pub(super) struct Choice {
 
 /// What every list question has: the question, its options and how they're shown.
 pub(super) struct Choices {
-    question: String,
-    list: Vec<Choice>,
+    pub(super) question: String,
+    pub(super) list: Vec<Choice>,
     /// A heading waiting for the next option.
     heading: Option<String>,
     hint: Option<String>,
-    back: bool,
+    pub(super) back: bool,
     rows: usize,
 }
 
@@ -559,8 +559,8 @@ pub fn select(question: &str, options: &[&str]) -> Result<usize> {
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
 pub struct Select<'a> {
-    choices: Choices,
-    default: Option<usize>,
+    pub(super) choices: Choices,
+    pub(super) default: Option<usize>,
     validate: Option<Box<dyn Fn(usize) -> Checked + 'a>>,
 }
 
@@ -723,8 +723,8 @@ pub fn multiselect(question: &str, options: &[&str], selected: &[usize]) -> Resu
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
 pub struct MultiSelect<'a> {
-    choices: Choices,
-    default: Option<Vec<usize>>,
+    pub(super) choices: Choices,
+    pub(super) default: Option<Vec<usize>>,
     validate: Option<ManyCheck<'a>>,
 }
 
@@ -917,9 +917,9 @@ pub(super) fn summary(names: &[&str]) -> String {
 /// # Ok::<(), tinsel::prompt::Error>(())
 /// ```
 pub struct Dropdown<'a> {
-    choices: Choices,
-    default: Option<usize>,
-    custom: bool,
+    pub(super) choices: Choices,
+    pub(super) default: Option<usize>,
+    pub(super) custom: bool,
     validate: Option<Validator<'a>>,
 }
 

@@ -240,6 +240,8 @@ pub(super) struct Frame {
     pub(super) lines: Vec<String>,
     /// Keep the lines without printing them.
     offscreen: bool,
+    /// Lines kept on screen above whatever's drawn: the answers so far, in a [`Form`].
+    pub(super) above: Vec<String>,
 }
 
 impl Drop for Ui {
@@ -253,7 +255,8 @@ impl Drop for Ui {
 
 impl Frame {
     pub(super) fn draw(&mut self, lines: &[String]) {
-        self.lines = lines.to_vec();
+        self.lines = [&self.above[..], lines].concat();
+        let lines = &self.lines;
         if self.offscreen {
             return;
         }
