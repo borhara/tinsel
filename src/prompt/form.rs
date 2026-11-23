@@ -59,20 +59,138 @@ impl<'a> From<Dropdown<'a>> for Question<'a> {
     }
 }
 
+/// What a question was answered with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Answer {
+    Yes(bool),
+    Text(String),
+    Choice(usize),
+    Choices(Vec<usize>),
+}
+
 impl Question<'_> {
     fn question(&self) -> &str {
-        todo!()
+        match self {
+            Question::Confirm(q) => &q.question,
+            Question::Input(q) => &q.question,
+            Question::Select(q) => &q.choices.question,
+            Question::MultiSelect(q) => &q.choices.question,
+            Question::Dropdown(q) => &q.choices.question,
+        }
     }
 
     /// Whether there's anything to choose, for lists.
     fn answerable(&self) -> bool {
-        todo!()
+        match self {
+            Question::Select(q) => q.choices.any_enabled(),
+            Question::Dropdown(q) => q.custom || q.choices.any_enabled(),
+            _ => true,
+        }
+    }
+
+    /// Ask it on `ui`, starting from the answer it was given last time, if any. Returns the
+    /// answer, and how it's shown.
+    fn run(&mut self, ui: &mut Ui, back: bool, last: Option<&Answer>) -> Result<(Answer, String)> {
+        match self {
+            Question::Confirm(q) => {
+                q.back = back;
+                if let Some(Answer::Yes(yes)) = last {
+                    q.default = *yes;
+                }
+                let yes = q.run(ui)?;
+                Ok((Answer::Yes(yes), if yes { "yes" } else { "no" }.into()))
+            }
+            Question::Input(q) => {
+                q.back = back;
+                if let Some(Answer::Text(text)) = last {
+                    q.initial = Some(text.clone());
+                }
+                let text = q.run(ui)?;
+                let shown = if q.secret {
+                    "•".repeat(text.chars().count())
+                } else {
+                    text.clone()
+                };
+                Ok((Answer::Text(text), shown))
+            }
+            Question::Select(q) => {
+                q.choices.back = back;
+                if let Some(Answer::Choice(i)) = last {
+                    q.default = Some(*i);
+                }
+                let i = q.run(ui)?;
+                Ok((Answer::Choice(i), q.choices.list[i].label.clone()))
+            }
+            Question::MultiSelect(q) => {
+                q.choices.back = back;
+                if let Some(Answer::Choices(picked)) = last {
+                    q.default = Some(picked.clone());
+                }
+                let picked = q.run(ui)?;
+                let names: Vec<&str> = picked.iter().map(|&i| q.choices.list[i].label.as_str()).collect();
+                let shown = summary(&names);
+                Ok((Answer::Choices(picked), shown))
+            }
+            Question::Dropdown(q) => {
+                q.choices.back = back;
+                if let Some(Answer::Text(text)) = last {
+                    q.default = q.choices.list.iter().position(|c| &c.label == text);
+                }
+                let text = q.run(ui)?;
+                Ok((Answer::Text(text.clone()), text))
+            }
+        }
+    }
+
+    /// The answer without a terminal, as the question asked on its own would find it.
+    fn unasked(&self) -> Result<Answer> {
+        match self {
+            Question::Confirm(q) => q.unasked().map(Answer::Yes),
+            Question::Input(q) => q.unasked().map(Answer::Text),
+            Question::Select(q) => q.unasked().map(Answer::Choice),
+            Question::MultiSelect(q) => q.unasked().map(Answer::Choices),
+            Question::Dropdown(q) => q.unasked().map(Answer::Text),
+        }
     }
 }
 
 /// Questions asked one after another as a group: ← goes back to the one before (with its
 /// answer still there to change), and once they're all answered, a last question shows the
 /// answers and offers to change any of them before going on.
+///
+/// Each question is given a name to find its answer by. Without a terminal the questions are
+/// answered as they would be on their own (lines read from stdin, or what's `selected`), and
+/// there's nothing to look over.
+///
+/// ```no_run
+/// use tinsel::prompt::{Confirm, Form, Input, MultiSelect, Select};
+///
+/// let answers = Form::new()
+///     .question("name", Input::new("Project name").default("my-app"))
+///     .question("target", Select::new("Deploy to").options(["staging", "production"]))
+///     .question("services", MultiSelect::new("Services").options(["api", "web", "worker"]))
+///     .question("tag", Confirm::new("Tag the release?").default(true))
+///     .ask()?;
+///
+/// let name = answers.text("name");
+/// let target = answers.choice("target");
+/// let services = answers.choices("services");
+/// let tag = answers.yes("tag");
+/// # Ok::<(), tinsel::prompt::Error>(())
+/// ```
+///
+/// ```text
+///   ●  Project name  my-app
+///   ●  Deploy to  production
+///   ●  Services  api, worker
+///   ●  Tag the release?  yes
+///   ?  All good?
+///     › yes, carry on
+///     change
+///       Project name                     my-app
+///       Deploy to                    production
+///       …
+/// ```
 #[derive(Debug, Default)]
 pub struct Form<'a> {
     questions: Vec<(String, Question<'a>)>,
@@ -84,7 +202,8 @@ impl<'a> Form<'a> {
         Form::default()
     }
 
-    /// Add a question, and the name its answer is found by in the [`Answers`].
+    /// Add a question, and the name its answer is found by in the [`Answers`]. Its own
+    /// `.back()` needn't be set: every question after the first can go back.
     #[must_use]
     pub fn question(mut self, name: impl Into<String>, question: impl Into<Question<'a>>) -> Self {
         self.questions.push((name.into(), question.into()));
@@ -95,36 +214,139 @@ impl<'a> Form<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Cancelled`] on Ctrl-C or Esc at any question, and otherwise whatever a question
-    /// asked on its own would return.
-    pub fn ask(self) -> Result<Answers> {
-        todo!()
+    /// [`Error::Cancelled`] on Ctrl-C or Esc at any question, [`Error::NoOptions`] when a list has
+    /// nothing to choose, and otherwise whatever a question asked on its own would return
+    /// without a terminal ([`Error::NotATerminal`], [`Error::Invalid`]) or when the terminal can't
+    /// be used ([`Error::Io`]).
+    pub fn ask(mut self) -> Result<Answers> {
+        if !interactive() {
+            let answers = self.questions.iter().map(|(name, q)| Ok((name.clone(), q.unasked()?)));
+            return Ok(Answers {
+                list: answers.collect::<Result<_>>()?,
+            });
+        }
+        if self.questions.is_empty() {
+            return Ok(Answers { list: Vec::new() });
+        }
+        if !self.questions.iter().all(|(_, q)| q.answerable()) {
+            return Err(Error::NoOptions);
+        }
+        let mut ui = Ui::open()?;
+        let result = self.run(&mut ui);
+        // what's left on screen is the answers alone, or the question that was cancelled
+        if result.is_ok() {
+            ui.draw(&[]);
+        }
+        result
+    }
+
+    fn run(&mut self, ui: &mut Ui) -> Result<Answers> {
+        let count = self.questions.len();
+        let mut answers: Vec<Option<Answer>> = vec![None; count];
+        // the answered lines, and each answer as it's shown, one per question
+        let mut lines: Vec<String> = vec![String::new(); count];
+        let mut shown: Vec<String> = vec![String::new(); count];
+        let mut step = 0;
+        // which question is being changed from the look over the answers, if one is
+        let mut changing: Option<usize> = None;
+        loop {
+            let asking = changing.unwrap_or(step);
+            if asking < count {
+                // everything answered so far stays on screen above, except the one being asked
+                ui.frame.above = (0..count)
+                    .filter(|&i| i != asking && answers[i].is_some() && (changing.is_some() || i < asking))
+                    .map(|i| lines[i].clone())
+                    .collect();
+                let back = changing.is_none() && asking > 0;
+                let (_, question) = &mut self.questions[asking];
+                match question.run(ui, back, answers[asking].as_ref()) {
+                    Ok((answer, text)) => {
+                        lines[asking] = ui.frame.lines.last().cloned().unwrap_or_default();
+                        answers[asking] = Some(answer);
+                        shown[asking] = text;
+                        match changing.take() {
+                            Some(_) => step = count,
+                            None => step += 1,
+                        }
+                    }
+                    Err(Error::Back) => step -= 1,
+                    Err(e) => return Err(e),
+                }
+                continue;
+            }
+            // all answered: look them over
+            ui.frame.above = lines.clone();
+            let mut review = Select::new("All good?").option("yes, carry on").heading("change");
+            for ((_, q), answer) in self.questions.iter().zip(&shown) {
+                review = review.option(q.question()).note(text::truncate(answer, 30));
+            }
+            // room for every answer and the heading over them, so none scroll out of sight
+            let review = review.rows(count + 2).back();
+            match review.run(ui) {
+                Ok(0) => break,
+                Ok(n) => changing = Some(n - 1),
+                Err(Error::Back) => step = count - 1,
+                Err(e) => return Err(e),
+            }
+        }
+        ui.frame.above = lines;
+        let list = self
+            .questions
+            .iter()
+            .map(|(name, _)| name.clone())
+            .zip(answers.into_iter().flatten());
+        Ok(Answers { list: list.collect() })
     }
 }
 
 /// The answers to a [`Form`], by the name each question was given.
+///
+/// Asking for a name the form doesn't have, or for the wrong kind of answer (`text` for a
+/// yes or no question, say), panics: it's a mistake in the code, not something the person
+/// answering could have done.
 #[derive(Clone, Debug)]
-pub struct Answers;
+pub struct Answers {
+    list: Vec<(String, Answer)>,
+}
 
 impl Answers {
+    fn get(&self, name: &str) -> &Answer {
+        match self.list.iter().find(|(n, _)| n == name) {
+            Some((_, answer)) => answer,
+            None => panic!("the form has no question called {name:?}"),
+        }
+    }
+
     /// A [`Confirm`]'s answer.
-    pub fn yes(&self, _name: &str) -> bool {
-        todo!()
+    pub fn yes(&self, name: &str) -> bool {
+        match self.get(name) {
+            Answer::Yes(yes) => *yes,
+            other => panic!("{name:?} wasn't a yes or no question: {other:?}"),
+        }
     }
 
     /// An [`Input`]'s or a [`Dropdown`]'s answer.
-    pub fn text(&self, _name: &str) -> &str {
-        todo!()
+    pub fn text(&self, name: &str) -> &str {
+        match self.get(name) {
+            Answer::Text(text) => text,
+            other => panic!("{name:?} wasn't answered with text: {other:?}"),
+        }
     }
 
     /// A [`Select`]'s answer: the number of the option chosen.
-    pub fn choice(&self, _name: &str) -> usize {
-        todo!()
+    pub fn choice(&self, name: &str) -> usize {
+        match self.get(name) {
+            Answer::Choice(i) => *i,
+            other => panic!("{name:?} wasn't a Select: {other:?}"),
+        }
     }
 
     /// A [`MultiSelect`]'s answer: the numbers of the options ticked, in order.
-    pub fn choices(&self, _name: &str) -> &[usize] {
-        todo!()
+    pub fn choices(&self, name: &str) -> &[usize] {
+        match self.get(name) {
+            Answer::Choices(picked) => picked,
+            other => panic!("{name:?} wasn't a MultiSelect: {other:?}"),
+        }
     }
 }
 
