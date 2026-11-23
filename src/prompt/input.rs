@@ -699,7 +699,7 @@ where
 }
 
 /// "whole number" or "number", from the type's name.
-pub(super) fn kind_of_number(name: &str) -> &'static str {
+pub(crate) fn kind_of_number(name: &str) -> &'static str {
     if name.starts_with('u') {
         "whole number of 0 or more"
     } else if name.starts_with('i') {
