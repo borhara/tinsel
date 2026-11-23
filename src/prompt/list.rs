@@ -77,6 +77,11 @@ impl Choices {
         self.list.get(i).is_some_and(|c| c.disabled.is_none())
     }
 
+    /// Whether any option can be picked.
+    pub(super) fn any_enabled(&self) -> bool {
+        (0..self.list.len()).any(|i| self.enabled(i))
+    }
+
     /// The muted line of keys under the list.
     fn keys(&self, base: &str) -> String {
         keys(&format!("{base}{}", if self.back { " · ← back" } else { "" }))
