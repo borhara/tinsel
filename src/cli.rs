@@ -40,7 +40,8 @@ impl Flag {
                 }
             } else if let Some(short) = word.strip_prefix('-') {
                 flag.short = short.chars().next();
-            } else if word.starts_with(['<', '[']) {
+            } else {
+                // `<FILE>`, `[FILE]` or a bare `FILE`, as some help writes it
                 flag.value = Some(word.trim_matches(['<', '>', '[', ']', '.']).into());
             }
         }
