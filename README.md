@@ -172,6 +172,20 @@ let path = prompt::Input::new("Config").paths().ask()?;                  // like
 prompt::confirm_typing("Delete my-app?", "my-app")?;                       // type it to go on
 ```
 
+Several questions can be asked as one `Form`: ← goes back to change an answer, and at the
+end they're all shown, to change any of them before going on:
+
+```rust,ignore
+use tinsel::prompt::{Confirm, Form, Input, Select};
+
+let answers = Form::new()
+    .question("name", Input::new("Project name").default("my-app"))
+    .question("target", Select::new("Deploy to").options(["staging", "production"]))
+    .question("tag", Confirm::new("Tag the release?").default(true))
+    .ask()?;
+deploy(answers.text("name"), answers.choice("target"), answers.yes("tag"));
+```
+
 Lists can be grouped, and say why an option can't be picked:
 
 ```rust,ignore
@@ -369,6 +383,7 @@ The [`examples`](examples) are small and meant to be copied. Run any of them wit
 | [`parallel`](examples/parallel.rs) | steps at the same time, with sub-steps, a log line and a panic hook; `-- --json` for the same run as JSON |
 | [`status`](examples/status.rs) | a read-only status command: a table, details, a chart and a tree; pipe it to `cat` for plain text |
 | [`questions`](examples/questions.rs) | asking questions, and handling Ctrl-C partway through |
+| [`form`](examples/form.rs) | questions asked as one form, going back and looking the answers over |
 | [`cli`](examples/cli.rs) | reading flags, arguments and subcommands, with `--help` from the same description; `-- --help` or `-- stauts` |
 | [`errors`](examples/errors.rs) | a Rust error turned into a report with its whole cause chain |
 | [`dashboard`](examples/dashboard.rs) | a live full-screen dashboard: stats, a service list, a chart that follows the selection, logs |
@@ -389,7 +404,7 @@ The [`examples`](examples) are small and meant to be copied. Run any of them wit
 | **inline** | `badge` · `link` (clickable) · `Card` · `paint`, `paint_on`, `paint_bg`, `bold`, `dim`, `italic`, `underline` · `style::gradient` · `anim` for shimmering labels, moving bars and values that glide into place (`Glide`, `Glider`) |
 | **apps** | `app::run` full-screen apps, drawn only when something changes or a frame asks (`animate`, `animate_at`, `redraw_at`) · `Panel` · `List` · `Grid` · `ScrollView` · `TextInput` (with a `History` and its own idea of a word) · `TextArea` · `Scrollbar` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys with their modifiers, read and written in vim's notation (`<C-a>`) and shown as symbols (`⌃A`), mouse and resize events · `Job` for work on another thread · `app::snapshot` for tests · `Frame::html` for screenshots |
 | **command line** | `Cli` for flags, options, arguments and subcommands · `--help` and `--version` for free · mistakes as a `Report` with "did you mean" · `value_as` for typed values |
-| **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` / `Select` · `multiselect` / `MultiSelect` (filter as you type, headings, disabled options with a reason, validation) · `Dropdown` for long lists (notes, badges, your own answer) · `.back()` to go back a question · `editor` · suggestions and path completion · `confirm_typing` |
+| **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` / `Select` · `multiselect` / `MultiSelect` (filter as you type, headings, disabled options with a reason, validation) · `Dropdown` for long lists (notes, badges, your own answer) · `.back()` to go back a question · `Form` to ask several, then look the answers over · `editor` · suggestions and path completion · `confirm_typing` |
 | **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_focus` · `set_history` · `set_accent` · `set_theme` · `set_color_mode` · `set_fps` · `set_ctrl_c` · `timings` |
 | **helpers** | `text::{width, width_with_tabs, pad, truncate, truncate_start, wrap, strip_ansi, content_width, fuzzy, highlight}` · `terminal_width` · `format::{bytes, duration, count, grouped, ago, ago_long, plural, local_clock}` · `clipboard::{copy, paste}` (system tools, or OSC 52 over ssh) |
 
