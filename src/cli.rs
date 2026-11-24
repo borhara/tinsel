@@ -876,8 +876,12 @@ mod tests {
         let cli = Cli::new("x", "y")
             .flag("--level=<N>", "how much")
             .flag("-n <COUNT>", "how many")
-            .flag("-f", "force");
-        let args = cli.try_parse_from(["--level", "3", "-n2", "-f"]).unwrap();
+            .flag("-f", "force")
+            .flag("-o FILE", "where to write");
+        let args = cli
+            .try_parse_from(["--level", "3", "-n2", "-f", "-o", "out.txt"])
+            .unwrap();
+        assert_eq!(args.value("o"), Some("out.txt"));
         assert_eq!(
             (args.value("level"), args.value("n"), args.flag("f")),
             (Some("3"), Some("2"), true)
