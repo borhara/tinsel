@@ -74,4 +74,5 @@ scripts/release.sh
 ```
 
 It shows the changelog release-plz wrote and asks before it commits, tags, publishes to
-crates.io and pushes. It needs `cargo install release-plz` and `cargo login`.
+crates.io, pushes and makes a GitHub release. It needs `brew install release-plz`, `cargo login`
+and `gh auth login`.

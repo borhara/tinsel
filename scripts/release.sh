@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Cuts a release from your machine: release-plz bumps the version and writes the changelog
 # from the commits since the last tag, then this commits, tags and publishes them to
-# crates.io and pushes to origin. Only feat, fix, perf and breaking commits make a release;
+# crates.io, pushes to origin and makes a GitHub release. Only feat, fix, perf and breaking commits make a release;
 # chore, test, docs and the rest ride along with the next one.
 #
 #   scripts/release.sh
 #
-# Needs release-plz (`cargo install release-plz`) and `cargo login`. Run it on an up-to-date
+# Needs release-plz (`brew install release-plz`), `cargo login` and `gh auth login`. Run it on an up-to-date
 # main once CI has passed on Tangled.
 
 set -euo pipefail
@@ -65,3 +65,8 @@ git tag -a "v$next" -m "v$next"
 # local commit and tag
 cargo publish
 git push --atomic origin HEAD:refs/heads/main "refs/tags/v$next"
+
+# the GitHub mirror's releases page, with this version's part of the changelog
+notes="$(awk -v v="$next" '$0 ~ "^## \\[" v "\\]" { f = 1; next } /^## \[/ { if (f) exit } f' CHANGELOG.md |
+    sed '/./,$!d')"
+gh release create "v$next" --repo borhara/tinsel --title "v$next" --notes "$notes"
