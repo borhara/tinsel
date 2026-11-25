@@ -187,7 +187,8 @@ pub mod prelude {
     };
 }
 
-/// The README's examples, compiled and run as doc tests so they keep up with the code.
+/// The README's examples, compiled and run as doc tests so they keep up with the code. The
+/// fragments among them are skipped here, and compiled by tests/readme.rs instead.
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
