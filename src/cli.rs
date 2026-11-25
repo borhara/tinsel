@@ -371,10 +371,11 @@ impl Cli {
                     let line = format!("{program} {version}");
                     return Err(CliError::new(CliErrorKind::Version(line), self.help_as(path)));
                 }
+                let program = parent.as_ref().map(|(p, _)| *p);
                 let (cli, into): (&Cli, &mut Args) = match (self.find(&name), parent.as_mut()) {
                     (Some(_), _) => (self, &mut *out),
                     (None, Some((p, a))) if p.find(&name).is_some() => (*p, &mut **a),
-                    _ => return Err(self.unknown_flag(&name, path)),
+                    _ => return Err(self.unknown_flag(&name, program, path)),
                 };
                 let flag = &cli.flags[cli.find(&name).unwrap_or_default()];
                 let key = flag.shown();
@@ -435,10 +436,12 @@ impl Cli {
         Ok(())
     }
 
-    fn unknown_flag(&self, name: &str, path: &str) -> CliError {
+    /// A flag neither this command nor its `program` knows, with the closest either has.
+    fn unknown_flag(&self, name: &str, program: Option<&Cli>, path: &str) -> CliError {
         let known = self
             .flags
             .iter()
+            .chain(program.into_iter().flat_map(|p| &p.flags))
             .filter_map(|f| f.long.as_ref().map(|l| format!("--{l}")));
         let hint = match closest(name, known) {
             Some(near) => format!("did you mean {near}?"),
@@ -803,6 +806,9 @@ mod tests {
         let report = hint(&cli, &["stauts"]);
         assert!(report.contains("there's no deploy stauts command"), "{report}");
         assert!(report.contains("did you mean deploy status?"), "{report}");
+        let cli = cli.flag("-q, --quiet", "quiet");
+        let report = hint(&cli, &["status", "--quiett"]);
+        assert!(report.contains("did you mean --quiet?"), "{report}");
     }
 
     #[test]
