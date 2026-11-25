@@ -37,9 +37,9 @@ and `advance` its clock, then compare `snapshot()`s (see `tests/live.rs`).
 Prompts read keys through a `Ui`, so their tests type a script of keys with `Ui::script` (or
 the public `prompt::script`) and check what was drawn last (see the tests in `src/prompt.rs`).
 The live redraw can't be unit-tested in a pipe. Try both in a real terminal, and if you can,
-on macOS, Linux and Windows. CI runs on Linux alone, so macOS and Windows are only tested by
-hand, and on Windows the tests on a real terminal (`src/processes.rs`) that need a
-pseudo-terminal don't run.
+on macOS, Linux and Windows. CI runs the tests on Linux alone and only builds and lints the
+macOS and Windows code, so those two are tested by hand. On Windows, the tests on a real
+terminal (`src/processes.rs`) don't run, since they need a pseudo-terminal.
 
 ## Recording the demo
 

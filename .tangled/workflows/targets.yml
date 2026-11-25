@@ -1,0 +1,24 @@
+# that the Windows and macOS code builds and passes clippy, though nothing here can run it
+when:
+  - event: ["push", "pull_request"]
+    branch: ["main"]
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - rustup
+  - gcc
+
+environment:
+  CARGO_TERM_COLOR: "always"
+  RUSTFLAGS: "-D warnings"
+
+steps:
+  - name: clippy
+    command: |
+      rustup toolchain install stable --profile minimal --component clippy \
+        --target x86_64-pc-windows-msvc --target aarch64-apple-darwin
+      rustup default stable
+      cargo clippy --all-targets --target x86_64-pc-windows-msvc
+      cargo clippy --all-targets --target aarch64-apple-darwin
