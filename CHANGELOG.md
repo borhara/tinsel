@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/borhara/tinsel/compare/v1.0.1...v1.1.0) - 2026-11-25
+
+### Added
+
+- *(cli)* an option's value can be named bare in its spec, as in -o FILE
+- *(prompt)* Form asks several questions as one, going back and forth between them, and looks the answers over to change any before going on
+- *(cli)* Cli reads flags, options, arguments and subcommands from one description, which draws --help too, and says what was probably meant when a flag or command is mistyped
+
+### Fixed
+
+- *(cli)* a mistyped program flag in a subcommand gets a did-you-mean hint too
+- *(cli)* a run of short flags in a subcommand gives the program's options their value, as in -rus-east-1
+
+### Other
+
+- *(cli)* an option whose value is named bare in its spec, as in -o FILE, still takes one
+- show Form in the readme and the crate docs
+- *(examples)* ask a few questions as one in a form example
+- *(prompt)* questions work out their answer without a terminal apart from asking, and a frame can keep lines above what it draws
+- *(prompt)* describe how a Form should ask several questions, go back with answers kept, look them over to change any, and answer from a pipe
+- show Cli in the readme and the crate docs
+- *(examples)* read the command line in a cli example, with subcommands, a typed value and typos to try
+- *(cli)* describe how Cli should read flags, options, arguments and subcommands, print help and versions, and say what was probably meant
+- show the tvim screenshots side by side in the readme
+- show tvim beside the other full-screen apps in the readme
+- list every example in the readme, and add contributing and license sections
+
 ## [1.0.1](https://github.com/borhara/tinsel/compare/v1.0.0...v1.0.1) - 2026-11-18
 
 ### Fixed
