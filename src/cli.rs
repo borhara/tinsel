@@ -341,7 +341,12 @@ impl Cli {
                     let mut names = Vec::new();
                     for (i, c) in chars.iter().enumerate() {
                         let name = format!("-{c}");
-                        let takes = self.find(&name).is_some_and(|f| self.flags[f].value.is_some());
+                        // program flags work in subcommands too, so check those as well
+                        let takes = match (self.find(&name), parent.as_ref()) {
+                            (Some(f), _) => self.flags[f].value.is_some(),
+                            (None, Some((p, _))) => p.find(&name).is_some_and(|f| p.flags[f].value.is_some()),
+                            _ => false,
+                        };
                         let after: String = chars[i + 1..].iter().collect();
                         if takes && !after.is_empty() {
                             names.push((name, Some(after)));
@@ -814,6 +819,10 @@ mod tests {
             ("logs", Some("web"), Some("5m"))
         );
         assert!(args.flag("quiet"));
+        let cli = cli.flag("-r, --region <NAME>", "where");
+        let args = cli.try_parse_from(["logs", "-qrus-east-1"]).unwrap();
+        assert!(args.flag("quiet"));
+        assert_eq!(args.value("region"), Some("us-east-1"));
         let err = cli.try_parse_from(["logs", "--help"]).unwrap_err();
         assert!(err.help.lines().plain().contains("usage  deploy logs [OPTIONS] [APP]"));
         assert!(cli.try_parse_from(Vec::<String>::new()).unwrap().command().is_none());
