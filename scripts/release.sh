@@ -15,7 +15,7 @@ set -euo pipefail
 release_commits='^(feat|fix|perf)(\(.*\))?!?:|^[a-z]+(\(.*\))?!:'
 
 version() {
-    sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1
+    awk -F'"' '/^version = /{ print $2; exit }' Cargo.toml
 }
 
 cd "$(dirname "$0")/.."
@@ -35,7 +35,10 @@ if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
 fi
 
 last="$(git describe --tags --abbrev=0 --match 'v*')"
-if ! git log --format=%s "$last..HEAD" | grep -qE "$release_commits"; then
+# read in full first: grep -q stops at the first match, and pipefail would count git log's
+# broken pipe as finding nothing
+subjects="$(git log --format=%s "$last..HEAD")"
+if ! grep -qE "$release_commits" <<<"$subjects"; then
     echo "nothing to release since $last"
     exit 0
 fi
