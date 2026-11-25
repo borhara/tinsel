@@ -59,14 +59,17 @@ if [[ "$answer" != [yY] ]]; then
     exit 0
 fi
 
+# this version's part of the changelog, for the tag's message and the GitHub release
+notes="$(awk -v v="$next" '$0 ~ "^## \\[" v "\\]" { f = 1; next } /^## \[/ { if (f) exit } f' CHANGELOG.md |
+    sed '/./,$!d')"
+
 git commit --quiet -am "chore: release v$next"
-git tag -a "v$next" -m "v$next"
+# verbatim, or git would drop the changelog's ### headings as comments
+git tag -a "v$next" --cleanup=verbatim -m "v$next" -m "$notes"
 # publish before pushing, so a publish that fails leaves nothing to take back but the
 # local commit and tag
 cargo publish
 git push --atomic origin HEAD:refs/heads/main "refs/tags/v$next"
 
-# the GitHub mirror's releases page, with this version's part of the changelog
-notes="$(awk -v v="$next" '$0 ~ "^## \\[" v "\\]" { f = 1; next } /^## \[/ { if (f) exit } f' CHANGELOG.md |
-    sed '/./,$!d')"
+# the GitHub mirror's releases page
 gh release create "v$next" --repo borhara/tinsel --title "v$next" --notes "$notes"
