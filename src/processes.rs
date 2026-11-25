@@ -227,6 +227,8 @@ fn child_command(scenario: &str, env: &[(&str, &str)]) -> Command {
     command
         .args([SCENARIO_TEST, "--exact", "--ignored", "--nocapture", "--test-threads=1"])
         .env(SCENARIO, scenario)
+        // a pseudo-terminal can draw, whatever the runner's own TERM says (dumb on some CI)
+        .env("TERM", "xterm-256color")
         .env_remove("NO_COLOR")
         .env_remove("TINSEL_THEME")
         .env_remove("COLORFGBG")
