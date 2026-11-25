@@ -222,6 +222,7 @@ let cli = tinsel::Cli::new("deploy", "ship an app to the cloud")
     .version(env!("CARGO_PKG_VERSION"))
     .flag("-r, --region <NAME>", "where to deploy")
     .flag("-q, --quiet", "only print problems")
+    .flag("-n, --replicas <N>", "how many to run")
     .arg("<APP>", "what to ship")
     .command(tinsel::Cli::new("status", "what's running where"));
 let args = cli.parse();               // --help, --version and mistakes print and exit
