@@ -64,3 +64,14 @@ scripts/screenshots.sh
 Don't edit `CHANGELOG.md`: release-plz writes it from commit messages when it prepares a
 release. Write each commit as a one-line conventional commit (`feat(app): …`, `fix(table): …`,
 `docs: …`) that says what a user would notice; `feat` and `fix` commits are what end up in it.
+
+## Releasing
+
+Releases are cut by hand, on an up-to-date `main` once CI has passed:
+
+```bash
+scripts/release.sh
+```
+
+It shows the changelog release-plz wrote and asks before it commits, tags, publishes to
+crates.io and pushes. It needs `cargo install release-plz` and `cargo login`.
