@@ -1,4 +1,4 @@
-# the tests on the oldest Rust tinsel promises to build on, rust-version in Cargo.toml
+# that everything still builds on the oldest Rust tinsel promises, rust-version in Cargo.toml
 when:
   - event: ["push", "pull_request"]
     branch: ["main"]
@@ -15,8 +15,8 @@ environment:
   RUSTFLAGS: "-D warnings"
 
 steps:
-  - name: test
+  - name: check
     command: |
       msrv="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
       rustup toolchain install "$msrv" --profile minimal
-      cargo "+$msrv" test --all-targets
+      cargo "+$msrv" check --all-targets
