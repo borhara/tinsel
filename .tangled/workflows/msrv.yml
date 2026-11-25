@@ -1,0 +1,22 @@
+# the tests on the oldest Rust tinsel promises to build on, rust-version in Cargo.toml
+when:
+  - event: ["push", "pull_request"]
+    branch: ["main"]
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - rustup
+  - gcc
+
+environment:
+  CARGO_TERM_COLOR: "always"
+  RUSTFLAGS: "-D warnings"
+
+steps:
+  - name: test
+    command: |
+      msrv="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+      rustup toolchain install "$msrv" --profile minimal
+      cargo "+$msrv" test --all-targets

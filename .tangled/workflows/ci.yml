@@ -1,0 +1,31 @@
+# fmt, clippy, the tests and the docs, on the Rust in nixpkgs
+when:
+  - event: ["push", "pull_request"]
+    branch: ["main"]
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - cargo
+  - rustc
+  - rustfmt
+  - clippy
+  - gcc
+
+environment:
+  CARGO_TERM_COLOR: "always"
+  RUSTFLAGS: "-D warnings"
+  RUSTDOCFLAGS: "-D warnings"
+
+steps:
+  - name: fmt
+    command: cargo fmt --check
+  - name: clippy
+    command: cargo clippy --all-targets
+  - name: test
+    command: cargo test --all-targets
+  - name: doctest
+    command: cargo test --doc
+  - name: docs
+    command: cargo doc --no-deps

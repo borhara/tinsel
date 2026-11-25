@@ -1,0 +1,24 @@
+# how much of the code the tests reach, printed at the end of the log
+when:
+  - event: ["push", "pull_request"]
+    branch: ["main"]
+
+engine: microvm
+image: nixos
+
+# rustup rather than nixpkgs' rustc, for the llvm-tools that match it
+dependencies:
+  - rustup
+  - gcc
+  - cargo-llvm-cov
+
+environment:
+  CARGO_TERM_COLOR: "always"
+  RUSTFLAGS: "-D warnings"
+
+steps:
+  - name: coverage
+    command: |
+      rustup toolchain install stable --profile minimal --component llvm-tools-preview
+      rustup default stable
+      cargo llvm-cov --all-targets --summary-only
