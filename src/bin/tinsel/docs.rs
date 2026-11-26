@@ -454,9 +454,21 @@ impl App for Docs {
                 ("q", "quit"),
             ],
         };
+        let version = format!("tinsel {}", env!("CARGO_PKG_VERSION"));
+        // on a web page, where it isn't plain that a terminal library drew it
+        let status = if cfg!(all(feature = "web", target_family = "wasm")) {
+            format!(
+                "{} {} {}",
+                paint(palette::MUTED, "These docs were built with tinsel"),
+                paint(palette::MUTED, "·"),
+                version.replace("tinsel ", "tinsel v")
+            )
+        } else {
+            version
+        };
         Footer::new()
             .keys(keys)
-            .status(format!("tinsel {}", env!("CARGO_PKG_VERSION")))
+            .status(status)
             .render(Rect::new(0, h - 1, w, 1), frame);
 
         if self.has_examples() {
