@@ -37,6 +37,7 @@ pub const GUIDES: &[Guide] = &[
     guide!("questions", "Asking questions"),
     guide!("cli", "Command lines and help"),
     guide!("apps", "Full-screen apps"),
+    guide!("web", "Apps in a browser"),
     guide!("pictures", "Pictures"),
     guide!("testing", "Testing what you print"),
     guide!("settings", "Settings and terminals"),
@@ -732,7 +733,7 @@ mod tests {
     fn guides_are_found_by_slug_title_or_start() {
         assert_eq!(find("live"), Some(2));
         assert_eq!(find("Asking questions"), Some(6));
-        assert_eq!(find("pic"), Some(9));
+        assert_eq!(find("pic"), Some(10));
         assert_eq!(find("nothing like it"), None);
     }
 
