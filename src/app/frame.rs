@@ -1114,6 +1114,12 @@ impl Frame {
     /// [`set_color_mode`](crate::set_color_mode)) to see them. [`html_pre`](Frame::html_pre)
     /// is just the `<pre>`, to put in a page of your own.
     ///
+    /// It keeps to the grid a terminal does, in any monospace font: lines and blocks
+    /// (`─│╭╮├┼━▁▄█░`) are drawn rather than left to the font, so they join across cells and
+    /// rows, and other symbols a font may lack, like a spinner's `✧`, are each held to their
+    /// cell, so one borrowed from another font can't push the rest of its row along. The
+    /// characters stay in the page, so copying it gives the text back.
+    ///
     /// ```
     /// use tinsel::app::{Frame, Panel};
     ///
@@ -1159,17 +1165,36 @@ impl Frame {
             let row = &self.cells[y * self.width..(y + 1) * self.width];
             // runs of cells that look the same
             let mut runs: Vec<(Look, String)> = Vec::new();
-            for cell in row.iter().filter(|c| c.ch != '\0') {
+            let cells: Vec<&Cell> = row.iter().filter(|c| c.ch != '\0').collect();
+            let mut i = 0;
+            while i < cells.len() {
+                let cell = cells[i];
                 let look = cell.style.look(fg, bg);
                 let mut text = String::new();
-                escape(cell.ch, &mut text);
-                for &mark in cell.marks.iter().filter(|&&m| m != '\0') {
-                    escape(mark, &mut text);
+                let mut taken = 1;
+                // a page lays text out in a line, not a grid as a terminal does, so a glyph its
+                // font lacks, borrowed from another font of another width, would push the rest
+                // of the row along: lines and blocks are drawn instead, and anything else past
+                // Latin kept to its cell
+                if let Some(shape) = super::glyphs::shape(cell.ch) {
+                    // a line across, or a block, over several cells is drawn once, all along
+                    let same = cells[i..]
+                        .iter()
+                        .take_while(|c| c.ch == cell.ch && c.style.look(fg, bg) == look)
+                        .count();
+                    taken = super::glyphs::run(cell.ch, same);
+                    text = super::glyphs::drawn(cell.ch, &shape, taken);
+                } else {
+                    escape(cell.ch, &mut text);
+                    for &mark in cell.marks.iter().filter(|&&m| m != '\0') {
+                        escape(mark, &mut text);
+                    }
+                    let cols = char_width(cell.ch);
+                    if cols == 2 || super::glyphs::boxed(cell.ch) {
+                        text = super::glyphs::boxed_cell(&text, cols);
+                    }
                 }
-                if char_width(cell.ch) == 2 {
-                    // fonts rarely draw wide characters exactly two columns across; make them
-                    text = format!("<span style=\"display:inline-block;width:2ch\">{text}</span>");
-                }
+                i += taken;
                 // a space shows only its background (and underline), so joins any run on the same one
                 // that isn't underlined
                 let space = cell.ch == ' ' && look.attrs & UNDERLINE == 0;

@@ -97,6 +97,7 @@
 
 mod field;
 mod frame;
+mod glyphs;
 mod grid;
 mod input;
 mod job;

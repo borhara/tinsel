@@ -144,11 +144,39 @@ fn wide_characters_take_two_columns() {
     f.print(f.area(), 0, "a日b");
     let pre = f.html_pre();
     assert!(
-        pre.contains("a<span style=\"display:inline-block;width:2ch\">日</span>b"),
+        pre.contains("a<span style=\"display:inline-block;width:2ch;text-align:center;background:inherit\">日</span>b"),
         "{pre}"
     );
     // the cell a wide character covers isn't written again
     assert_eq!(strip_tags(&pre), "a日b  ");
+}
+
+#[test]
+fn symbols_a_font_may_lack_are_kept_to_their_cell() {
+    let _theme = colour();
+    let mut f = Frame::new(5, 1);
+    f.print(f.area(), 0, "a✧é→");
+    let pre = f.html_pre();
+    let one = "<span style=\"display:inline-block;width:1ch;text-align:center;background:inherit\">";
+    assert!(pre.contains(&format!("a{one}✧</span>é{one}→</span>")), "{pre}");
+    assert_eq!(strip_tags(&pre), "a✧é→ ");
+}
+
+#[test]
+fn lines_and_blocks_are_drawn_and_still_copy_as_text() {
+    let _theme = colour();
+    let mut f = Frame::new(6, 2);
+    f.print(f.area(), 0, "╭────╮");
+    f.print(f.area(), 1, "▁▄█ ab");
+    let pre = f.html_pre();
+    // the edge's four lines are one box, drawn as a background; the corners curve, in SVG
+    assert!(pre.contains("width:4ch;") && pre.contains("0 50%/100% 1.2px"), "{pre}");
+    assert_eq!(pre.matches("<svg").count(), 2, "only the two corners: {pre}");
+    assert!(
+        pre.contains("0 100%/100% 12.5%") && pre.contains("0 100%/100% 100%"),
+        "blocks fill from the bottom"
+    );
+    assert_eq!(strip_tags(&pre), "╭────╮\n▁▄█ ab");
 }
 
 #[test]
