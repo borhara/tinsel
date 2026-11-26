@@ -4,7 +4,10 @@
 //! Chinese, Japanese or Korean can: the lines themselves are ambiguous, so drawn wide
 //! they'd break every layout. Each symbol becomes one ASCII character, so nothing moves.
 //!
-//! The switch happens as text leaves for the terminal, so every widget gets it for free.
+//! The switch happens as text leaves for the terminal, so every widget gets it for free,
+//! and so does an app's own text: its curly quotes, dashes, arrows and ellipses go as ASCII
+//! too, as a font that lacks the lines likely lacks those, and drawn wide they'd move
+//! everything after them. Letters and wide characters are left as they are.
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -242,7 +245,11 @@ mod tests {
         assert_eq!(ascii, "+-+|*.:#+>|");
         assert_eq!(crate::text::width(&ascii), crate::text::width(drawn), "nothing moves");
         assert_eq!(with_glyphs(Glyphs::Unicode, || for_terminal(drawn).into_owned()), drawn);
-        // text that isn't tinsel's own is left alone
+        // letters, wide characters and escapes are left alone; symbols are swapped wherever they are
+        assert_eq!(
+            with_glyphs(Glyphs::Ascii, || for_terminal("“Résumé” – 5×3 → done…").into_owned()),
+            "\"Résumé\" - 5x3 > done."
+        );
         assert_eq!(
             with_glyphs(Glyphs::Ascii, || for_terminal("é 日本 \x1b[1mbold\x1b[0m").into_owned()),
             "é 日本 \x1b[1mbold\x1b[0m"
