@@ -18,6 +18,8 @@ exclude = ["/.tangled", "/docs", "/scripts", "demo.tape", "demo.gif", "release-p
 [features]
 # decoding JPEG and GIF, so kitty can show them as well as PNG
 decode = []
+# `tinsel docs` for a web page, built for wasm: see src/web.rs
+web = []
 
 [package.metadata.docs.rs]
 # nothing differs between targets, so one build is enough

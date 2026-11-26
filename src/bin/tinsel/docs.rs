@@ -134,7 +134,7 @@ fn plain_headings(src: &str) -> String {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
+pub(crate) enum Tab {
     Guides,
     Changelog,
 }
@@ -175,7 +175,7 @@ pub struct Docs {
 }
 
 impl Docs {
-    fn new(tab: Tab, guide: usize) -> Docs {
+    pub(crate) fn new(tab: Tab, guide: usize) -> Docs {
         Docs {
             tab,
             guide,
