@@ -617,9 +617,7 @@ fn kitty_data(image: &Image, screen: (u32, u32)) -> Payload {
     if image.format != Format::Png {
         if let Ok(p) = image.pixels() {
             let mut fitted = image.fitted.lock().unwrap_or_else(PoisonError::into_inner);
-            if let Some((at, payload)) = &*fitted
-                && *at == screen
-            {
+            if let Some((_, payload)) = fitted.as_ref().filter(|(at, _)| *at == screen) {
                 return payload.clone();
             }
             let p = p.shrunk_to(screen.0.max(1), screen.1.max(1));
