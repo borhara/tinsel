@@ -176,6 +176,9 @@ export async function run(element, wasm, options = {}) {
   function draw() {
     if (broken) return;
     requestAnimationFrame(draw);
+    drawNow();
+  }
+  function drawNow() {
     call(() => {
       const ptr = w.tinsel_frame();
       if (w.tinsel_changed()) show(text(ptr, w.tinsel_frame_len()));
@@ -292,7 +295,13 @@ export async function run(element, wasm, options = {}) {
 
   // the element's size, not the window's, which it can change without: grown to fill a page,
   // say, or put somewhere else
-  const resized = new ResizeObserver(() => w && call(() => w.tinsel_resize(...cells())));
+  // drawn at the new size straight away, not at the next frame, so a page that changes as it
+  // goes (a view transition, say) already has it at that size
+  const resized = new ResizeObserver(() => {
+    if (!w) return;
+    call(() => w.tinsel_resize(...cells()));
+    drawNow();
+  });
   resized.observe(element);
   // out of view as a terminal in the background, so ambient animation rests
   document.addEventListener('visibilitychange', () => call(() => w.tinsel_focus(document.hidden ? 0 : 1)), on);
