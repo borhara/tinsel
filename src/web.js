@@ -7,6 +7,77 @@
 //   run(document.getElementById('app'), 'my_app.wasm', { onQuit: (key) => history.back() });
 
 /**
+ * The keys with names, by the browser's name for them, as src/web.rs numbers them; a
+ * character is 0 (1 with Ctrl, 2 with Alt), and Shift-Tab 5.
+ */
+export const KEYS = {
+  Enter: 3,
+  Tab: 4,
+  Backspace: 6,
+  Delete: 7,
+  Escape: 8,
+  ArrowUp: 9,
+  ArrowDown: 10,
+  ArrowLeft: 11,
+  ArrowRight: 12,
+  Home: 13,
+  End: 14,
+  PageUp: 15,
+  PageDown: 16,
+};
+
+/**
+ * The little of WASI that tinsel's std needs, for an app's `memory`: a clock, randomness for
+ * its hash maps, an empty environment, and stderr to the console. Anything else (files) isn't
+ * there, and is told to `unanswered` by name.
+ *
+ * @param {() => WebAssembly.Memory} memory
+ * @param {(name: string) => void} [unanswered]
+ */
+export function imports(memory, unanswered = () => {}) {
+  const view = () => new DataView(memory().buffer);
+  const wasi = {
+    clock_time_get(_id, _precision, out) {
+      view().setBigUint64(out, BigInt(Math.round(performance.now() * 1e6)), true);
+      return 0;
+    },
+    random_get(ptr, len) {
+      crypto.getRandomValues(new Uint8Array(memory().buffer, ptr, len));
+      return 0;
+    },
+    environ_sizes_get(count, size) {
+      view().setUint32(count, 0, true);
+      view().setUint32(size, 0, true);
+      return 0;
+    },
+    environ_get: () => 0,
+    fd_write(_fd, iovs, count, written) {
+      const decoder = new TextDecoder();
+      let total = 0;
+      for (let i = 0; i < count; i++) {
+        const ptr = view().getUint32(iovs + i * 8, true);
+        const len = view().getUint32(iovs + i * 8 + 4, true);
+        console.warn(decoder.decode(new Uint8Array(memory().buffer, ptr, len)));
+        total += len;
+      }
+      view().setUint32(written, total, true);
+      return 0;
+    },
+    proc_exit(code) {
+      throw new Error(`the app exited with ${code}`);
+    },
+  };
+  const ERRNO_NOSYS = 52;
+  const answer = (t, name) =>
+    t[name] ??
+    (() => {
+      unanswered(name);
+      return ERRNO_NOSYS;
+    });
+  return { wasi_snapshot_preview1: new Proxy(wasi, { get: answer }) };
+}
+
+/**
  * Run the app in `wasm` (a URL, a Response or the bytes) in `element`, which it fills.
  *
  * @param {HTMLElement} element
@@ -21,42 +92,6 @@ export async function run(element, wasm, options = {}) {
   const decoder = new TextDecoder();
   let w;
   const text = (ptr, len) => decoder.decode(new Uint8Array(w.memory.buffer, ptr, len));
-  const view = () => new DataView(w.memory.buffer);
-
-  // The little of WASI that tinsel's std needs: a clock, randomness for its hash maps, an
-  // empty environment, and stderr to the console. Anything else (files) isn't there.
-  const wasi = {
-    clock_time_get(_id, _precision, out) {
-      view().setBigUint64(out, BigInt(Math.round(performance.now() * 1e6)), true);
-      return 0;
-    },
-    random_get(ptr, len) {
-      crypto.getRandomValues(new Uint8Array(w.memory.buffer, ptr, len));
-      return 0;
-    },
-    environ_sizes_get(count, size) {
-      view().setUint32(count, 0, true);
-      view().setUint32(size, 0, true);
-      return 0;
-    },
-    environ_get: () => 0,
-    fd_write(_fd, iovs, count, written) {
-      let total = 0;
-      for (let i = 0; i < count; i++) {
-        const ptr = view().getUint32(iovs + i * 8, true);
-        const len = view().getUint32(iovs + i * 8 + 4, true);
-        console.warn(text(ptr, len));
-        total += len;
-      }
-      view().setUint32(written, total, true);
-      return 0;
-    },
-    proc_exit(code) {
-      throw new Error(`the app exited with ${code}`);
-    },
-  };
-  const ERRNO_NOSYS = 52;
-  const imports = { wasi_snapshot_preview1: new Proxy(wasi, { get: (t, k) => t[k] ?? (() => ERRNO_NOSYS) }) };
 
   // The size of a cell, in the font tinsel's <pre> uses.
   let cell = { w: 8.4, h: 17.5, size: 14 };
@@ -141,22 +176,6 @@ export async function run(element, wasm, options = {}) {
     });
   }
 
-  // Keys as src/web.rs numbers them.
-  const NAMED = {
-    Enter: 3,
-    Tab: 4,
-    Backspace: 6,
-    Delete: 7,
-    Escape: 8,
-    ArrowUp: 9,
-    ArrowDown: 10,
-    ArrowLeft: 11,
-    ArrowRight: 12,
-    Home: 13,
-    End: 14,
-    PageUp: 15,
-    PageDown: 16,
-  };
 
   element.tabIndex = 0;
   element.style.outline = 'none';
@@ -166,7 +185,7 @@ export async function run(element, wasm, options = {}) {
     let kind;
     let ch = 0;
     if (e.key === 'Tab' && e.shiftKey) kind = 5;
-    else if (e.key in NAMED) kind = NAMED[e.key];
+    else if (e.key in KEYS) kind = KEYS[e.key];
     else if ([...e.key].length === 1) {
       kind = e.ctrlKey ? 1 : e.altKey ? 2 : 0;
       ch = (e.ctrlKey ? e.key.toLowerCase() : e.key).codePointAt(0);
@@ -246,6 +265,7 @@ export async function run(element, wasm, options = {}) {
   // out of view as a terminal in the background, so ambient animation rests
   document.addEventListener('visibilitychange', () => call(() => w.tinsel_focus(document.hidden ? 0 : 1)));
 
+  const wasiImports = imports(() => w.memory);
   try {
     const source = typeof wasm === 'string' || wasm instanceof URL ? fetch(wasm) : wasm;
     const bytes = async () => {
@@ -255,10 +275,10 @@ export async function run(element, wasm, options = {}) {
     const resolved = await source;
     const { instance } =
       resolved instanceof Response
-        ? await WebAssembly.instantiateStreaming(resolved.clone(), imports).catch(async () =>
-            WebAssembly.instantiate(await bytes(), imports),
+        ? await WebAssembly.instantiateStreaming(resolved.clone(), wasiImports).catch(async () =>
+            WebAssembly.instantiate(await bytes(), wasiImports),
           )
-        : await WebAssembly.instantiate(resolved, imports);
+        : await WebAssembly.instantiate(resolved, wasiImports);
     w = instance.exports;
     w._initialize?.();
     const [width, height] = cells();
