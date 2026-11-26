@@ -24,6 +24,8 @@ struct Reader {
     height: usize,
     // the last frame drawn, for the page to read out of memory
     drawn: String,
+    // whether it differs from the one before, which the page needn't put in place again
+    changed: bool,
     moving: bool,
 }
 
@@ -53,6 +55,7 @@ pub extern "C" fn start(width: usize, height: usize, light: u32, touch: u32) {
             width,
             height,
             drawn: String::new(),
+            changed: true,
             moving: true,
         })
     });
@@ -113,14 +116,20 @@ pub extern "C" fn mouse(kind: u32, x: usize, y: usize) {
 }
 
 /// Draw the reader `seconds` in, and give where the frame is: a `<pre>`, `frame_len` bytes
-/// long.
+/// long. `changed` says whether it's any different from the last one.
 #[unsafe(no_mangle)]
 pub extern "C" fn frame(seconds: f64) -> *const u8 {
     with(|r| {
         let mut frame = Frame::new(r.width, r.height).at(seconds);
         r.docs.view(&mut frame);
         r.moving = frame.wants_redraw();
-        r.drawn = frame.html_pre();
+        let html = frame.html_pre();
+        // a guide with examples asks for frames all the time, the same as the last while they're
+        // out of sight
+        r.changed = html != r.drawn;
+        if r.changed {
+            r.drawn = html;
+        }
         r.drawn.as_ptr()
     })
 }
@@ -128,6 +137,13 @@ pub extern "C" fn frame(seconds: f64) -> *const u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn frame_len() -> usize {
     with(|r| r.drawn.len())
+}
+
+/// Whether the last frame differs from the one before it, so that the page has something to
+/// put in place.
+#[unsafe(no_mangle)]
+pub extern "C" fn changed() -> u32 {
+    with(|r| r.changed as u32)
 }
 
 /// Whether the last frame has something moving, and wants another soon.
