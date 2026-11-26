@@ -64,7 +64,9 @@ macro_rules! web_app {
     ($app:expr) => {
         #[unsafe(no_mangle)]
         pub extern "C" fn tinsel_start(width: usize, height: usize, light: u32, touch: u32) {
-            $crate::web::__start(width, height, light != 0, touch != 0, || ::std::boxed::Box::new($app));
+            $crate::web::__start(width, height, light != 0, touch != 0, || {
+                ::std::boxed::Box::new($app)
+            });
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn tinsel_resize(width: usize, height: usize) {

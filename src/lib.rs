@@ -130,9 +130,9 @@ mod term;
 pub mod text;
 mod tree;
 mod watch;
-mod widgets;
 #[cfg(feature = "web")]
 pub mod web;
+mod widgets;
 
 pub use block::Block;
 pub use chart::{bars, heatmap, histogram, meter, sparkline};
