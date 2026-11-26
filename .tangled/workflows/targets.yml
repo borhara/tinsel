@@ -31,3 +31,8 @@ steps:
       cargo clippy --lib --features web --target wasm32-wasip1
       cargo build --example web_docs --features web --target wasm32-wasip1
       node --test tests/web.mjs
+  - name: reference
+    command: |
+      # the Reference tab in tinsel docs, written from rustdoc's JSON, still as the code is
+      rustup toolchain install nightly-2026-11-25 --profile minimal
+      node scripts/reference.mjs --check
