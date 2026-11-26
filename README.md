@@ -372,6 +372,8 @@ cargo run -- demo --bar waveform     # the deploy with waveform progress bars
 cargo run -- help                  # the CLI's own help, with its entrance
 cargo run -- prompts               # the interactive questions
 cargo run -- timings               # what Live has learned about your step durations
+cargo run -- docs                  # the guides, in a reader drawn by tinsel, examples running
+cargo run -- docs live             # one guide; piped, it prints as plain text
 ```
 
 The [`examples`](examples) are small and meant to be copied. Run any of them with

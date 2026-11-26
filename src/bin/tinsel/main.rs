@@ -14,6 +14,9 @@
 //!
 //! Spinner names: sparkle, dots, comet, wave, arc, orbit, pulse.
 
+mod demos;
+mod docs;
+
 use std::io::{IsTerminal, Write};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -42,6 +45,10 @@ fn help() -> Help {
     .command("demo [--fail]", "just the deploy, or one that fails part way")
     .command("prompts", "the interactive questions")
     .command("timings [APP]", "what Live has learned about how long steps take")
+    .command(
+        "docs [GUIDE]",
+        "the guides, in a reader drawn by tinsel, its examples running",
+    )
     .command("doctor", "what tinsel decided about this terminal, and why")
     .command("help", "this")
     .flag("--spinner <NAME>", "sparkle, dots, comet, wave, arc, orbit or pulse")
@@ -241,7 +248,7 @@ fn parse(raw: impl IntoIterator<Item = String>) -> Args {
     if args.command.as_deref() == Some("tinsel") {
         args.command = positional.next();
     }
-    let takes_operand = matches!(args.command.as_deref(), Some("showcase" | "timings"));
+    let takes_operand = matches!(args.command.as_deref(), Some("showcase" | "timings" | "docs"));
     args.operand = positional.next();
     let extra = if takes_operand {
         positional.next()
@@ -284,6 +291,7 @@ fn main() {
             tinsel::timings(operand).print();
             gap();
         }
+        Some("docs") => docs::run(operand),
         Some("doctor") => {
             gap();
             tinsel::doctor().print();
