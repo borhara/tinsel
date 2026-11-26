@@ -1,4 +1,4 @@
-# that the Windows and macOS code builds and passes clippy, though nothing here can run it
+# that the Windows, macOS and wasm code builds and passes clippy, though nothing here can run it
 when:
   - event: ["push", "pull_request"]
     branch: ["main"]
@@ -18,7 +18,12 @@ steps:
   - name: clippy
     command: |
       rustup toolchain install stable --profile minimal --component clippy \
-        --target x86_64-pc-windows-msvc --target aarch64-apple-darwin
+        --target x86_64-pc-windows-msvc --target aarch64-apple-darwin --target wasm32-wasip1
       rustup default stable
       cargo clippy --all-targets --target x86_64-pc-windows-msvc
       cargo clippy --all-targets --target aarch64-apple-darwin
+  - name: wasm
+    command: |
+      # the web feature's apps, and the docs page at tinsel.shiv.mov built as one
+      cargo clippy --lib --features web --target wasm32-wasip1
+      cargo build --example web_docs --features web --target wasm32-wasip1
