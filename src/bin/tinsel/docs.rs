@@ -272,8 +272,7 @@ impl Docs {
 
     // "on this page": the page's title, for its top, then its headings, with the row each starts on
     fn contents(&self) -> (Vec<String>, Vec<usize>) {
-        let width = self.drawn.borrow().page.width;
-        let (_, starts) = self.rows(width, 0.0);
+        let (_, starts) = self.rows(text_width(self.drawn.borrow().page), 0.0);
         let title = match self.tab {
             Tab::Guides => GUIDES[self.guide].title,
             Tab::Changelog => "Changelog",
@@ -305,6 +304,11 @@ impl Docs {
     fn current_heading(&self, rows: &[usize]) -> usize {
         rows.iter().rposition(|&row| row <= self.scroll + 1).unwrap_or(0)
     }
+}
+
+// how wide the page's text is inside its panel: clear of the scrollbar, with a gap
+fn text_width(inner: Rect) -> usize {
+    inner.width.saturating_sub(2)
 }
 
 impl App for Docs {
@@ -380,7 +384,7 @@ impl App for Docs {
             .padding(2, 1);
         let inner = panel.inner(main);
         frame.render(main, panel);
-        let width = inner.width.saturating_sub(2);
+        let width = text_width(inner);
         let (rows, starts) = self.rows(width, t);
         let shown = inner.height;
         let scroll = self.scroll.min(rows.len().saturating_sub(shown));
