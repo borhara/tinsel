@@ -43,6 +43,8 @@ pub const GUIDES: &[Guide] = &[
 ];
 
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
+// as `tinsel --version` says it, wherever the reader shows it
+const VERSION: &str = concat!("tinsel ", env!("CARGO_PKG_VERSION"));
 
 /// A page as its parts: runs of Markdown, each `##` heading starting a new one, and the
 /// examples between them, which are drawn fresh every frame.
@@ -392,7 +394,7 @@ impl App for Docs {
                 GUIDES[self.guide].title,
                 format!("{} of {}", self.guide + 1, GUIDES.len()),
             ),
-            Tab::Changelog => ("Changelog", format!("tinsel {}", env!("CARGO_PKG_VERSION"))),
+            Tab::Changelog => ("Changelog", VERSION.to_string()),
         };
         let panel = Panel::new(title)
             .status(status)
@@ -459,17 +461,16 @@ impl App for Docs {
                 ("q", "quit"),
             ],
         };
-        let version = format!("tinsel {}", env!("CARGO_PKG_VERSION"));
         // on a web page, where it isn't plain that a terminal library drew it
         let status = if cfg!(all(feature = "web", target_family = "wasm")) {
             format!(
                 "{} {} {}",
                 paint(palette::MUTED, "these docs were built with tinsel"),
                 paint(palette::MUTED, "·"),
-                version.replace("tinsel ", "tinsel v")
+                VERSION
             )
         } else {
-            version
+            VERSION.to_string()
         };
         Footer::new()
             .keys(if self.hints { keys } else { &[] })
