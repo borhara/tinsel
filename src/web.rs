@@ -75,7 +75,8 @@ pub extern "C" fn resize(width: usize, height: usize) {
 /// which quits it too, is pressed on a page out of habit, so it stays.
 #[unsafe(no_mangle)]
 pub extern "C" fn key(kind: u32, ch: u32) -> u32 {
-    let c = char::from_u32(ch).unwrap_or(' ');
+    // a character that isn't one is dropped, rather than pressed as something else
+    let Some(c) = char::from_u32(ch) else { return 0 };
     let key = match kind {
         0 => Key::Char(c),
         1 => Key::Ctrl(c),
