@@ -367,7 +367,7 @@ pub(crate) fn measured_size() -> Option<(usize, usize)> {
 /// terminal while stdout is a pipe. Falls back as [`width`] and [`height`] do.
 pub(crate) fn stderr_size() -> (usize, usize) {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let measured = ioctl_size_on(2).or_else(ioctl_size);
+    let measured = ioctl_size_on(2).map(|(cols, rows, _)| (cols, rows)).or_else(ioctl_size);
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let measured = ioctl_size();
     (
@@ -378,12 +378,24 @@ pub(crate) fn stderr_size() -> (usize, usize) {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn ioctl_size() -> Option<(usize, usize)> {
-    ioctl_size_on(crate::output::fd())
+    ioctl_size_on(crate::output::fd()).map(|(cols, rows, _)| (cols, rows))
 }
 
-/// The size of the terminal open as `fd`.
+/// How big one cell of the terminal is in pixels, where it says.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn ioctl_size_on(fd: i32) -> Option<(usize, usize)> {
+pub(crate) fn cell_pixels() -> Option<(u32, u32)> {
+    let (cols, rows, (x, y)) = ioctl_size_on(crate::output::fd())?;
+    (x > 0 && y > 0 && rows > 0).then(|| (u32::from(x) / cols as u32, u32::from(y) / rows as u32))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(crate) fn cell_pixels() -> Option<(u32, u32)> {
+    None
+}
+
+/// The size of the terminal open as `fd`, in cells, and in pixels where it says.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn ioctl_size_on(fd: i32) -> Option<(usize, usize, (u16, u16))> {
     #[repr(C)]
     #[allow(dead_code)]
     struct WinSize {
@@ -406,7 +418,7 @@ fn ioctl_size_on(fd: i32) -> Option<(usize, usize)> {
     };
     // SAFETY: TIOCGWINSZ writes exactly one winsize struct through the pointer.
     let ok = unsafe { ioctl(fd, TIOCGWINSZ, &mut ws as *mut WinSize) } == 0;
-    (ok && ws.cols > 0).then_some((ws.cols as usize, ws.rows as usize))
+    (ok && ws.cols > 0).then_some((ws.cols as usize, ws.rows as usize, (ws.xpixel, ws.ypixel)))
 }
 
 #[cfg(windows)]

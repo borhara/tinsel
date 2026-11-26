@@ -291,6 +291,48 @@ fn run_app(app: &mut dyn App) -> io::Result<()> {
     }
 }
 
+/// The cells that changed since `shown`, and the escapes that put `frame`'s pictures where
+/// they go, if any moved. iTerm2's pictures are part of the cells, so when they move every
+/// cell is drawn again, clearing the old ones.
+fn pictures_and_cells(
+    frame: &Frame,
+    shown: Option<&Frame>,
+    pictures: &mut crate::image::Shown,
+    redrawn: bool,
+) -> (String, String) {
+    use crate::image::{Protocol, Support};
+    let protocol = match crate::image::support() {
+        Support::Yes(p) => Some(p),
+        Support::No => None,
+    };
+    let mut images = pictures.before_frame(redrawn, protocol).to_string();
+    let Some(protocol) = protocol else {
+        return (frame.diff(shown), images);
+    };
+    let cell = term::cell_pixels().unwrap_or((8, 16));
+    let wanted: Vec<_> = frame
+        .images()
+        .iter()
+        .filter(|(area, image)| protocol.shows(image.format()) && area.width > 0 && area.height > 0)
+        .map(|(area, image)| {
+            (
+                crate::image::fit((image.width(), image.height()), cell, *area),
+                image.clone(),
+            )
+        })
+        .collect();
+    if !pictures.changes(&wanted) {
+        return (frame.diff(shown), images);
+    }
+    let diff = if protocol == Protocol::Iterm {
+        frame.diff(None)
+    } else {
+        frame.diff(shown)
+    };
+    images.push_str(&pictures.update(&wanted, protocol));
+    (diff, images)
+}
+
 /// Seconds after starting that the window's colour is sent again, once nothing moves.
 const SETTLE: f64 = 0.5;
 
@@ -332,7 +374,9 @@ fn drive(
     // whether the window's colour has been sent again once things settled after starting
     let mut settled = false;
     let mut moving = false;
+    let mut pictures = crate::image::Shown::default();
     loop {
+        let mut redrawn = false;
         // some terminals (iTerm among them) can keep their old margin colour through the
         // first busy moments, so it's sent again once nothing moves
         if !settled && !moving && now() >= SETTLE {
@@ -340,6 +384,7 @@ fn drive(
             window_color = None;
         }
         if redraw_asked(true) {
+            redrawn = true;
             shown = None;
             titled = None;
             cursor = None;
@@ -381,11 +426,11 @@ fn drive(
         let drawn = now();
         let mut frame = blank.at(drawn).ambient_at(ambient.at(drawn));
         app.view(&mut frame);
-        let diff = frame.diff(shown.as_ref());
-        let (hide, place) = frame.cursor_escape(cursor, !diff.is_empty());
+        let (diff, images) = pictures_and_cells(&frame, shown.as_ref(), &mut pictures, redrawn || shown.is_none());
+        let (hide, place) = frame.cursor_escape(cursor, !diff.is_empty() || !images.is_empty());
         let color = frame.cursor_color_escape(cursor_color) + &frame.window_color_escape(window_color);
-        if !diff.is_empty() || !hide.is_empty() || !place.is_empty() || !color.is_empty() {
-            write!(out, "\x1b[?2026h{color}{hide}{diff}{place}\x1b[?2026l")?;
+        if !diff.is_empty() || !hide.is_empty() || !place.is_empty() || !color.is_empty() || !images.is_empty() {
+            write!(out, "\x1b[?2026h{color}{hide}{diff}{images}{place}\x1b[?2026l")?;
             out.flush()?;
         }
         cursor = frame.cursor();
@@ -991,6 +1036,7 @@ fn print_kept() {
 fn leave_screen() {
     if ON_SCREEN.swap(false, Ordering::SeqCst) {
         let mut out = io::stdout();
+        let _ = out.write_all(crate::image::leaving().as_bytes());
         let _ = out.write_all(LEAVE.as_bytes());
         let _ = out.flush();
     }
@@ -1237,6 +1283,48 @@ pub(crate) mod tests {
         );
         let out = String::from_utf8(out).unwrap();
         assert!(out.contains("seen 1") && out.starts_with("\x1b[?2026h"), "{out:?}");
+    }
+
+    #[test]
+    fn pictures_are_sent_once_placed_and_taken_away() {
+        use crate::image::{Image, Protocol, Support, with_support};
+        // a picture for two frames, then none
+        struct Pictured(usize, Image);
+        impl App for Pictured {
+            fn view(&self, frame: &mut Frame) {
+                frame.animate();
+                if self.0 < 2 {
+                    frame.image(Rect::new(0, 0, 10, 4), &self.1);
+                }
+            }
+            fn event(&mut self, event: &Event) -> Flow {
+                self.0 += usize::from(*event == Event::Tick);
+                if self.0 == 4 { Flow::Quit } else { Flow::Continue }
+            }
+        }
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend([0, 0, 0, 16, 0, 0, 0, 16]);
+        let image = Image::new(png).unwrap();
+        let run = |support| {
+            let rx = keys(&[]);
+            let mut out = Vec::new();
+            with_support(support, || {
+                drive(&mut Pictured(0, image.clone()), &rx, &mut out, &mut || (10, 4))
+            })
+            .unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        let kitty = run(Support::Yes(Protocol::Kitty));
+        assert_eq!(kitty.matches("a=t,f=100").count(), 1, "sent once: {kitty:?}");
+        assert_eq!(kitty.matches("a=p,").count(), 1, "placed once, while it stays put");
+        assert_eq!(kitty.matches("a=d,d=i").count(), 1, "and taken away when it's gone");
+        let none = run(Support::No);
+        assert!(
+            !none.contains("\x1b_G") && !none.contains("1337"),
+            "nothing for a terminal that can't"
+        );
+        let iterm = run(Support::Yes(Protocol::Iterm));
+        assert_eq!(iterm.matches("\x1b]1337;File=").count(), 1);
     }
 
     #[test]

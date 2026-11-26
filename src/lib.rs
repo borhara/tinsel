@@ -109,6 +109,7 @@ mod fps;
 mod help;
 pub mod highlight;
 mod history;
+pub mod image;
 mod json;
 mod layout;
 mod live;

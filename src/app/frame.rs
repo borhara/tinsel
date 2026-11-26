@@ -326,6 +326,7 @@ pub struct Frame {
     cursor_color: Option<Rgb>,
     window_color: Option<Rgb>,
     background: Ink,
+    images: Vec<(Rect, crate::image::Image)>,
 }
 
 /// Where a frame shows the terminal's cursor, and how: from [`Frame::cursor`].
@@ -380,6 +381,7 @@ impl Frame {
             cursor_color: None,
             window_color: None,
             background: Ink::Default,
+            images: Vec::new(),
         }
     }
 
@@ -397,6 +399,19 @@ impl Frame {
             cells,
             ..Frame::new(0, 0)
         }
+    }
+
+    /// Shows `image` in `area`, as big as fits without stretching it or making it bigger than
+    /// it is, in the middle, if the terminal can show it at full resolution; see
+    /// [`image::support`](crate::image::support). It sits above the text, so nothing should
+    /// be drawn under it that's meant to be seen.
+    pub fn image(&mut self, area: Rect, image: &crate::image::Image) {
+        self.images.push((area, image.clone()));
+    }
+
+    /// The images this frame shows, and the areas they were given.
+    pub fn images(&self) -> &[(Rect, crate::image::Image)] {
+        &self.images
     }
 
     /// The frame as it is `seconds` after the app started, for testing anything animated.
