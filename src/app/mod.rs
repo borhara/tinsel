@@ -599,6 +599,7 @@ impl Measured {
     }
 
     /// The screen changed size, as a page's can.
+    #[cfg(feature = "web")]
     pub(crate) fn resize(&self, size: (usize, usize)) {
         SIZE.with(|s| s.set(Some(size)));
     }
