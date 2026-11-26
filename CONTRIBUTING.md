@@ -61,17 +61,17 @@ scripts/screenshots.sh
 
 ## The docs on the web
 
-[tinsel.shiv.mov](https://tinsel.shiv.mov) runs `tinsel docs` in a browser: the `web` feature
-builds the reader for wasm, with the few functions the page calls (`src/web.rs`):
+[tinsel.shiv.mov](https://tinsel.shiv.mov) runs `tinsel docs` in a browser, as the `web_docs`
+example: the reader run with `web_app!` (`src/web.rs`), and drawn in the page by `src/web.js`.
 
 ```bash
 rustup target add wasm32-wasip1
-cargo rustc --lib --release --features web --target wasm32-wasip1 --crate-type cdylib
+cargo build --release --example web_docs --features web --target wasm32-wasip1
 ```
 
 The page lives in the [shiv.mov](https://shiv.mov) site, whose `npm run tinsel-wasm` runs this
-and copies `target/wasm32-wasip1/release/tinsel.wasm` in. Run it again after a release, so the
-page has the new guides and version.
+and copies in `target/wasm32-wasip1/release/examples/web_docs.wasm` and `src/web.js`. Run it
+again after a release, so the page has the new guides and version.
 
 ## Changes
 
