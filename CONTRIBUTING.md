@@ -59,6 +59,20 @@ Chrome turns each page into a PNG:
 scripts/screenshots.sh
 ```
 
+## The docs on the web
+
+[tinsel.shiv.mov](https://tinsel.shiv.mov) runs `tinsel docs` in a browser: the `web` feature
+builds the reader for wasm, with the few functions the page calls (`src/web.rs`):
+
+```bash
+rustup target add wasm32-wasip1
+cargo rustc --lib --release --features web --target wasm32-wasip1 --crate-type cdylib
+```
+
+The page lives in the [shiv.mov](https://shiv.mov) site, whose `npm run tinsel-wasm` runs this
+and copies `target/wasm32-wasip1/release/tinsel.wasm` in. Run it again after a release, so the
+page has the new guides and version.
+
 ## Changes
 
 Don't edit `CHANGELOG.md`: release-plz writes it from commit messages when it prepares a
