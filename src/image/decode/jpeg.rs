@@ -2,7 +2,7 @@
 //! chroma subsampling, which is nearly every JPEG there is. Arithmetic-coded, lossless,
 //! hierarchical, 12-bit and CMYK pictures are rare enough to say so instead.
 
-use super::Pixels;
+use super::{MOST_PIXELS, Pixels};
 
 pub(super) fn decode(b: &[u8]) -> Result<Pixels, String> {
     let mut d = Decoder::default();
@@ -156,8 +156,7 @@ impl Decoder {
         let vmax = comps.iter().map(|c| c.v).max().unwrap_or(1);
         let mcus_x = width.div_ceil(8 * hmax);
         let mcus_y = height.div_ceil(8 * vmax);
-        // past the biggest cameras, and a sign of a broken or hostile file
-        if width * height > 80_000_000 {
+        if width * height > MOST_PIXELS {
             return Err(format!("a JPEG of {width}x{height}, too big to show"));
         }
         for c in &mut comps {

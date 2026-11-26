@@ -8,6 +8,9 @@ mod jpeg;
 
 use super::Format;
 
+// past the biggest cameras, and a sign of a broken or hostile file
+const MOST_PIXELS: usize = 80_000_000;
+
 /// A picture as rows of red, green, blue and alpha bytes, top to bottom.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Pixels {

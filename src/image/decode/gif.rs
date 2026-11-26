@@ -1,6 +1,6 @@
 //! GIF's first frame, painted onto its screen: what a terminal showing it would show.
 
-use super::Pixels;
+use super::{MOST_PIXELS, Pixels};
 
 pub(super) fn decode(b: &[u8]) -> Result<Pixels, String> {
     let mut r = Reader { b, at: 0 };
@@ -9,6 +9,9 @@ pub(super) fn decode(b: &[u8]) -> Result<Pixels, String> {
         return Err("not a GIF".into());
     }
     let (width, height) = (r.u16()?, r.u16()?);
+    if width * height > MOST_PIXELS {
+        return Err(format!("a GIF of {width}x{height}, too big to show"));
+    }
     let packed = r.byte()?;
     r.take(2)?; // background colour and aspect ratio
     let global = if packed & 0x80 != 0 {
@@ -29,6 +32,9 @@ pub(super) fn decode(b: &[u8]) -> Result<Pixels, String> {
             }
             0x2c => {
                 let (left, top, w, h) = (r.u16()?, r.u16()?, r.u16()?, r.u16()?);
+                if w * h > MOST_PIXELS {
+                    return Err(format!("a GIF picture of {w}x{h}, too big to show"));
+                }
                 let packed = r.byte()?;
                 let local = if packed & 0x80 != 0 {
                     Some(r.take(3 << ((packed & 7) + 1))?)
@@ -239,5 +245,17 @@ mod tests {
                 .contains("no pictures")
         );
         assert!(decode(b"PNG").is_err());
+    }
+
+    #[test]
+    fn a_gif_saying_it_is_huge_is_an_error_not_an_abort() {
+        // 65535x65535 in forty bytes, which would want gigabytes
+        let mut b = b"GIF89a\xff\xff\xff\xff\x80\x00\x00".to_vec();
+        b.extend([0; 6]);
+        b.extend(b"\x2c\x00\x00\x00\x00\xff\xff\xff\xff\x00\x02\x00\x3b");
+        assert!(decode(&b).unwrap_err().contains("too big"));
+        // a small screen with a huge picture on it, too
+        b[6..10].copy_from_slice(&[1, 0, 1, 0]);
+        assert!(decode(&b).unwrap_err().contains("too big"));
     }
 }
