@@ -69,6 +69,13 @@ rustup target add wasm32-wasip1
 cargo build --release --example web_docs --features web --target wasm32-wasip1
 ```
 
+`tests/web.mjs` checks the page's side and the app's still agree (the exports, the keys'
+numbers, and what's asked of WASI), with Node's own test runner, after that build:
+
+```bash
+node --test tests/web.mjs
+```
+
 The page lives in the [shiv.mov](https://shiv.mov) site, whose `npm run tinsel-wasm` runs this
 and copies in `target/wasm32-wasip1/release/examples/web_docs.wasm` and `src/web.js`. Run it
 again after a release, so the page has the new guides and version.
