@@ -10,7 +10,7 @@
 
 use std::cell::RefCell;
 
-use crate::app::{App, Event, Frame, Key, Mouse, MouseKind};
+use crate::app::{App, Event, Flow, Frame, Key, Mouse, MouseKind};
 use crate::docs::{Docs, Tab};
 
 // what docs::run calls for a guide that isn't there, which the page never asks for
@@ -67,9 +67,10 @@ pub extern "C" fn resize(width: usize, height: usize) {
 
 /// A key, as `kind`: 0 a character, 1 Ctrl and 2 Alt with one, then Enter, Tab, Shift-Tab,
 /// Backspace, Delete, Esc, the arrows (up, down, left, right), Home, End, Page Up and Page
-/// Down. Quitting is left to closing the page.
+/// Down. Gives 1 when it's `q` quitting the reader, for the page to go somewhere else; Esc,
+/// which quits it too, is pressed on a page out of habit, so it stays.
 #[unsafe(no_mangle)]
-pub extern "C" fn key(kind: u32, ch: u32) {
+pub extern "C" fn key(kind: u32, ch: u32) -> u32 {
     let c = char::from_u32(ch).unwrap_or(' ');
     let key = match kind {
         0 => Key::Char(c),
@@ -89,9 +90,10 @@ pub extern "C" fn key(kind: u32, ch: u32) {
         14 => Key::End,
         15 => Key::PageUp,
         16 => Key::PageDown,
-        _ => return,
+        _ => return 0,
     };
-    with(|r| r.docs.event(&Event::Key(key)));
+    let flow = with(|r| r.docs.event(&Event::Key(key)));
+    (flow == Flow::Quit && key == Key::Char('q')) as u32
 }
 
 /// The mouse at cell `x`, `y`, as `kind`: 0 a click, 1 a release, 2 a drag, 3 the wheel up
