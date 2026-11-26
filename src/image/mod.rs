@@ -174,6 +174,18 @@ impl Image {
         }
     }
 
+    /// Whether `protocol` can be sent it now: not while it's still decoding for kitty, nor
+    /// once that's failed, when kitty would have nothing to show. Starts the decode if it's
+    /// yet to start, for a picture put in a frame without a [`Support::check`] first.
+    pub(crate) fn ready_for(&self, protocol: Protocol) -> bool {
+        #[cfg(feature = "decode")]
+        if protocol == Protocol::Kitty && self.format != Format::Png {
+            self.start_decoding();
+            return matches!(self.pixels.get(), Some(Ok(_)));
+        }
+        protocol.shows(self.format)
+    }
+
     /// Whether it's still being decoded on another thread, as a big JPEG or GIF is the first
     /// time kitty is to show it. Until it's done the run loop holds it back, so an app can
     /// show something else there meanwhile; something that moves, so the next frame comes.
@@ -782,7 +794,13 @@ mod tests {
             "f=24,s=16,v=10",
             "shrunk to what the screen holds"
         );
+        assert!(image.ready_for(Protocol::Kitty) && image.ready_for(Protocol::Iterm));
         let broken = Image::new(include_bytes!("decode/testdata/baseline.jpg")[..300].to_vec()).unwrap();
+        assert!(
+            !broken.ready_for(Protocol::Kitty),
+            "kitty would get nothing it can show"
+        );
+        assert!(broken.ready_for(Protocol::Iterm), "iTerm2 reads the file itself");
         assert!(
             Support::Yes(Protocol::Kitty)
                 .check(&broken)

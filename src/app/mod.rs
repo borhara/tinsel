@@ -314,7 +314,7 @@ fn pictures_and_cells(
     let wanted: Vec<_> = frame
         .images()
         .iter()
-        .filter(|(area, image)| protocol.shows(image.format()) && !image.pending() && area.width > 0 && area.height > 0)
+        .filter(|(area, image)| area.width > 0 && area.height > 0 && image.ready_for(protocol))
         .map(|(area, image)| {
             (
                 crate::image::fit((image.width(), image.height()), cell, *area),
