@@ -17,6 +17,8 @@ use std::fmt::Write;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+#[cfg(feature = "decode")]
+use std::sync::{Mutex, PoisonError};
 
 use crate::app::Rect;
 
@@ -44,7 +46,18 @@ pub struct Image {
     pixels: Arc<OnceLock<Result<decode::Pixels, String>>>,
     #[cfg(feature = "decode")]
     decoding: Arc<AtomicBool>,
+    // the pixels as last sent to kitty, shrunk to a screen of this size, so sending it again
+    // after the screen's been left costs nothing
+    #[cfg(feature = "decode")]
+    fitted: Arc<Mutex<Option<Fitted>>>,
 }
+
+// base64 for kitty, and the keys saying what it is
+type Payload = (String, String);
+
+// a payload, and the screen it was shrunk to
+#[cfg(feature = "decode")]
+type Fitted = ((u32, u32), Payload);
 
 // one image, however many times it's cloned
 impl PartialEq for Image {
@@ -141,6 +154,8 @@ impl Image {
             pixels: Arc::default(),
             #[cfg(feature = "decode")]
             decoding: Arc::default(),
+            #[cfg(feature = "decode")]
+            fitted: Arc::default(),
         })
     }
 
@@ -164,12 +179,19 @@ impl Image {
         if self.bytes.len() < DECODE_HERE {
             let _ = self.pixels();
         } else if !self.decoding.swap(true, Ordering::Relaxed) {
-            let (bytes, cell) = (Arc::clone(&self.bytes), Arc::clone(&self.pixels));
-            let (format, orientation) = (self.format, self.orientation);
+            let image = self.clone();
             std::thread::spawn(move || {
                 #[cfg(test)]
                 let _held = HOLD.lock();
-                cell.get_or_init(|| decode::decode(&bytes, format, orientation));
+                // shrunk here too, for the screen as it is, so the run loop needn't
+                if image.pixels().is_ok() {
+                    let cell = crate::term::cell_pixels().unwrap_or((8, 16));
+                    let screen = (
+                        crate::term::width() as u32 * cell.0,
+                        crate::term::height() as u32 * cell.1,
+                    );
+                    let _ = kitty_data(&image, screen);
+                }
             });
         }
     }
@@ -590,20 +612,28 @@ fn kitty_send(out: &mut String, image: &Image, screen: (u32, u32)) {
 }
 
 // the base64 to send kitty, and the keys saying what it is
-fn kitty_data(image: &Image, screen: (u32, u32)) -> (String, String) {
+fn kitty_data(image: &Image, screen: (u32, u32)) -> Payload {
     #[cfg(feature = "decode")]
     if image.format != Format::Png {
         if let Ok(p) = image.pixels() {
+            let mut fitted = image.fitted.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some((at, payload)) = &*fitted
+                && *at == screen
+            {
+                return payload.clone();
+            }
             let p = p.shrunk_to(screen.0.max(1), screen.1.max(1));
             let (bytes, f) = if p.opaque() {
                 (p.rgba.chunks_exact(4).flat_map(|c| &c[..3]).copied().collect(), 24)
             } else {
                 (p.rgba, 32)
             };
-            return (
+            let payload = (
                 crate::clipboard::base64(&bytes),
                 format!("f={f},s={},v={}", p.width, p.height),
             );
+            *fitted = Some((screen, payload.clone()));
+            return payload;
         }
     }
     let _ = screen;
