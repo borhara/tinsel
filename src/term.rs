@@ -385,7 +385,12 @@ fn ioctl_size() -> Option<(usize, usize)> {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn cell_pixels() -> Option<(u32, u32)> {
     let (cols, rows, (x, y)) = ioctl_size_on(crate::output::fd())?;
-    (x > 0 && y > 0 && rows > 0).then(|| (u32::from(x) / cols as u32, u32::from(y) / rows as u32))
+    if cols == 0 || rows == 0 {
+        return None;
+    }
+    // a terminal that gives fewer pixels than cells hasn't really said
+    let cell = (u32::from(x) / cols as u32, u32::from(y) / rows as u32);
+    (cell.0 > 0 && cell.1 > 0).then_some(cell)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
