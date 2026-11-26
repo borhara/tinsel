@@ -328,6 +328,8 @@ pub(crate) fn is_terminal() -> bool {
 }
 
 /// The file descriptor tinsel draws on.
+// asked only where the terminal is measured and set up, so not on wasm, say
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 pub(crate) fn fd() -> i32 {
     match target() {
         Target::Stdout => 1,
@@ -336,6 +338,7 @@ pub(crate) fn fd() -> i32 {
 }
 
 /// [`fd`] as already decided, deciding nothing: safe in a signal handler.
+#[cfg(any(unix, windows))]
 pub(crate) fn fd_now() -> i32 {
     if TARGET.load(Ordering::Relaxed) == 2 { 2 } else { 1 }
 }
