@@ -176,6 +176,9 @@ pub struct Docs {
     drawn: RefCell<Drawn>,
     // whether the footer says which keys do what, which a touch screen has no use for
     pub(crate) hints: bool,
+    // whether the footer says tinsel drew the docs, as on a web page, where it isn't plain
+    // that a terminal library did
+    pub(crate) credit: bool,
 }
 
 impl Docs {
@@ -193,6 +196,7 @@ impl Docs {
             wrapped: RefCell::default(),
             drawn: RefCell::default(),
             hints: true,
+            credit: false,
         }
     }
 
@@ -461,8 +465,7 @@ impl App for Docs {
                 ("q", "quit"),
             ],
         };
-        // on a web page, where it isn't plain that a terminal library drew it
-        let status = if cfg!(all(feature = "web", target_family = "wasm")) {
+        let status = if self.credit {
             format!(
                 "{} {} {}",
                 paint(palette::MUTED, "these docs were built with tinsel"),

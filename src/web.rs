@@ -45,6 +45,7 @@ pub extern "C" fn start(width: usize, height: usize, light: u32, touch: u32) {
     crate::set_theme(if light != 0 { crate::Theme::Light } else { crate::Theme::Dark });
     let mut docs = Docs::new(Tab::Guides, 0);
     docs.hints = touch == 0;
+    docs.credit = true;
     docs.event(&Event::Resize { width, height });
     READER.with(|r| {
         *r.borrow_mut() = Some(Reader {
