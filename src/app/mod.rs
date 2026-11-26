@@ -597,6 +597,11 @@ impl Measured {
         SIZE.with(|s| s.set(Some(size)));
         Measured
     }
+
+    /// The screen changed size, as a page's can.
+    pub(crate) fn resize(&self, size: (usize, usize)) {
+        SIZE.with(|s| s.set(Some(size)));
+    }
 }
 
 impl Drop for Measured {

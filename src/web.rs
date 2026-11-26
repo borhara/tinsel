@@ -121,7 +121,7 @@ struct Running {
     drawn: String,
     changed: bool,
     _clock: Clock,
-    _size: Measured,
+    measured: Measured,
 }
 
 thread_local! {
@@ -159,7 +159,7 @@ pub fn __start(width: usize, height: usize, light: bool, touch: bool, app: impl 
         drawn: String::new(),
         changed: false,
         _clock: Clock::start(start),
-        _size: Measured::start((width, height)),
+        measured: Measured::start((width, height)),
     };
     // told before the first frame, so it can lay itself out before it's drawn
     send(&mut running, &Event::Resize { width, height });
@@ -173,7 +173,7 @@ pub fn __resize(width: usize, height: usize) {
             return;
         }
         r.size = (width, height);
-        Measured::start(r.size);
+        r.measured.resize(r.size);
         send(r, &Event::Resize { width, height });
     });
 }
