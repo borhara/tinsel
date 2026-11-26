@@ -343,13 +343,14 @@ pub(crate) fn fd_now() -> i32 {
 /// The stream tinsel draws on.
 pub(crate) fn writer() -> Box<dyn Write> {
     match target() {
-        Target::Stdout => Box::new(std::io::stdout().lock()),
-        Target::Stderr => Box::new(std::io::stderr().lock()),
+        Target::Stdout => Box::new(crate::glyphs::Glyphed(std::io::stdout().lock())),
+        Target::Stderr => Box::new(crate::glyphs::Glyphed(std::io::stderr().lock())),
     }
 }
 
 /// Write to the stream tinsel draws on, and flush.
 pub(crate) fn write(s: &str) {
+    let s = &crate::glyphs::for_terminal(s);
     if kept(s) {
         return;
     }
@@ -360,6 +361,7 @@ pub(crate) fn write(s: &str) {
 
 /// Write a line to stderr, for errors, which go there whatever the target.
 pub(crate) fn err_line(s: &str) {
+    let s = &crate::glyphs::for_terminal(s);
     if kept(&format!("{s}\n")) {
         return;
     }

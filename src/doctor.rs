@@ -7,7 +7,7 @@ use crate::style::{Accent, ColorMode, Theme, bold, paint};
 use crate::text;
 
 /// Every setting tinsel reads from the environment.
-const SETTINGS: [&str; 7] = [
+const SETTINGS: [&str; 10] = [
     "TINSEL_THEME",
     "TINSEL_ACCENT",
     "TINSEL_OUTPUT",
@@ -15,10 +15,14 @@ const SETTINGS: [&str; 7] = [
     "TINSEL_FPS",
     "TINSEL_NO_FOCUS",
     "TINSEL_NO_HISTORY",
+    "TINSEL_GLYPHS",
+    "TINSEL_AMBIGUOUS",
+    "TINSEL_IMAGES",
 ];
 
 /// What tinsel decided about the terminal it's drawing on, and why: the colour mode, theme,
-/// size, output shape, target, accent, frame rate, focus, history and notifications, each
+/// size, output shape, target, accent, frame rate, glyphs, ambiguous width, pictures,
+/// focus, history and notifications, each
 /// with what decided it (`stdout isn't a terminal`, `COLORFGBG=15;0`, `set in code`). Then
 /// a warning for each setting in the environment it can't use: a misspelt `TINSEL_` name,
 /// or a value it doesn't understand, which would otherwise be ignored without a word.
@@ -106,6 +110,27 @@ pub fn doctor() -> Block {
         format!("{fps} a second"),
         source("TINSEL_FPS", from_env, fps == crate::fps::DEFAULT_FPS),
     ));
+
+    let glyphs = if crate::glyphs::ascii() { "ASCII" } else { "Unicode" };
+    rows.push(("glyphs", glyphs.into(), crate::glyphs::glyphs_why()));
+    let wide = if crate::glyphs::ambiguous_wide() {
+        "wide"
+    } else {
+        "narrow"
+    };
+    rows.push(("ambiguous width", wide.into(), crate::glyphs::ambiguous_why()));
+
+    let pictures = match crate::image::support() {
+        crate::image::Support::Yes(crate::image::Protocol::Kitty) => "kitty graphics",
+        crate::image::Support::Yes(crate::image::Protocol::Iterm) => "iTerm2 images",
+        _ => "none",
+    };
+    let images_env = env("TINSEL_IMAGES").filter(|v| matches!(v.as_str(), "kitty" | "iterm" | "none"));
+    let why = match images_env {
+        Some(v) => format!("TINSEL_IMAGES={v}"),
+        None => "from TERM, TERM_PROGRAM and TMUX".into(),
+    };
+    rows.push(("pictures", pictures.into(), why));
 
     let (focus, why) = crate::watch::why();
     rows.push(("focus", on_off(focus), why));
@@ -196,6 +221,15 @@ fn problems(vars: &[(String, String)]) -> Vec<String> {
             "TINSEL_ACCENT" if Accent::from_name(value).is_none() => format!(
                 "TINSEL_ACCENT={value} is ignored: it can be pink, violet, blue, teal, orange or a hue in degrees"
             ),
+            "TINSEL_GLYPHS" if !matches!(value.trim().to_ascii_lowercase().as_str(), "unicode" | "ascii") => {
+                format!("TINSEL_GLYPHS={value} is ignored: it can be unicode or ascii")
+            }
+            "TINSEL_AMBIGUOUS" if !matches!(value.trim().to_ascii_lowercase().as_str(), "wide" | "narrow") => {
+                format!("TINSEL_AMBIGUOUS={value} is ignored: it can be wide or narrow")
+            }
+            "TINSEL_IMAGES" if !matches!(value.as_str(), "kitty" | "iterm" | "none") => {
+                format!("TINSEL_IMAGES={value} is ignored: it can be kitty, iterm or none")
+            }
             "TINSEL_FPS" => match value.trim().parse::<u32>() {
                 Err(_) => format!("TINSEL_FPS={value} is ignored: it's a number of frames a second"),
                 Ok(n) if !(1..=240).contains(&n) => {
@@ -364,6 +398,9 @@ mod tests {
             "target",
             "accent",
             "frame rate",
+            "glyphs",
+            "ambiguous width",
+            "pictures",
             "focus",
             "history",
             "notifications",

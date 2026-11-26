@@ -281,7 +281,11 @@ impl Cell {
 
     /// The character, with any marks on it.
     fn push_to(&self, out: &mut String) {
-        out.push(self.ch);
+        out.push(if crate::glyphs::ascii() {
+            crate::glyphs::ascii_for(self.ch).unwrap_or(self.ch)
+        } else {
+            self.ch
+        });
         out.extend(self.marks.iter().filter(|&&m| m != '\0'));
     }
 

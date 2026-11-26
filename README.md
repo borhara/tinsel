@@ -406,7 +406,7 @@ The [`examples`](examples) are small and meant to be copied. Run any of them wit
 | **apps** | `app::run` full-screen apps, drawn only when something changes or a frame asks (`animate`, `animate_at`, `redraw_at`) · `Panel` · `List` · `Grid` · `ScrollView` · `TextInput` (with a `History` and its own idea of a word) · `TextArea` · `Scrollbar` · `Tabs` · `Plot` · `Stat` · `big` · `hints` · `Sparkles` · `Rect` layout with `rows` / `columns` · keys with their modifiers, read and written in vim's notation (`<C-a>`) and shown as symbols (`⌃A`), mouse and resize events · `Job` for work on another thread · `app::snapshot` for tests · `Frame::html` for screenshots · `Frame::image` for pictures at full resolution in kitty, Ghostty, Konsole, iTerm2 and WezTerm, with `image::support` to say so where the terminal can't (PNG everywhere, and JPEG and GIF in kitty too with the `decode` feature) |
 | **command line** | `Cli` for flags, options, arguments and subcommands · `--help` and `--version` for free · mistakes as a `Report` with "did you mean" · `value_as` for typed values |
 | **questions** | `prompt::confirm` · `input` / `Input` (validation, placeholders, line editing) · `password` · `number` · `date` · `select` / `Select` · `multiselect` / `MultiSelect` (filter as you type, headings, disabled options with a reason, validation) · `Dropdown` for long lists (notes, badges, your own answer) · `.back()` to go back a question · `Form` to ask several, then look the answers over · `editor` · suggestions and path completion · `confirm_typing` |
-| **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_focus` · `set_history` · `set_accent` · `set_theme` · `set_color_mode` · `set_fps` · `set_ctrl_c` · `timings` |
+| **setup** | `install_panic_hook` · `set_output` (`Json`, `Quiet`) · `set_target` (stderr) · `set_focus` · `set_history` · `set_accent` · `set_theme` · `set_color_mode` · `set_glyphs` · `set_ambiguous_wide` · `set_fps` · `set_ctrl_c` · `timings` |
 | **helpers** | `text::{width, width_with_tabs, pad, truncate, truncate_start, wrap, strip_ansi, content_width, fuzzy, highlight}` · `terminal_width` · `format::{bytes, duration, count, grouped, ago, ago_long, plural, local_clock}` · `clipboard::{copy, paste}` (system tools, or OSC 52 over ssh) |
 
 Full reference with examples for every item: **[docs.rs/tinsel](https://docs.rs/tinsel)**.
@@ -502,7 +502,13 @@ everywhere.
 - **Terminal size** comes from `ioctl` on macOS and Linux. Other Unixes, the BSDs among
   them, fall back to `$COLUMNS` and `$LINES`, then 80×24.
 - **Widths** follow the Unicode 17 tables built into tinsel, so CJK, emoji and combining
-  marks line up without a lookup at run time.
+  marks line up without a lookup at run time. A terminal set to draw ambiguous characters
+  wide, as one set up for Chinese, Japanese or Korean can, wants `TINSEL_AMBIGUOUS=wide`
+  (or `set_ambiguous_wide`): text is then measured as it draws it, and tinsel's own lines
+  and symbols, which are ambiguous themselves, go out in ASCII so layouts hold.
+- **Glyphs** are Unicode's lines, blocks, dots and spinners, and plain ASCII on the Linux
+  console, whose font has few of them, or with `TINSEL_GLYPHS=ascii` (`set_glyphs`). Every
+  widget follows, as the switch happens on the way to the terminal.
 - **Windows** uses the console API for keys and size (Windows Terminal or a Windows 10+
   console). Focus awareness and background detection need a terminal that answers, which
   there means Windows Terminal; the older console quietly goes without rather than wait

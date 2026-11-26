@@ -262,7 +262,7 @@ impl Frame {
         }
         let (cols, rows) = crate::term::stderr_size();
         let (s, drawn) = frame(self.drawn, lines, cols, rows);
-        eprint!("{s}");
+        eprint!("{}", crate::glyphs::for_terminal(&s));
         let _ = io::stderr().flush();
         self.drawn = drawn;
     }

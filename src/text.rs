@@ -177,7 +177,9 @@ pub fn strip_ansi(s: &str) -> String {
 
 /// Columns a single character takes up, by Unicode 17's tables: two for wide (CJK and
 /// emoji), none for combining marks, joiners, variation selectors and control characters,
-/// one for the rest, a tab included (it's drawn as a space). Text is
+/// one for the rest, a tab included (it's drawn as a space). Ambiguous characters take two
+/// where the terminal draws them wide (see [`ambiguous_wide`](crate::ambiguous_wide)), but
+/// for tinsel's own symbols, which go to such a terminal as ASCII. Text is
 /// better measured with [`width`], which knows that a character and what builds on it, such
 /// as a flag's two letters or a family joined into one emoji, are drawn as one.
 pub fn char_width(c: char) -> usize {
@@ -187,14 +189,19 @@ pub fn char_width(c: char) -> usize {
     } else if n < 0x20 || (0x7F..0xA0).contains(&n) {
         0
     } else if n < 0x300 {
-        1
+        if n >= 0xA1 && wide_ambiguous(c) { 2 } else { 1 }
     } else if in_table(tables::ZERO, c) {
         0
-    } else if in_table(tables::WIDE, c) {
+    } else if in_table(tables::WIDE, c) || wide_ambiguous(c) {
         2
     } else {
         1
     }
+}
+
+// an ambiguous character that the terminal draws two columns wide
+fn wide_ambiguous(c: char) -> bool {
+    in_table(tables::AMBIGUOUS, c) && crate::glyphs::ambiguous_wide() && crate::glyphs::ascii_for(c).is_none()
 }
 
 /// Columns the text takes up on screen, ignoring escape codes.
