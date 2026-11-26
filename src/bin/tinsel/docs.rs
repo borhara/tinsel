@@ -465,21 +465,20 @@ impl App for Docs {
                 ("q", "quit"),
             ],
         };
-        let status = if self.credit {
-            format!(
-                "{} {} {}",
-                paint(palette::MUTED, "these docs were built with tinsel"),
-                paint(palette::MUTED, "·"),
-                VERSION
-            )
+        let keys = if self.hints { keys } else { &[] };
+        // in from the edges as far as the top line is
+        let footer = Rect::new(2, h - 1, w - 4, 1);
+        const CREDIT: &str = "these docs were built with tinsel · ";
+        // the credit goes first when short of room, so the version and a key's hint still show
+        let first_key = keys.first().map_or(0, |(k, what)| {
+            2 + tinsel::text::width(k) + 1 + tinsel::text::width(what)
+        });
+        let status = if self.credit && tinsel::text::width(CREDIT) + VERSION.len() + first_key <= footer.width {
+            format!("{}{VERSION}", paint(palette::MUTED, CREDIT))
         } else {
             VERSION.to_string()
         };
-        Footer::new()
-            .keys(if self.hints { keys } else { &[] })
-            .status(status)
-            // in from the edges as far as the top line is
-            .render(Rect::new(2, h - 1, w - 4, 1), frame);
+        Footer::new().keys(keys).status(status).render(footer, frame);
 
         if self.has_examples() {
             frame.animate();
@@ -752,6 +751,29 @@ mod tests {
         assert!(screen(&mut docs, 100).lines().next().unwrap().contains("search  /"));
         docs.hints = false;
         assert!(!screen(&mut docs, 100).lines().next().unwrap().contains("search"));
+    }
+
+    #[test]
+    fn a_narrow_footer_drops_the_credit_before_the_version() {
+        let mut docs = Docs::new(Tab::Guides, 0);
+        docs.credit = true;
+        let last = |docs: &mut Docs, w| screen(docs, w).lines().last().unwrap().to_string();
+        let wide = last(&mut docs, 100);
+        assert!(
+            wide.contains("these docs were built with tinsel · tinsel ") && wide.contains("j k scroll"),
+            "{wide}"
+        );
+        let narrow = last(&mut docs, 50);
+        assert!(
+            !narrow.contains("built") && narrow.contains(VERSION) && narrow.contains("j k scroll"),
+            "{narrow}"
+        );
+        docs.hints = false;
+        assert!(
+            last(&mut docs, 54).contains("built with tinsel · tinsel "),
+            "with no keys, room for it"
+        );
+        assert!(last(&mut docs, 40).trim_end().ends_with(VERSION));
     }
 
     #[test]
