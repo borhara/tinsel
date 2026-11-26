@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+## [1.3.0](https://github.com/borhara/tinsel/compare/v1.2.1...v1.3.0) - 2026-11-26
+
+### Added
+
+- *(web)* a page's app is drawn at its element's new size straight away, not a frame later
+- *(web)* a page's app follows its element's size, and run() gives back stop() to end it
+- *(cli)* tinsel docs has an API Reference tab, every public item written from the code
+- *(web)* web_app! runs any full-screen app on a web page, drawn by tinsel::web::SCRIPT
+- *(web)* q on the docs' web page tells the page to leave
+- *(web)* the docs on a touch screen leave out the keys' hints
+- *(web)* the docs on a web page say they were built with tinsel, by its version
+- *(web)* a web feature builds tinsel docs for wasm, for a web page to run
+
+### Fixed
+
+- *(web)* building without the web feature doesn't warn that resizing a page goes unused
+- *(web)* a panic in a page's app still reaches the console, and other tests' panics their output
+- *(web)* app::size gives a page's new size after it changes, not the terminal's
+- *(web)* building for wasm no longer warns about the terminal's file descriptor going unused
+- *(cli)* tinsel docs gives its version as tinsel v1.2.1
+- *(web)* a key that isn't a character is dropped, not pressed as a space
+- *(web)* a narrow docs page drops its credit line before tinsel's version or the keys' hints
+- *(web)* the docs give tinsel's version one way, as tinsel --version does
+- *(web)* the docs on a touch screen don't offer / to search
+- *(cli)* tinsel docs keeps its footer in from the edges, as its top line is
+- *(web)* the docs' footer starts in lowercase
+
+### Other
+
+- fail while the API reference is behind the code
+- the README and CONTRIBUTING say where the API reference comes from
+- test the web page's side against the docs page's wasm
+- *(web)* the page's side and the app's agree on exports, keys and WASI, checked with node
+- *(web)* the page's side gives its WASI and its keys' numbers on their own, for testing
+- *(web)* name the recording app's shared types, as clippy asks
+- build the web feature and the docs page for wasm
+- *(web)* the page's driver passes on resizes, ticks, the mouse, focus, Ctrl-C and panics
+- *(web)* format web_app! and the web module as rustfmt does
+- *(web)* the browser guide says how to put an app on your site
+- *(web)* the README and CONTRIBUTING say any app can run on a web page
+- *(web)* tinsel docs has a guide to running an app in a browser
+- *(web)* CONTRIBUTING says how the docs are built for the web
+- the README says the docs reader runs in a browser at tinsel.shiv.mov
+- *(web)* say which of WASI the docs' page has to answer
+- *(web)* the docs say when a frame is the same as the last, for the page to leave it be
+- *(web)* the page turns on the docs' credit line, as it turns off their hints
+
 ## [1.2.1](https://github.com/borhara/tinsel/compare/v1.2.0...v1.2.1) - 2026-11-26
 
 ### Fixed
