@@ -6,6 +6,10 @@
 //! it, fitted to the area and keeping its shape, and takes it away once a frame no longer
 //! has it. A picture sits above the text, so nothing else should be drawn where it goes.
 //!
+//! iTerm2 reads PNG, JPEG and GIF files itself. kitty's protocol takes PNG files as they
+//! are, and JPEG and GIF as pixels, which the `decode` feature decodes in tinsel, shrunk to
+//! no bigger than the screen.
+//!
 //! [`Frame::image`]: crate::app::Frame::image
 
 use std::cell::Cell;
@@ -16,9 +20,13 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::app::Rect;
 
-/// An image file's bytes, with its format and size read from its header. Nothing is
-/// decoded: the terminal does that.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(feature = "decode")]
+mod decode;
+
+/// An image file's bytes, with its format and size read from its header. The terminal
+/// decodes it, except where kitty is sent a JPEG or GIF, which the `decode` feature turns
+/// into pixels first.
+#[derive(Clone)]
 pub struct Image {
     bytes: Rc<[u8]>,
     format: Format,
@@ -26,6 +34,31 @@ pub struct Image {
     height: u32,
     // the same for every frame it's put in, so the terminal is sent it once
     id: u32,
+    // decoded the first time kitty needs it, and kept
+    #[cfg(feature = "decode")]
+    pixels: Rc<std::cell::OnceCell<Result<decode::Pixels, String>>>,
+}
+
+// one image, however many times it's cloned
+impl PartialEq for Image {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Image {}
+
+impl std::fmt::Debug for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Image({} {}x{}, {} bytes)",
+            self.format.name(),
+            self.width,
+            self.height,
+            self.bytes.len()
+        )
+    }
 }
 
 /// The kinds of image file [`Image::new`] knows.
@@ -80,7 +113,18 @@ impl Image {
             width,
             height,
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            #[cfg(feature = "decode")]
+            pixels: Rc::default(),
         })
+    }
+
+    /// Its pixels, decoded once and kept, or why they can't be had.
+    #[cfg(feature = "decode")]
+    pub(crate) fn pixels(&self) -> Result<&decode::Pixels, &str> {
+        self.pixels
+            .get_or_init(|| decode::decode(&self.bytes, self.format))
+            .as_ref()
+            .map_err(String::as_str)
     }
 
     /// Whether `bytes` start the way an image tinsel knows does, as a cheap test before
@@ -143,7 +187,8 @@ fn sniff(b: &[u8]) -> Option<(Format, u32, u32)> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Protocol {
-    /// kitty's graphics protocol: kitty, Ghostty and Konsole. It takes PNG as it is.
+    /// kitty's graphics protocol: kitty, Ghostty and Konsole. It takes PNG as it is, and
+    /// JPEG and GIF as pixels with the `decode` feature.
     Kitty,
     /// iTerm2's inline images: iTerm2 and WezTerm. The terminal reads PNG, JPEG and GIF.
     Iterm,
@@ -153,7 +198,7 @@ impl Protocol {
     /// Whether this protocol can show `format` without tinsel decoding it.
     pub fn shows(self, format: Format) -> bool {
         match self {
-            Protocol::Kitty => format == Format::Png,
+            Protocol::Kitty => format == Format::Png || cfg!(feature = "decode"),
             Protocol::Iterm => true,
         }
     }
@@ -183,7 +228,13 @@ impl Support {
     /// assert!(Support::Yes(Protocol::Iterm).check_format(tinsel::image::Format::Jpeg).is_ok());
     /// ```
     pub fn check(self, image: &Image) -> Result<Protocol, String> {
-        self.check_format(image.format)
+        let protocol = self.check_format(image.format)?;
+        // kitty needs the pixels, so a picture that won't decode can't be shown
+        #[cfg(feature = "decode")]
+        if protocol == Protocol::Kitty && image.format != Format::Png {
+            image.pixels().map_err(|why| format!("can't read it: {why}"))?;
+        }
+        Ok(protocol)
     }
 
     /// [`check`](Support::check), for a format.
@@ -313,7 +364,7 @@ impl Shown {
     /// The escapes that take the pictures on screen away and put `wanted` there instead,
     /// each already fitted to its area. For iTerm2, whose pictures are part of the cells,
     /// the cells under the old ones have to be drawn again first.
-    pub(crate) fn update(&mut self, wanted: &[(Rect, Image)], protocol: Protocol) -> String {
+    pub(crate) fn update(&mut self, wanted: &[(Rect, Image)], protocol: Protocol, screen: (u32, u32)) -> String {
         let mut out = String::new();
         if protocol == Protocol::Kitty {
             for (_, id) in &self.placed {
@@ -324,7 +375,7 @@ impl Shown {
         for (at, image) in wanted {
             ANY_SENT.store(true, Ordering::Relaxed);
             if protocol == Protocol::Kitty && !self.sent.contains(&image.id) {
-                kitty_send(&mut out, image);
+                kitty_send(&mut out, image, screen);
                 self.sent.push(image.id);
             }
             let _ = write!(out, "\x1b[{};{}H", at.y + 1, at.x + 1);
@@ -353,19 +404,42 @@ impl Shown {
     }
 }
 
-// the PNG to kitty in pieces of at most 4096 base64 characters, as the protocol asks
-fn kitty_send(out: &mut String, image: &Image) {
-    let data = crate::clipboard::base64(&image.bytes);
+/// The image to kitty in pieces of at most 4096 base64 characters, as the protocol asks: a
+/// PNG as it is, and anything else as its pixels, made no bigger than the `screen` (in pixels)
+/// it could fill, as more would only be shrunk again.
+fn kitty_send(out: &mut String, image: &Image, screen: (u32, u32)) {
+    let (data, keys) = kitty_data(image, screen);
     let pieces: Vec<&[u8]> = data.as_bytes().chunks(4096).collect();
     for (i, piece) in pieces.iter().enumerate() {
         let more = u8::from(i + 1 < pieces.len());
         let piece = std::str::from_utf8(piece).unwrap_or("");
         if i == 0 {
-            let _ = write!(out, "\x1b_Ga=t,f=100,t=d,i={},q=2,m={more};{piece}\x1b\\", image.id);
+            let _ = write!(out, "\x1b_Ga=t,{keys},t=d,i={},q=2,m={more};{piece}\x1b\\", image.id);
         } else {
             let _ = write!(out, "\x1b_Gm={more};{piece}\x1b\\");
         }
     }
+}
+
+// the base64 to send kitty, and the keys saying what it is
+fn kitty_data(image: &Image, screen: (u32, u32)) -> (String, String) {
+    #[cfg(feature = "decode")]
+    if image.format != Format::Png {
+        if let Ok(p) = image.pixels() {
+            let p = p.shrunk_to(screen.0.max(1), screen.1.max(1));
+            let (bytes, f) = if p.opaque() {
+                (p.rgba.chunks_exact(4).flat_map(|c| &c[..3]).copied().collect(), 24)
+            } else {
+                (p.rgba, 32)
+            };
+            return (
+                crate::clipboard::base64(&bytes),
+                format!("f={f},s={},v={}", p.width, p.height),
+            );
+        }
+    }
+    let _ = screen;
+    (crate::clipboard::base64(&image.bytes), "f=100".into())
 }
 
 /// What to send as the app leaves the screen: kitty told to drop every picture, if any were
@@ -450,10 +524,15 @@ mod tests {
     fn kitty_takes_png_and_iterm_takes_them_all() {
         let kitty = Support::Yes(Protocol::Kitty);
         assert!(kitty.check_format(Format::Png).is_ok());
-        assert_eq!(
-            kitty.check_format(Format::Jpeg).unwrap_err(),
-            "this terminal shows PNG images, and this is a JPEG"
-        );
+        // without the decoder kitty can't be sent a JPEG, and with it, it can
+        if cfg!(feature = "decode") {
+            assert!(kitty.check_format(Format::Jpeg).is_ok());
+        } else {
+            assert_eq!(
+                kitty.check_format(Format::Jpeg).unwrap_err(),
+                "this terminal shows PNG images, and this is a JPEG"
+            );
+        }
         assert!(Support::Yes(Protocol::Iterm).check_format(Format::Gif).is_ok());
     }
 
@@ -473,14 +552,14 @@ mod tests {
         let image = Image::new(png(2, 2)).unwrap();
         let mut shown = Shown::default();
         let at = Rect::new(3, 1, 4, 2);
-        let first = shown.update(&[(at, image.clone())], Protocol::Kitty);
+        let first = shown.update(&[(at, image.clone())], Protocol::Kitty, (1600, 1000));
         assert!(first.contains(&format!("\x1b_Ga=t,f=100,t=d,i={},q=2,m=0;", image.id)));
         assert!(first.contains(&format!("\x1b[2;4H\x1b_Ga=p,i={},c=4,r=2,C=1,q=2\x1b\\", image.id)));
         assert!(!shown.changes(&[(at, image.clone())]));
-        let moved = shown.update(&[(Rect::new(0, 0, 4, 2), image.clone())], Protocol::Kitty);
+        let moved = shown.update(&[(Rect::new(0, 0, 4, 2), image.clone())], Protocol::Kitty, (1600, 1000));
         assert!(moved.starts_with(&format!("\x1b_Ga=d,d=i,i={},q=2\x1b\\", image.id)));
         assert!(!moved.contains("a=t"), "kitty already has it");
-        let gone = shown.update(&[], Protocol::Kitty);
+        let gone = shown.update(&[], Protocol::Kitty, (1600, 1000));
         assert_eq!(gone, format!("\x1b_Ga=d,d=i,i={},q=2\x1b\\", image.id));
     }
 
@@ -490,15 +569,37 @@ mod tests {
         bytes.resize(10_000, 7);
         let image = Image::new(bytes).unwrap();
         let mut out = String::new();
-        kitty_send(&mut out, &image);
+        kitty_send(&mut out, &image, (1600, 1000));
         assert_eq!(out.matches("\x1b_G").count(), 4, "13336 base64 characters in 4096s");
         assert!(out.contains("m=1;") && out.ends_with("\x1b\\") && out.contains("\x1b_Gm=0;"));
+    }
+
+    #[cfg(feature = "decode")]
+    #[test]
+    fn kitty_is_sent_a_jpeg_as_pixels_no_bigger_than_the_screen() {
+        let image = Image::new(include_bytes!("decode/testdata/baseline.jpg").to_vec()).unwrap();
+        assert_eq!(Support::Yes(Protocol::Kitty).check(&image), Ok(Protocol::Kitty));
+        let (data, keys) = kitty_data(&image, (1600, 1000));
+        assert_eq!(keys, "f=24,s=37,v=23", "solid, so three bytes a pixel");
+        assert_eq!(data.len(), (37 * 23 * 3usize).div_ceil(3) * 4);
+        assert_eq!(
+            kitty_data(&image, (20, 10)).1,
+            "f=24,s=16,v=10",
+            "shrunk to what the screen holds"
+        );
+        let broken = Image::new(include_bytes!("decode/testdata/baseline.jpg")[..300].to_vec()).unwrap();
+        assert!(
+            Support::Yes(Protocol::Kitty)
+                .check(&broken)
+                .unwrap_err()
+                .starts_with("can't read it")
+        );
     }
 
     #[test]
     fn iterm_is_sent_the_file_where_it_goes() {
         let image = Image::new(png(2, 2)).unwrap();
-        let out = Shown::default().update(&[(Rect::new(0, 2, 5, 3), image.clone())], Protocol::Iterm);
+        let out = Shown::default().update(&[(Rect::new(0, 2, 5, 3), image.clone())], Protocol::Iterm, (1600, 1000));
         assert!(out.starts_with("\x1b[3;1H\x1b]1337;File=inline=1;size=24;width=5;height=3;preserveAspectRatio=1:"));
         assert!(out.ends_with(&format!("{}\x07", crate::clipboard::base64(&image.bytes))));
     }

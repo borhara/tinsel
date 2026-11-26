@@ -25,9 +25,13 @@ steps:
     command: cargo fmt --check
   - name: clippy
     command: cargo clippy --all-targets
+  - name: clippy with the image decoder
+    command: cargo clippy --all-targets --features decode
   - name: test
     command: cargo test --all-targets
+  - name: test with the image decoder
+    command: cargo test --all-targets --features decode
   - name: doctest
     command: cargo test --doc
   - name: docs
-    command: cargo doc --no-deps
+    command: cargo doc --no-deps --all-features

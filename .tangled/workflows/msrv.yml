@@ -19,4 +19,4 @@ steps:
     command: |
       msrv="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
       rustup toolchain install "$msrv" --profile minimal
-      cargo "+$msrv" check --all-targets
+      cargo "+$msrv" check --all-targets --all-features

@@ -329,7 +329,9 @@ fn pictures_and_cells(
     } else {
         frame.diff(shown)
     };
-    images.push_str(&pictures.update(&wanted, protocol));
+    let area = frame.area();
+    let screen = (area.width as u32 * cell.0, area.height as u32 * cell.1);
+    images.push_str(&pictures.update(&wanted, protocol, screen));
     (diff, images)
 }
 
