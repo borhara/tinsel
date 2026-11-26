@@ -1,4 +1,5 @@
-# that the Windows, macOS and wasm code builds and passes clippy, though nothing here can run it
+# that the Windows, macOS and wasm code builds and passes clippy, and the web page's side still
+# fits the wasm it runs, though nothing here can run the rest
 when:
   - event: ["push", "pull_request"]
     branch: ["main"]
@@ -9,6 +10,8 @@ image: nixos
 dependencies:
   - rustup
   - gcc
+  # for the web page's side, src/web.js, tested against the wasm it runs
+  - nodejs
 
 environment:
   CARGO_TERM_COLOR: "always"
@@ -27,3 +30,4 @@ steps:
       # the web feature's apps, and the docs page at tinsel.shiv.mov built as one
       cargo clippy --lib --features web --target wasm32-wasip1
       cargo build --example web_docs --features web --target wasm32-wasip1
+      node --test tests/web.mjs
