@@ -22,16 +22,49 @@ impl std::fmt::Debug for Pixels {
     }
 }
 
-/// The pixels of a picture in `format`, or why they can't be had.
-pub(crate) fn decode(bytes: &[u8], format: Format) -> Result<Pixels, String> {
-    match format {
-        Format::Jpeg => jpeg::decode(bytes),
-        Format::Gif => gif::decode(bytes),
-        Format::Png => Err("PNG goes to the terminal as it is".into()),
-    }
+/// The pixels of a picture in `format`, turned as EXIF's `orientation` says, or why they
+/// can't be had.
+pub(crate) fn decode(bytes: &[u8], format: Format, orientation: u8) -> Result<Pixels, String> {
+    let pixels = match format {
+        Format::Jpeg => jpeg::decode(bytes)?,
+        Format::Gif => gif::decode(bytes)?,
+        Format::Png => return Err("PNG goes to the terminal as it is".into()),
+    };
+    Ok(pixels.oriented(orientation))
 }
 
 impl Pixels {
+    /// The picture turned and mirrored as EXIF's orientation `o` says, so it's the way up it's
+    /// meant to be seen: 1 is as it is, 6 a quarter turn clockwise, 8 one anticlockwise, and
+    /// the others half turns and mirror images.
+    pub fn oriented(self, o: u8) -> Pixels {
+        if !(2..=8).contains(&o) {
+            return self;
+        }
+        let (w, h) = (self.width as usize, self.height as usize);
+        let (nw, nh) = if o >= 5 { (h, w) } else { (w, h) };
+        let mut rgba = vec![0u8; self.rgba.len()];
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = match o {
+                    2 => (w - 1 - x, y),
+                    3 => (w - 1 - x, h - 1 - y),
+                    4 => (x, h - 1 - y),
+                    5 => (y, x),
+                    6 => (h - 1 - y, x),
+                    7 => (h - 1 - y, w - 1 - x),
+                    _ => (y, w - 1 - x),
+                };
+                rgba[(dy * nw + dx) * 4..][..4].copy_from_slice(&self.rgba[(y * w + x) * 4..][..4]);
+            }
+        }
+        Pixels {
+            width: nw as u32,
+            height: nh as u32,
+            rgba,
+        }
+    }
+
     /// Whether every pixel is solid, so the alpha bytes needn't be sent.
     pub fn opaque(&self) -> bool {
         self.rgba.chunks_exact(4).all(|p| p[3] == 255)
@@ -122,7 +155,7 @@ mod tests {
     #[test]
     fn pictures_decode_as_imageio_reads_them() {
         for &(name, file, want, format) in FIXTURES {
-            let p = decode(file, format).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let p = decode(file, format, 1).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!((p.width, p.height), (37, 23), "{name}");
             let diffs: Vec<u32> = p
                 .rgba
@@ -150,18 +183,61 @@ mod tests {
     fn broken_files_are_errors_not_panics() {
         for &(name, file, _, format) in FIXTURES {
             for len in 0..file.len() {
-                let _ = decode(&file[..len], format);
+                let _ = decode(&file[..len], format, 1);
             }
             // bytes changed here and there through the file
             for at in (0..file.len()).step_by(7) {
                 for flip in [0x01u8, 0x80, 0xff] {
                     let mut bad = file.to_vec();
                     bad[at] ^= flip;
-                    let _ = decode(&bad, format);
+                    let _ = decode(&bad, format, 1);
                 }
             }
             let _ = name;
         }
+    }
+
+    #[test]
+    fn each_orientation_turns_the_right_way() {
+        // 3x2, numbered across then down: 1 2 3 / 4 5 6
+        let p = Pixels {
+            width: 3,
+            height: 2,
+            rgba: (1..=6u8).flat_map(|n| [n, 0, 0, 255]).collect(),
+        };
+        let shown = |o: u8| {
+            let q = p.clone().oriented(o);
+            let rows: Vec<Vec<u8>> = q
+                .rgba
+                .chunks(q.width as usize * 4)
+                .map(|r| r.iter().step_by(4).copied().collect())
+                .collect();
+            rows
+        };
+        assert_eq!(shown(1), [vec![1, 2, 3], vec![4, 5, 6]]);
+        assert_eq!(shown(2), [vec![3, 2, 1], vec![6, 5, 4]], "mirrored");
+        assert_eq!(shown(3), [vec![6, 5, 4], vec![3, 2, 1]], "half a turn");
+        assert_eq!(shown(4), [vec![4, 5, 6], vec![1, 2, 3]], "upside-down mirror");
+        assert_eq!(shown(5), [vec![1, 4], vec![2, 5], vec![3, 6]], "transposed");
+        assert_eq!(
+            shown(6),
+            [vec![4, 1], vec![5, 2], vec![6, 3]],
+            "a quarter turn clockwise"
+        );
+        assert_eq!(shown(7), [vec![6, 3], vec![5, 2], vec![4, 1]], "transverse");
+        assert_eq!(
+            shown(8),
+            [vec![3, 6], vec![2, 5], vec![1, 4]],
+            "a quarter turn anticlockwise"
+        );
+    }
+
+    #[test]
+    fn a_rotated_photo_decodes_turned() {
+        let rotated = decode(include_bytes!("testdata/rotated.jpg"), Format::Jpeg, 6).unwrap();
+        let upright = decode(include_bytes!("testdata/baseline.jpg"), Format::Jpeg, 1).unwrap();
+        assert_eq!((rotated.width, rotated.height), (23, 37));
+        assert_eq!(rotated, upright.oriented(6), "the same picture, a quarter turn round");
     }
 
     #[test]

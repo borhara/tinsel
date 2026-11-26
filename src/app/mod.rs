@@ -313,7 +313,7 @@ fn pictures_and_cells(
     let wanted: Vec<_> = frame
         .images()
         .iter()
-        .filter(|(area, image)| protocol.shows(image.format()) && area.width > 0 && area.height > 0)
+        .filter(|(area, image)| protocol.shows(image.format()) && !image.pending() && area.width > 0 && area.height > 0)
         .map(|(area, image)| {
             (
                 crate::image::fit((image.width(), image.height()), cell, *area),
@@ -1327,6 +1327,38 @@ pub(crate) mod tests {
         );
         let iterm = run(Support::Yes(Protocol::Iterm));
         assert_eq!(iterm.matches("\x1b]1337;File=").count(), 1);
+    }
+
+    #[cfg(feature = "decode")]
+    #[test]
+    fn a_picture_still_decoding_waits_and_then_goes_up() {
+        use crate::image::{HOLD, Image, Protocol, Support, with_support};
+        let small = include_bytes!("../image/decode/testdata/baseline.jpg");
+        let mut big = small[..2].to_vec();
+        for _ in 0..17 {
+            big.extend([0xff, 0xfe, 0xff, 0xff]);
+            big.extend([b'x'; 0xfffd]);
+        }
+        big.extend(&small[2..]);
+        let image = Image::new(big).unwrap();
+        let mut frame = Frame::new(20, 8);
+        frame.image(Rect::new(0, 0, 20, 8), &image);
+        let mut pictures = crate::image::Shown::default();
+        let held = HOLD.lock().unwrap();
+        with_support(Support::Yes(Protocol::Kitty), || {
+            assert!(Support::Yes(Protocol::Kitty).check(&image).is_ok() && image.pending());
+            let (_, sent) = pictures_and_cells(&frame, None, &mut pictures, true);
+            assert!(!sent.contains("\x1b_G"), "held back while it decodes: {sent:?}");
+            drop(held);
+            while image.pending() {
+                std::thread::yield_now();
+            }
+            let (_, sent) = pictures_and_cells(&frame, None, &mut pictures, false);
+            assert!(
+                sent.contains("a=t,f=24") && sent.contains("a=p,"),
+                "then sent and placed"
+            );
+        });
     }
 
     #[test]

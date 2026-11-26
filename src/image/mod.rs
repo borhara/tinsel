@@ -14,7 +14,7 @@
 
 use std::cell::Cell;
 use std::fmt::Write;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -28,15 +28,22 @@ mod decode;
 /// into pixels first.
 #[derive(Clone)]
 pub struct Image {
-    bytes: Rc<[u8]>,
+    // shared with the thread that decodes it, for a big one
+    bytes: Arc<[u8]>,
     format: Format,
+    // as it's meant to be seen, turned as its EXIF orientation says
     width: u32,
     height: u32,
+    // EXIF's 1 to 8: as it is, or which way it's turned or mirrored
+    #[cfg_attr(not(feature = "decode"), allow(dead_code))]
+    orientation: u8,
     // the same for every frame it's put in, so the terminal is sent it once
     id: u32,
-    // decoded the first time kitty needs it, and kept
+    // decoded the first time kitty needs it, and kept; a big one on a thread of its own
     #[cfg(feature = "decode")]
-    pixels: Rc<std::cell::OnceCell<Result<decode::Pixels, String>>>,
+    pixels: Arc<OnceLock<Result<decode::Pixels, String>>>,
+    #[cfg(feature = "decode")]
+    decoding: Arc<AtomicBool>,
 }
 
 // one image, however many times it's cloned
@@ -86,6 +93,15 @@ impl Format {
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
+// files this big are decoded on a thread of their own: a few milliseconds is fine to wait
+// for in a frame, but a big photo takes longer
+#[cfg(feature = "decode")]
+const DECODE_HERE: usize = 1 << 20;
+
+// held by a test to keep a big picture's decode from finishing while it looks
+#[cfg(all(test, feature = "decode"))]
+pub(crate) static HOLD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 impl Image {
     /// The image in `bytes`, or why it isn't one tinsel knows.
     ///
@@ -103,28 +119,71 @@ impl Image {
     /// assert!(Image::new(b"hello".to_vec()).is_err());
     /// ```
     pub fn new(bytes: Vec<u8>) -> Result<Image, String> {
-        let (format, width, height) = sniff(&bytes).ok_or("not an image tinsel knows: PNG, JPEG or GIF")?;
+        let (format, width, height, orientation) =
+            sniff(&bytes).ok_or("not an image tinsel knows: PNG, JPEG or GIF")?;
         if width == 0 || height == 0 {
             return Err(format!("a {} with no pixels", format.name()));
         }
+        // turned a quarter, it's as wide as it was tall
+        let (width, height) = if orientation >= 5 {
+            (height, width)
+        } else {
+            (width, height)
+        };
         Ok(Image {
             bytes: bytes.into(),
             format,
             width,
             height,
+            orientation,
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             #[cfg(feature = "decode")]
-            pixels: Rc::default(),
+            pixels: Arc::default(),
+            #[cfg(feature = "decode")]
+            decoding: Arc::default(),
         })
     }
 
-    /// Its pixels, decoded once and kept, or why they can't be had.
+    /// Its pixels, decoded once and kept, or why they can't be had; waits for a decode
+    /// already going on another thread.
     #[cfg(feature = "decode")]
     pub(crate) fn pixels(&self) -> Result<&decode::Pixels, &str> {
         self.pixels
-            .get_or_init(|| decode::decode(&self.bytes, self.format))
+            .get_or_init(|| decode::decode(&self.bytes, self.format, self.orientation))
             .as_ref()
             .map_err(String::as_str)
+    }
+
+    /// Starts decoding it for kitty, if it needs it: a small file straight away, and a big
+    /// one on another thread, so the app can draw something meanwhile.
+    #[cfg(feature = "decode")]
+    fn start_decoding(&self) {
+        if self.format == Format::Png || self.pixels.get().is_some() {
+            return;
+        }
+        if self.bytes.len() < DECODE_HERE {
+            let _ = self.pixels();
+        } else if !self.decoding.swap(true, Ordering::Relaxed) {
+            let (bytes, cell) = (Arc::clone(&self.bytes), Arc::clone(&self.pixels));
+            let (format, orientation) = (self.format, self.orientation);
+            std::thread::spawn(move || {
+                #[cfg(test)]
+                let _held = HOLD.lock();
+                cell.get_or_init(|| decode::decode(&bytes, format, orientation));
+            });
+        }
+    }
+
+    /// Whether it's still being decoded on another thread, as a big JPEG or GIF is the first
+    /// time kitty is to show it. Until it's done the run loop holds it back, so an app can
+    /// show something else there meanwhile; something that moves, so the next frame comes.
+    pub fn pending(&self) -> bool {
+        #[cfg(feature = "decode")]
+        {
+            self.decoding.load(Ordering::Relaxed) && self.pixels.get().is_none()
+        }
+        #[cfg(not(feature = "decode"))]
+        false
     }
 
     /// Whether `bytes` start the way an image tinsel knows does, as a cheap test before
@@ -138,12 +197,12 @@ impl Image {
         self.format
     }
 
-    /// How wide it is, in pixels.
+    /// How wide it is, in pixels, turned the way it's meant to be seen.
     pub fn width(&self) -> u32 {
         self.width
     }
 
-    /// How tall it is, in pixels.
+    /// How tall it is, in pixels, turned the way it's meant to be seen.
     pub fn height(&self) -> u32 {
         self.height
     }
@@ -151,20 +210,22 @@ impl Image {
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
 
-// the format and size in an image file's header
-fn sniff(b: &[u8]) -> Option<(Format, u32, u32)> {
+// the format, size and EXIF orientation in an image file's header
+fn sniff(b: &[u8]) -> Option<(Format, u32, u32, u8)> {
     let be32 = |i: usize| Some(u32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?));
     let be16 = |i: usize| Some(u32::from(u16::from_be_bytes(b.get(i..i + 2)?.try_into().ok()?)));
     let le16 = |i: usize| Some(u32::from(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?)));
     if b.starts_with(PNG) && b.get(12..16) == Some(b"IHDR") {
-        return Some((Format::Png, be32(16)?, be32(20)?));
+        return Some((Format::Png, be32(16)?, be32(20)?, 1));
     }
     if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
-        return Some((Format::Gif, le16(6)?, le16(8)?));
+        return Some((Format::Gif, le16(6)?, le16(8)?, 1));
     }
     if b.starts_with(b"\xff\xd8") {
-        // segments one after another, until the frame header that holds the size
+        // segments one after another, until the frame header that holds the size, with the
+        // orientation in the EXIF segment before it, if there is one
         let mut at = 2;
+        let mut orientation = 1;
         loop {
             while b.get(at) == Some(&0xff) && b.get(at + 1) == Some(&0xff) {
                 at += 1;
@@ -175,12 +236,53 @@ fn sniff(b: &[u8]) -> Option<(Format, u32, u32)> {
             let marker = *b.get(at + 1)?;
             let frame = matches!(marker, 0xc0..=0xcf) && !matches!(marker, 0xc4 | 0xc8 | 0xcc);
             if frame {
-                return Some((Format::Jpeg, be16(at + 7)?, be16(at + 5)?));
+                return Some((Format::Jpeg, be16(at + 7)?, be16(at + 5)?, orientation));
             }
-            at += 2 + be16(at + 2)? as usize;
+            let len = be16(at + 2)? as usize;
+            if marker == 0xe1 {
+                orientation = b
+                    .get(at + 4..at + 2 + len)
+                    .and_then(exif_orientation)
+                    .unwrap_or(orientation);
+            }
+            at += 2 + len;
         }
     }
     None
+}
+
+/// The orientation in an APP1 segment's EXIF, if it has one: 1 to 8, as EXIF numbers them.
+fn exif_orientation(seg: &[u8]) -> Option<u8> {
+    let tiff = seg.strip_prefix(b"Exif\0\0")?;
+    let big = match tiff.get(..2)? {
+        b"MM" => true,
+        b"II" => false,
+        _ => return None,
+    };
+    let u16_at = |i: usize| {
+        let b: [u8; 2] = tiff.get(i..i + 2)?.try_into().ok()?;
+        Some(if big {
+            u16::from_be_bytes(b)
+        } else {
+            u16::from_le_bytes(b)
+        })
+    };
+    let u32_at = |i: usize| {
+        let b: [u8; 4] = tiff.get(i..i + 4)?.try_into().ok()?;
+        Some(if big {
+            u32::from_be_bytes(b)
+        } else {
+            u32::from_le_bytes(b)
+        })
+    };
+    let ifd = u32_at(4)? as usize;
+    // the first directory's entries, twelve bytes each: tag, type, count, value
+    (0..usize::from(u16_at(ifd)?))
+        .map(|i| ifd + 2 + i * 12)
+        .find(|&e| u16_at(e) == Some(0x0112))
+        .and_then(|e| u16_at(e + 8))
+        .and_then(|o| u8::try_from(o).ok())
+        .filter(|o| (1..=8).contains(o))
 }
 
 /// How the terminal shows pictures, if it does.
@@ -229,10 +331,14 @@ impl Support {
     /// ```
     pub fn check(self, image: &Image) -> Result<Protocol, String> {
         let protocol = self.check_format(image.format)?;
-        // kitty needs the pixels, so a picture that won't decode can't be shown
+        // kitty needs the pixels, so a picture that won't decode can't be shown; a big one is
+        // only known not to once it's been tried, so it's fine until then
         #[cfg(feature = "decode")]
         if protocol == Protocol::Kitty && image.format != Format::Png {
-            image.pixels().map_err(|why| format!("can't read it: {why}"))?;
+            image.start_decoding();
+            if let Some(Err(why)) = image.pixels.get() {
+                return Err(format!("can't read it: {why}"));
+            }
         }
         Ok(protocol)
     }
@@ -468,16 +574,33 @@ mod tests {
 
     #[test]
     fn formats_and_sizes_come_from_the_header() {
-        assert_eq!(sniff(&png(640, 480)), Some((Format::Png, 640, 480)));
-        assert_eq!(sniff(b"GIF89a\x40\x01\xf0\x00"), Some((Format::Gif, 320, 240)));
+        assert_eq!(sniff(&png(640, 480)), Some((Format::Png, 640, 480, 1)));
+        assert_eq!(sniff(b"GIF89a\x40\x01\xf0\x00"), Some((Format::Gif, 320, 240, 1)));
         // a JPEG with an APP0 segment before its frame header
         let mut jpeg = b"\xff\xd8\xff\xe0\x00\x04ab".to_vec();
         jpeg.extend(b"\xff\xc0\x00\x11\x08\x01\xe0\x02\x80");
-        assert_eq!(sniff(&jpeg), Some((Format::Jpeg, 640, 480)));
+        assert_eq!(sniff(&jpeg), Some((Format::Jpeg, 640, 480, 1)));
         assert_eq!(sniff(b"\xff\xd8\xff\xe0\x00"), None, "cut short");
         assert_eq!(sniff(b"plain text"), None);
         assert!(Image::new(png(0, 5)).is_err());
         assert!(Image::looks_like(&png(1, 1)) && !Image::looks_like(b"fn main"));
+    }
+
+    #[test]
+    fn a_photo_turned_by_its_exif_reports_its_turned_size() {
+        let rotated = include_bytes!("decode/testdata/rotated.jpg");
+        assert_eq!(sniff(rotated), Some((Format::Jpeg, 37, 23, 6)));
+        let image = Image::new(rotated.to_vec()).unwrap();
+        assert_eq!(
+            (image.width(), image.height()),
+            (23, 37),
+            "portrait, as it's meant to be seen"
+        );
+        // little-endian EXIF too, as many cameras write it
+        let le = b"Exif\0\0II*\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x08\0\0\0";
+        assert_eq!(exif_orientation(le), Some(8));
+        assert_eq!(exif_orientation(b"Exif\0\0MM"), None, "cut short");
+        assert_eq!(exif_orientation(b"XMP"), None);
     }
 
     #[test]
@@ -572,6 +695,32 @@ mod tests {
         kitty_send(&mut out, &image, (1600, 1000));
         assert_eq!(out.matches("\x1b_G").count(), 4, "13336 base64 characters in 4096s");
         assert!(out.contains("m=1;") && out.ends_with("\x1b\\") && out.contains("\x1b_Gm=0;"));
+    }
+
+    #[cfg(feature = "decode")]
+    #[test]
+    fn a_big_picture_decodes_on_another_thread_and_waits_till_then() {
+        // the test JPEG with a megabyte of comment segments before its picture
+        let small = include_bytes!("decode/testdata/baseline.jpg");
+        let mut big = small[..2].to_vec();
+        for _ in 0..17 {
+            big.extend([0xff, 0xfe, 0xff, 0xff]);
+            big.extend([b'x'; 0xfffd]);
+        }
+        big.extend(&small[2..]);
+        let image = Image::new(big).unwrap();
+        let held = HOLD.lock().unwrap();
+        assert_eq!(Support::Yes(Protocol::Kitty).check(&image), Ok(Protocol::Kitty));
+        assert!(image.pending(), "still decoding");
+        drop(held);
+        // the thread finishes, and the picture is the one a small file gives
+        assert_eq!(image.pixels().map(|p| (p.width, p.height)), Ok((37, 23)));
+        assert!(!image.pending());
+        let small = Image::new(small.to_vec()).unwrap();
+        assert!(
+            Support::Yes(Protocol::Kitty).check(&small).is_ok() && !small.pending(),
+            "a small one right away"
+        );
     }
 
     #[cfg(feature = "decode")]
