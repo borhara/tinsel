@@ -526,10 +526,17 @@ impl Shown {
     pub(crate) fn update(&mut self, wanted: &[(Rect, Image)], protocol: Protocol, screen: (u32, u32)) -> String {
         let mut out = String::new();
         if protocol == Protocol::Kitty {
-            for (_, id) in &self.placed {
+            let kept = |id: u32| wanted.iter().any(|(_, i)| i.id == id);
+            for (_, id) in self.placed.iter().filter(|(_, id)| kept(*id)) {
                 // lowercase: the placement goes, and kitty keeps the image to place again
                 let _ = write!(out, "\x1b_Ga=d,d=i,i={id},q=2\x1b\\");
             }
+            for id in self.sent.iter().filter(|id| !kept(**id)) {
+                // uppercase: the image goes too, as nothing shows it, rather than fill kitty's
+                // storage till it drops ones tinsel thinks it still has
+                let _ = write!(out, "\x1b_Ga=d,d=I,i={id},q=2\x1b\\");
+            }
+            self.sent.retain(|id| kept(*id));
         }
         for (at, image) in wanted {
             ANY_SENT.store(true, Ordering::Relaxed);
@@ -746,7 +753,14 @@ mod tests {
         assert!(moved.starts_with(&format!("\x1b_Ga=d,d=i,i={},q=2\x1b\\", image.id)));
         assert!(!moved.contains("a=t"), "kitty already has it");
         let gone = shown.update(&[], Protocol::Kitty, (1600, 1000));
-        assert_eq!(gone, format!("\x1b_Ga=d,d=i,i={},q=2\x1b\\", image.id));
+        assert_eq!(
+            gone,
+            format!("\x1b_Ga=d,d=I,i={},q=2\x1b\\", image.id),
+            "freed, as nothing shows it"
+        );
+        assert!(shown.is_empty());
+        let back = shown.update(&[(at, image.clone())], Protocol::Kitty, (1600, 1000));
+        assert!(back.contains("a=t,"), "so sent again when it's back");
     }
 
     #[test]

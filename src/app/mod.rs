@@ -1323,7 +1323,7 @@ pub(crate) mod tests {
         let kitty = run(Support::Yes(Protocol::Kitty));
         assert_eq!(kitty.matches("a=t,f=100").count(), 1, "sent once: {kitty:?}");
         assert_eq!(kitty.matches("a=p,").count(), 1, "placed once, while it stays put");
-        assert_eq!(kitty.matches("a=d,d=i").count(), 1, "and taken away when it's gone");
+        assert_eq!(kitty.matches("a=d,d=I").count(), 1, "and freed when it's gone");
         let none = run(Support::No);
         assert!(
             !none.contains("\x1b_G") && !none.contains("1337"),
