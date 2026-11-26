@@ -5,8 +5,9 @@
 //! ```
 //!
 //! The page passes keys, the mouse and its size in, and shows each frame as
-//! [`html_pre`](crate::app::Frame::html_pre) gives it. Time comes from WASI's clock, which the
-//! page supplies, with the rest of WASI left unanswered.
+//! [`html_pre`](crate::app::Frame::html_pre) gives it. Of WASI, the page must answer the clock,
+//! which time comes from, randomness, for std's hash maps, and the environment, as empty, as
+//! settings like `TINSEL_FPS` are read from it; the rest it can leave unanswered.
 
 use std::cell::RefCell;
 
