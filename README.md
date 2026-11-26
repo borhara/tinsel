@@ -376,6 +376,9 @@ cargo run -- docs                  # the guides, in a reader drawn by tinsel, ex
 cargo run -- docs live             # one guide; piped, it prints as plain text
 ```
 
+The same reader runs in a browser at **[tinsel.shiv.mov](https://tinsel.shiv.mov)**, built for
+wasm from tinsel itself.
+
 The [`examples`](examples) are small and meant to be copied. Run any of them with
 `cargo run --example <name>`:
 
