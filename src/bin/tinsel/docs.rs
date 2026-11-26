@@ -44,6 +44,8 @@ pub const GUIDES: &[Guide] = &[
 ];
 
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
+// written by scripts/reference.mjs from tinsel's own source, a `#` heading to a page
+const REFERENCE: &str = include_str!("reference.md");
 // one way wherever the reader shows it
 const VERSION: &str = concat!("tinsel v", env!("CARGO_PKG_VERSION"));
 
@@ -136,10 +138,44 @@ fn plain_headings(src: &str) -> String {
     out.join("\n")
 }
 
+// the reference as its pages, each a title and its Markdown, split at the `#` headings that
+// aren't in code, as a shell comment in an example is
+fn reference_pages(src: &str) -> Vec<(String, String)> {
+    let mut pages: Vec<(String, String)> = Vec::new();
+    let mut fenced = false;
+    for line in src.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
+        if !fenced {
+            if let Some(title) = line.strip_prefix("# ") {
+                pages.push((title.to_string(), String::new()));
+            }
+        }
+        if let Some((_, page)) = pages.last_mut() {
+            page.push_str(line);
+            page.push('\n');
+        }
+    }
+    pages
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
     Guides,
+    Reference,
     Changelog,
+}
+
+// the tabs, short on a narrow screen, where all three must fit beside the name
+fn tab_titles(width: usize) -> [&'static str; 3] {
+    let reference = if width >= 90 { "API Reference" } else { "API" };
+    ["Guides", reference, "Changelog"]
+}
+
+// where the tabs are drawn, wide enough for them
+fn tabs_rect(width: usize) -> Rect {
+    Rect::new(20, 0, 40.min(width.saturating_sub(20)), 1)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -152,6 +188,8 @@ enum Pane {
 /// Where things were drawn last, for the mouse and for paging.
 #[derive(Default, Clone, Copy)]
 struct Drawn {
+    // the screen's width, which the tabs' titles depend on
+    width: usize,
     tabs: Rect,
     list: Option<Rect>,
     page: Rect,
@@ -164,6 +202,8 @@ struct Drawn {
 pub struct Docs {
     tab: Tab,
     guide: usize,
+    // the reference's page open, as `guide` is the guide's
+    module: usize,
     pane: Pane,
     scroll: usize,
     heading: usize,
@@ -171,6 +211,8 @@ pub struct Docs {
     search: Option<String>,
     filter: String,
     pages: Vec<Page>,
+    reference: Vec<(String, String)>,
+    reference_pages: Vec<Page>,
     changelog: Page,
     // Markdown wrapped to a width, by page, piece and width
     wrapped: RefCell<HashMap<(usize, usize, usize), Vec<String>>>,
@@ -184,15 +226,19 @@ pub struct Docs {
 
 impl Docs {
     pub(crate) fn new(tab: Tab, guide: usize) -> Docs {
+        let reference = reference_pages(REFERENCE);
         Docs {
             tab,
             guide,
+            module: 0,
             pane: Pane::Page,
             scroll: 0,
             heading: 0,
             search: None,
             filter: String::new(),
             pages: GUIDES.iter().map(|g| parse(g.src)).collect(),
+            reference_pages: reference.iter().map(|(_, src)| parse(src)).collect(),
+            reference,
             changelog: parse(&plain_headings(CHANGELOG)),
             wrapped: RefCell::default(),
             drawn: RefCell::default(),
@@ -201,19 +247,54 @@ impl Docs {
         }
     }
 
+    // the page open, and a number for it, for the wrapped text kept for it: the guides from 0,
+    // the reference's pages from 10000
     fn page(&self) -> (usize, &Page) {
         match self.tab {
             Tab::Guides => (self.guide, &self.pages[self.guide]),
+            Tab::Reference => (10_000 + self.module, &self.reference_pages[self.module]),
             Tab::Changelog => (usize::MAX, &self.changelog),
         }
     }
 
-    /// The guides the search lets through, as their places in [`GUIDES`].
+    /// The tab's pages, as their titles and Markdown: the guides, or the reference's, and none
+    /// for the changelog, which is one page.
+    fn shelf(&self) -> Vec<(&str, &str)> {
+        match self.tab {
+            Tab::Guides => GUIDES.iter().map(|g| (g.title, g.src)).collect(),
+            Tab::Reference => self
+                .reference
+                .iter()
+                .map(|(t, src)| (t.as_str(), src.as_str()))
+                .collect(),
+            Tab::Changelog => Vec::new(),
+        }
+    }
+
+    // which of the tab's pages is open
+    fn at(&self) -> usize {
+        if self.tab == Tab::Reference {
+            self.module
+        } else {
+            self.guide
+        }
+    }
+
+    fn page_title(&self) -> &str {
+        match self.tab {
+            Tab::Guides => GUIDES[self.guide].title,
+            Tab::Reference => &self.reference[self.module].0,
+            Tab::Changelog => "Changelog",
+        }
+    }
+
+    /// The tab's pages the search lets through, as their places in [`shelf`](Docs::shelf).
     fn listed(&self) -> Vec<usize> {
         let q = self.search.as_deref().unwrap_or(&self.filter).to_lowercase();
-        (0..GUIDES.len())
+        let shelf = self.shelf();
+        (0..shelf.len())
             .filter(|&i| {
-                q.is_empty() || GUIDES[i].title.to_lowercase().contains(&q) || GUIDES[i].src.to_lowercase().contains(&q)
+                q.is_empty() || shelf[i].0.to_lowercase().contains(&q) || shelf[i].1.to_lowercase().contains(&q)
             })
             .collect()
     }
@@ -274,9 +355,15 @@ impl Docs {
         self.scroll = self.scroll.saturating_add_signed(by).min(self.max_scroll());
     }
 
-    fn open(&mut self, guide: usize) {
-        self.tab = Tab::Guides;
-        self.guide = guide;
+    // the tab's page `i`
+    fn open(&mut self, i: usize) {
+        match self.tab {
+            Tab::Reference => self.module = i,
+            _ => {
+                self.tab = Tab::Guides;
+                self.guide = i;
+            }
+        }
         self.scroll = 0;
         self.heading = 0;
     }
@@ -286,7 +373,7 @@ impl Docs {
         if listed.is_empty() {
             return;
         }
-        let at = listed.iter().position(|&g| g == self.guide).unwrap_or(0);
+        let at = listed.iter().position(|&g| g == self.at()).unwrap_or(0);
         let next = (at as isize + by).clamp(0, listed.len() as isize - 1) as usize;
         self.open(listed[next]);
     }
@@ -294,11 +381,7 @@ impl Docs {
     // "on this page": the page's title, for its top, then its headings, with the row each starts on
     fn contents(&self) -> (Vec<String>, Vec<usize>) {
         let (_, starts) = self.rows(text_width(self.drawn.borrow().page), 0.0);
-        let title = match self.tab {
-            Tab::Guides => GUIDES[self.guide].title,
-            Tab::Changelog => "Changelog",
-        };
-        let names = std::iter::once(title.to_string())
+        let names = std::iter::once(self.page_title().to_string())
             .chain(self.page().1.headings.iter().map(|(_, t)| t.clone()))
             .collect();
         (names, std::iter::once(0).chain(starts).collect())
@@ -353,9 +436,13 @@ impl App for Docs {
                 bold(&paint(palette::TEXT, "tinsel docs"))
             ),
         );
-        let tabs = Rect::new(20, 0, 30, 1);
-        let tab = if self.tab == Tab::Guides { 0 } else { 1 };
-        Tabs::new(["Guides", "Changelog"]).selected(tab).render(tabs, frame);
+        let tabs = tabs_rect(w);
+        let tab = match self.tab {
+            Tab::Guides => 0,
+            Tab::Reference => 1,
+            Tab::Changelog => 2,
+        };
+        Tabs::new(tab_titles(w)).selected(tab).render(tabs, frame);
         let right = match &self.search {
             Some(q) => format!("{} {}{}  ", paint(palette::ROSE, "/"), q, paint(palette::ROSE, "▏")),
             None if !self.filter.is_empty() => {
@@ -372,7 +459,7 @@ impl App for Docs {
         frame.print_right(top, 0, &right);
 
         let body = Rect::new(0, 2, w, h - 4);
-        let show_list = self.tab == Tab::Guides && w >= 72;
+        let show_list = self.tab != Tab::Changelog && w >= 72;
         let show_headings = w >= 110;
         let list = show_list.then(|| Rect::new(1, body.y, 30, body.height));
         let headings = show_headings.then(|| Rect::new(w - 33, body.y, 32, body.height));
@@ -382,26 +469,28 @@ impl App for Docs {
 
         let listed = self.listed();
         if let Some(rect) = list {
-            let titles: Vec<&str> = listed.iter().map(|&g| GUIDES[g].title).collect();
-            let at = listed.iter().position(|&g| g == self.guide).unwrap_or(0);
+            let shelf = self.shelf();
+            let titles: Vec<&str> = listed.iter().map(|&g| shelf[g].0).collect();
+            let at = listed.iter().position(|&g| g == self.at()).unwrap_or(0);
             let body = List::new(titles).selected(at);
             frame.render(
                 rect,
-                Panel::new("guides")
-                    .count(listed.len())
-                    .body(body)
-                    .focused(self.pane == Pane::List),
+                Panel::new(if self.tab == Tab::Reference {
+                    "reference"
+                } else {
+                    "guides"
+                })
+                .count(listed.len())
+                .body(body)
+                .focused(self.pane == Pane::List),
             );
         }
 
-        let (title, status) = match self.tab {
-            Tab::Guides => (
-                GUIDES[self.guide].title,
-                format!("{} of {}", self.guide + 1, GUIDES.len()),
-            ),
-            Tab::Changelog => ("Changelog", VERSION.to_string()),
+        let status = match self.tab {
+            Tab::Changelog => VERSION.to_string(),
+            _ => format!("{} of {}", self.at() + 1, self.shelf().len()),
         };
-        let panel = Panel::new(title)
+        let panel = Panel::new(self.page_title())
             .status(status)
             .focused(self.pane == Pane::Page)
             .padding(2, 1);
@@ -420,11 +509,7 @@ impl App for Docs {
         }
 
         if let Some(rect) = headings {
-            let title = match self.tab {
-                Tab::Guides => GUIDES[self.guide].title,
-                Tab::Changelog => "Changelog",
-            };
-            let names: Vec<&str> = std::iter::once(title)
+            let names: Vec<&str> = std::iter::once(self.page_title())
                 .chain(self.page().1.headings.iter().map(|(_, t)| t.as_str()))
                 .collect();
             let rows: Vec<usize> = std::iter::once(0).chain(starts.iter().copied()).collect();
@@ -460,9 +545,9 @@ impl App for Docs {
             (None, Pane::Page) => &[
                 ("j k", "scroll"),
                 ("space", "page"),
-                ("n N", "next guide"),
+                ("n N", "next page"),
                 ("tab", "next pane"),
-                ("1 2", "guides, changelog"),
+                ("1 2 3", "guides, API, changelog"),
                 ("q", "quit"),
             ],
         };
@@ -485,6 +570,7 @@ impl App for Docs {
             frame.animate();
         }
         *self.drawn.borrow_mut() = Drawn {
+            width: w,
             tabs,
             list,
             page: inner,
@@ -504,10 +590,11 @@ impl App for Docs {
                     MouseKind::ScrollUp => self.scroll_by(-3),
                     MouseKind::ScrollDown => self.scroll_by(3),
                     MouseKind::Click if within(d.tabs) => {
-                        let tabs = Tabs::new(["Guides", "Changelog"]);
+                        let tabs = Tabs::new(tab_titles(d.width));
                         match tabs.at(d.tabs, m.x, m.y) {
                             Some(0) => self.switch_tab(Tab::Guides),
-                            Some(1) => self.switch_tab(Tab::Changelog),
+                            Some(1) => self.switch_tab(Tab::Reference),
+                            Some(2) => self.switch_tab(Tab::Changelog),
                             _ => {}
                         }
                     }
@@ -533,10 +620,7 @@ impl App for Docs {
     }
 
     fn title(&self) -> Option<String> {
-        Some(match self.tab {
-            Tab::Guides => format!("{} · tinsel docs", GUIDES[self.guide].title),
-            Tab::Changelog => "Changelog · tinsel docs".into(),
-        })
+        Some(format!("{} · tinsel docs", self.page_title()))
     }
 
     fn mouse(&self) -> bool {
@@ -574,7 +658,8 @@ impl Docs {
             Key::Esc => return Flow::Quit,
             Key::Char('/') => self.search = Some(self.filter.clone()),
             Key::Char('1') => self.switch_tab(Tab::Guides),
-            Key::Char('2') => self.switch_tab(Tab::Changelog),
+            Key::Char('2') => self.switch_tab(Tab::Reference),
+            Key::Char('3') => self.switch_tab(Tab::Changelog),
             Key::Tab | Key::BackTab => {
                 let panes = self.panes();
                 let at = panes.iter().position(|&p| p == self.pane).unwrap_or(0);
@@ -585,8 +670,8 @@ impl Docs {
                     self.heading = self.current_heading(&rows);
                 }
             }
-            Key::Char('n') if self.tab == Tab::Guides => self.step_guide(1),
-            Key::Char('N') if self.tab == Tab::Guides => self.step_guide(-1),
+            Key::Char('n') if self.tab != Tab::Changelog => self.step_guide(1),
+            Key::Char('N') if self.tab != Tab::Changelog => self.step_guide(-1),
             Key::Char('j') | Key::Down => match self.pane {
                 Pane::List => self.step_guide(1),
                 Pane::Page => self.scroll_by(1),
@@ -626,12 +711,13 @@ pub fn run(page: Option<&str>) {
     let (tab, guide) = match page {
         None => (Tab::Guides, 0),
         Some(p) if p.eq_ignore_ascii_case("changelog") => (Tab::Changelog, 0),
+        Some(p) if ["reference", "api"].iter().any(|r| p.eq_ignore_ascii_case(r)) => (Tab::Reference, 0),
         Some(p) => match find(p) {
             Some(g) => (Tab::Guides, g),
             None => {
                 let names: Vec<&str> = GUIDES.iter().map(|g| g.slug).collect();
                 crate::usage_error(&format!(
-                    "there's no guide called {p}: try {}, or changelog",
+                    "there's no guide called {p}: try {}, or reference, or changelog",
                     names.join(", ")
                 ));
             }
@@ -785,6 +871,62 @@ mod tests {
         for (&row, (_, title)) in starts.iter().zip(&docs.pages[2].headings) {
             let plain = tinsel::text::strip_ansi(&rows[row]);
             assert!(plain.contains(title.as_str()), "{title} at row {row}: {plain:?}");
+        }
+    }
+
+    #[test]
+    fn the_reference_is_a_page_a_heading_but_not_a_heading_in_code() {
+        let pages = reference_pages("<!-- made -->\n# one\n\ntext\n\n```bash\n# a comment\n```\n# two\n\nmore\n");
+        let titles: Vec<&str> = pages.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(titles, ["one", "two"]);
+        assert!(pages[0].1.contains("# a comment"));
+        let real = reference_pages(REFERENCE);
+        assert!(real.len() > 10, "{}", real.len());
+        for (title, src) in &real {
+            assert!(!parse(src).headings.is_empty(), "{title} has no items");
+        }
+    }
+
+    #[test]
+    fn the_reference_tab_lists_its_pages_and_finds_what_they_say() {
+        let mut docs = Docs::new(Tab::Guides, 0);
+        docs.event(&Event::Key(Key::Char('2')));
+        assert!(docs.tab == Tab::Reference);
+        let shown = screen(&mut docs, 120);
+        assert!(shown.contains("reference") && shown.contains("Live work"), "{shown}");
+        docs.event(&Event::Key(Key::Char('n')));
+        assert_eq!(docs.module, 1);
+        // a search finds the pages that say it, and opens the first
+        for c in "/Table".chars() {
+            docs.event(&Event::Key(Key::Char(c)));
+        }
+        docs.event(&Event::Key(Key::Enter));
+        let found: Vec<&str> = docs.listed().iter().map(|&i| docs.reference[i].0.as_str()).collect();
+        assert!(found.contains(&"Tables, trees and charts"), "{found:?}");
+        assert!(
+            docs.listed()
+                .iter()
+                .all(|&i| docs.reference[i].1.to_lowercase().contains("table"))
+        );
+        assert_eq!(docs.page_title(), found[0], "the first it found is open");
+        docs.event(&Event::Key(Key::Char('3')));
+        assert!(docs.tab == Tab::Changelog);
+    }
+
+    #[test]
+    fn each_tab_is_clicked_where_it_is_drawn_at_any_width() {
+        for w in [60, 120] {
+            let mut docs = Docs::new(Tab::Guides, 0);
+            screen(&mut docs, w);
+            let top = screen(&mut docs, w).lines().next().unwrap().to_string();
+            for (title, tab) in tab_titles(w).iter().zip([Tab::Guides, Tab::Reference, Tab::Changelog]) {
+                let x = top
+                    .find(title)
+                    .map(|b| top[..b].chars().count())
+                    .unwrap_or_else(|| panic!("{title} in {top:?}"));
+                docs.event(&Event::Mouse(tinsel::app::Mouse::new(MouseKind::Click, x + 1, 0)));
+                assert!(docs.tab == tab, "{title} at {w} wide");
+            }
         }
     }
 }
