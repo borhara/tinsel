@@ -335,4 +335,135 @@ mod tests {
         assert!(shown().contains("pressed 1"));
         RUNNING.with(|r| r.borrow_mut().take());
     }
+
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    // an app that keeps what it was sent and the clocks of the frames it drew, asking for
+    // another frame `wait` seconds after each while it's waiting for a tick
+    #[derive(Default)]
+    struct Recorder {
+        seen: Rc<RefCell<Vec<Event>>>,
+        clocks: Rc<Cell<(f64, f64)>>,
+        wait: Option<f64>,
+        keep_ctrl_c: bool,
+        panics: bool,
+    }
+
+    impl App for Recorder {
+        fn view(&self, frame: &mut Frame) {
+            assert!(!self.panics, "the view fell over");
+            self.clocks.set((frame.time(), frame.ambient_time()));
+            if let Some(wait) = self.wait {
+                frame.redraw_in(wait);
+            }
+        }
+
+        fn event(&mut self, event: &Event) -> Flow {
+            self.seen.borrow_mut().push(event.clone());
+            Flow::Continue
+        }
+
+        fn ctrl_c_quits(&self) -> bool {
+            !self.keep_ctrl_c
+        }
+    }
+
+    fn record(app: Recorder) -> (Rc<RefCell<Vec<Event>>>, Rc<Cell<(f64, f64)>>) {
+        let (seen, clocks) = (app.seen.clone(), app.clocks.clone());
+        __start(20, 4, false, false, move || Box::new(app));
+        (seen, clocks)
+    }
+
+    fn stop() {
+        RUNNING.with(|r| r.borrow_mut().take());
+    }
+
+    #[test]
+    fn the_app_is_told_its_size_first_and_again_when_it_changes() {
+        let (seen, _) = record(Recorder::default());
+        assert_eq!(seen.borrow()[0], Event::Resize { width: 20, height: 4 });
+        assert_eq!(crate::app::size(), (20, 4));
+        __resize(30, 6);
+        __resize(30, 6);
+        let resizes: Vec<_> = seen
+            .borrow()
+            .iter()
+            .filter(|e| matches!(e, Event::Resize { .. }))
+            .cloned()
+            .collect();
+        assert_eq!(resizes.len(), 2, "the same size again isn't news: {resizes:?}");
+        assert_eq!(crate::app::size(), (30, 6));
+        stop();
+    }
+
+    #[test]
+    fn a_frame_asked_for_comes_with_a_tick_once_its_due() {
+        let (seen, _) = record(Recorder {
+            wait: Some(0.03),
+            ..Recorder::default()
+        });
+        let ticks = || seen.borrow().iter().filter(|e| **e == Event::Tick).count();
+        shown();
+        shown();
+        assert_eq!(ticks(), 0, "not due yet");
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        shown();
+        assert_eq!(ticks(), 1);
+        stop();
+    }
+
+    #[test]
+    fn the_mouse_reaches_the_app_where_it_is() {
+        let (seen, _) = record(Recorder::default());
+        assert_eq!(__mouse(4, 3, 2), 0);
+        assert_eq!(__mouse(9, 3, 2), 0, "a kind it doesn't know is dropped");
+        let mice: Vec<_> = seen
+            .borrow()
+            .iter()
+            .filter(|e| matches!(e, Event::Mouse(_)))
+            .cloned()
+            .collect();
+        assert_eq!(mice, [Event::Mouse(Mouse::new(MouseKind::ScrollDown, 3, 2))]);
+        stop();
+    }
+
+    #[test]
+    fn out_of_sight_the_ambient_clock_rests() {
+        let (seen, clocks) = record(Recorder::default());
+        __focus(false);
+        assert_eq!(seen.borrow().last(), Some(&Event::Focus(false)));
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        shown();
+        let (time, ambient) = clocks.get();
+        assert!(time - ambient >= 0.025, "time {time}, ambient {ambient}");
+        stop();
+    }
+
+    #[test]
+    fn ctrl_c_quits_unless_the_app_keeps_it() {
+        record(Recorder::default());
+        assert_eq!(__key(1, 'c' as u32), 1);
+        stop();
+        let (seen, _) = record(Recorder {
+            keep_ctrl_c: true,
+            ..Recorder::default()
+        });
+        assert_eq!(__key(1, 'c' as u32), 0);
+        assert_eq!(seen.borrow().last(), Some(&Event::Key(Key::Ctrl('c'))));
+        stop();
+    }
+
+    #[test]
+    fn a_panic_leaves_its_message_for_the_page() {
+        record(Recorder {
+            panics: true,
+            ..Recorder::default()
+        });
+        assert!(std::panic::catch_unwind(__frame).is_err());
+        let message =
+            String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(__panic(), __panic_len()) }).into_owned();
+        assert!(message.contains("the view fell over"), "{message}");
+        stop();
+    }
 }
