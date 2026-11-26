@@ -459,7 +459,7 @@ impl App for Docs {
         let status = if cfg!(all(feature = "web", target_family = "wasm")) {
             format!(
                 "{} {} {}",
-                paint(palette::MUTED, "These docs were built with tinsel"),
+                paint(palette::MUTED, "these docs were built with tinsel"),
                 paint(palette::MUTED, "·"),
                 version.replace("tinsel ", "tinsel v")
             )
