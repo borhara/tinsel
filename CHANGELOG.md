@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.2.1](https://github.com/borhara/tinsel/compare/v1.2.0...v1.2.1) - 2026-11-26
+
+### Fixed
+
+- *(cli)* tinsel docs leaves out a changelog heading with nothing under it, as Unreleased is between releases
+
 ## [1.2.0](https://github.com/borhara/tinsel/compare/v1.1.0...v1.2.0) - 2026-11-26
 
 ### Added
