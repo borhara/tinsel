@@ -374,6 +374,7 @@ cargo run -- prompts               # the interactive questions
 cargo run -- timings               # what Live has learned about your step durations
 cargo run -- docs                  # the guides, in a reader drawn by tinsel, examples running
 cargo run -- docs live             # one guide; piped, it prints as plain text
+cargo run -- docs reference        # every public item, written from the code
 ```
 
 The same reader runs in a browser at **[tinsel.shiv.mov](https://tinsel.shiv.mov)**: with the

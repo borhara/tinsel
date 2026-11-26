@@ -59,6 +59,18 @@ Chrome turns each page into a PNG:
 scripts/screenshots.sh
 ```
 
+## The API reference
+
+The Reference tab in `tinsel docs` is `src/bin/tinsel/reference.md`, written from tinsel's own
+source by `scripts/reference.mjs`: every public item's signature and doc comment, from
+rustdoc's JSON. Run it again whenever the public API or its docs change; CI fails while it's
+out of date. rustdoc's JSON is only on nightly, so the script pins one:
+
+```bash
+rustup toolchain install nightly-2026-11-25 --profile minimal
+node scripts/reference.mjs
+```
+
 ## The docs on the web
 
 [tinsel.shiv.mov](https://tinsel.shiv.mov) runs `tinsel docs` in a browser, as the `web_docs`
