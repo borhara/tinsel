@@ -144,7 +144,15 @@ fn send(r: &mut Running, event: &Event) -> bool {
 
 #[doc(hidden)]
 pub fn __start(width: usize, height: usize, light: bool, touch: bool, app: impl FnOnce() -> Box<dyn App>) {
-    std::panic::set_hook(Box::new(|info| PANIC.with(|p| *p.borrow_mut() = info.to_string())));
+    // the message kept for the page, and passed on as before, which a page shows in its console
+    static HOOKED: std::sync::Once = std::sync::Once::new();
+    HOOKED.call_once(|| {
+        let before = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            PANIC.with(|p| *p.borrow_mut() = info.to_string());
+            before(info);
+        }));
+    });
     crate::set_color_mode(crate::ColorMode::TrueColor);
     crate::set_theme(if light { crate::Theme::Light } else { crate::Theme::Dark });
     TOUCH.with(|t| t.set(touch));
