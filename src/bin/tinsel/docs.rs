@@ -358,6 +358,8 @@ impl App for Docs {
                     paint(palette::ROSE, &self.filter)
                 )
             }
+            // a key a touch screen hasn't got to press
+            None if !self.hints => String::new(),
             None => format!("{}  {}  ", paint(palette::MUTED, "search"), paint(palette::ROSE, "/")),
         };
         frame.print_right(top, 0, &right);
@@ -729,6 +731,23 @@ mod tests {
         assert_eq!(find("Asking questions"), Some(6));
         assert_eq!(find("pic"), Some(9));
         assert_eq!(find("nothing like it"), None);
+    }
+
+    // the reader drawn w wide, as plain text
+    fn screen(docs: &mut Docs, w: usize) -> String {
+        tinsel::set_color_mode(tinsel::ColorMode::None);
+        docs.event(&Event::Resize { width: w, height: 30 });
+        let mut frame = Frame::new(w, 30);
+        docs.view(&mut frame);
+        frame.snapshot().plain()
+    }
+
+    #[test]
+    fn a_touch_screen_isnt_told_to_press_slash() {
+        let mut docs = Docs::new(Tab::Guides, 0);
+        assert!(screen(&mut docs, 100).lines().next().unwrap().contains("search  /"));
+        docs.hints = false;
+        assert!(!screen(&mut docs, 100).lines().next().unwrap().contains("search"));
     }
 
     #[test]
