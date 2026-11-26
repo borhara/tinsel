@@ -6,7 +6,8 @@ docs are one, at tinsel.shiv.mov.
 
 ```toml
 [lib]
-crate-type = ["cdylib"]
+# a .wasm file a page can call into, and the library your own binary uses as before
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 tinsel = { version = "1.2", features = ["web"] }
@@ -18,25 +19,42 @@ tinsel::web_app!(Dash { latency: vec![84.0, 90.0, 120.0, 340.0, 95.0] });
 ```
 
 ```bash
-rustup target add wasm32-wasip1
+rustup target add wasm32-wasip1        # once
 cargo build --release --target wasm32-wasip1
 ```
 
-## On the page
+That makes `target/wasm32-wasip1/release/dash.wasm`. Nothing is added to your lockfile:
+the feature is tinsel's own code, and the target is part of Rust.
 
-`tinsel::web::SCRIPT` is the page's side: write it next to the page as `tinsel.js` (from a
-test, say, or copy `src/web.js` from tinsel's repository) and give it an element to fill.
+## Putting it on your site
+
+Two files go where your site serves static files (`public/` in most frameworks, or beside
+`index.html`): the app's `.wasm`, and `tinsel.js`, the page's side. That's the text of
+`tinsel::web::SCRIPT`, so a test can write it out, or copy `src/web.js` from tinsel's
+repository.
+
+```rust
+#[test]
+fn page_script() {
+    std::fs::write("site/tinsel.js", tinsel::web::SCRIPT).unwrap();
+}
+```
+
+Then a page gives it an element to fill, sized as the app should be:
 
 ```html
 <div id="app" style="height: 100vh"></div>
 <script type="module">
   import { run } from './tinsel.js';
-  run(document.getElementById('app'), 'dash.wasm', { onQuit: () => history.back() });
+  run(document.getElementById('app'), '/dash.wasm', { onQuit: () => history.back() });
 </script>
 ```
 
 It passes in the keys, clicks, the wheel and drags on a touch screen, and redraws only the
-rows that changed. `light: true` draws in tinsel's light colours.
+rows that changed. `light: true` draws in tinsel's light colours, and `onQuit` hears which
+key quit the app (`"q"`, `"Escape"`), to go somewhere else or stay. It's all static files,
+so any host serves it, as long as `.wasm` goes out as `application/wasm`, as most do. Build
+and copy again after updating tinsel or the app.
 
 ## What carries over
 
