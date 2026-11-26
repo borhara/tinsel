@@ -111,15 +111,26 @@ fn heading_title(title: &str) -> String {
 }
 
 // headings with the links taken out of them, as the changelog's versions have, which a
-// heading would show as they are
+// heading would show as they are; and none with nothing under it, as Unreleased has
+// between releases
 fn plain_headings(src: &str) -> String {
-    src.lines()
-        .map(|l| match l.strip_prefix("## ") {
-            Some(title) => format!("## {}", heading_title(title)),
-            None => l.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let lines: Vec<&str> = src.lines().collect();
+    let mut out = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        match l.strip_prefix("## ") {
+            Some(title) => {
+                let empty = lines[i + 1..]
+                    .iter()
+                    .take_while(|l| !l.starts_with("## "))
+                    .all(|l| l.trim().is_empty());
+                if !empty {
+                    out.push(format!("## {}", heading_title(title)));
+                }
+            }
+            None => out.push(l.to_string()),
+        }
+    }
+    out.join("\n")
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -672,6 +683,17 @@ mod tests {
         let page = tinsel::text::strip_ansi(&rows.join("\n"));
         assert!(!page.contains("](https://"), "the page shows them plain too");
         assert!(page.contains("1.1.0 - 2026-11-25"), "{page}");
+    }
+
+    #[test]
+    fn a_version_with_nothing_in_it_isnt_shown() {
+        let plain = plain_headings(
+            "# Changelog\n\n## [Unreleased]\n\n## [1.2.0](https://x) - 2026-11-26\n\n### Added\n\n- pictures\n",
+        );
+        assert!(!plain.contains("Unreleased"), "{plain}");
+        assert!(plain.contains("## 1.2.0 - 2026-11-26"));
+        let with = plain_headings("## [Unreleased]\n\n### Fixed\n\n- a thing\n\n## [1.2.0](https://x) - 2026-11-26\n");
+        assert!(with.starts_with("## Unreleased"), "kept once it has something: {with}");
     }
 
     #[test]
