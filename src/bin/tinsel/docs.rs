@@ -43,8 +43,8 @@ pub const GUIDES: &[Guide] = &[
 ];
 
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
-// as `tinsel --version` says it, wherever the reader shows it
-const VERSION: &str = concat!("tinsel ", env!("CARGO_PKG_VERSION"));
+// one way wherever the reader shows it
+const VERSION: &str = concat!("tinsel v", env!("CARGO_PKG_VERSION"));
 
 /// A page as its parts: runs of Markdown, each `##` heading starting a new one, and the
 /// examples between them, which are drawn fresh every frame.
