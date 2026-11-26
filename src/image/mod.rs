@@ -213,7 +213,6 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
 // the format, size and EXIF orientation in an image file's header
 fn sniff(b: &[u8]) -> Option<(Format, u32, u32, u8)> {
     let be32 = |i: usize| Some(u32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?));
-    let be16 = |i: usize| Some(u32::from(u16::from_be_bytes(b.get(i..i + 2)?.try_into().ok()?)));
     let le16 = |i: usize| Some(u32::from(u16::from_le_bytes(b.get(i..i + 2)?.try_into().ok()?)));
     if b.starts_with(PNG) && b.get(12..16) == Some(b"IHDR") {
         return Some((Format::Png, be32(16)?, be32(20)?, 1));
@@ -224,31 +223,68 @@ fn sniff(b: &[u8]) -> Option<(Format, u32, u32, u8)> {
     if b.starts_with(b"\xff\xd8") {
         // segments one after another, until the frame header that holds the size, with the
         // orientation in the EXIF segment before it, if there is one
-        let mut at = 2;
+        let mut segments = Segments { b, at: 2 };
         let mut orientation = 1;
         loop {
-            while b.get(at) == Some(&0xff) && b.get(at + 1) == Some(&0xff) {
-                at += 1;
-            }
-            if *b.get(at)? != 0xff {
-                return None;
-            }
-            let marker = *b.get(at + 1)?;
+            // the size is enough, from a file cut short after it
+            let (marker, seg) = segments.next()?;
+            let seg = seg.unwrap_or_else(|part| part);
             let frame = matches!(marker, 0xc0..=0xcf) && !matches!(marker, 0xc4 | 0xc8 | 0xcc);
             if frame {
-                return Some((Format::Jpeg, be16(at + 7)?, be16(at + 5)?, orientation));
+                let be16 = |i: usize| Some(u32::from(u16::from_be_bytes(seg.get(i..i + 2)?.try_into().ok()?)));
+                return Some((Format::Jpeg, be16(3)?, be16(1)?, orientation));
             }
-            let len = be16(at + 2)? as usize;
-            if marker == 0xe1 {
-                orientation = b
-                    .get(at + 4..at + 2 + len)
-                    .and_then(exif_orientation)
-                    .unwrap_or(orientation);
+            match marker {
+                0xe1 => orientation = exif_orientation(seg).unwrap_or(orientation),
+                0xd9 => return None,
+                _ => {}
             }
-            at += 2 + len;
         }
     }
     None
+}
+
+// a segment's bytes, or as an error the part there is of one cut short
+type Segment<'a> = Result<&'a [u8], &'a [u8]>;
+
+/// A JPEG's segments one after another, from `at`, which the decoder moves past a scan's
+/// data itself.
+pub(crate) struct Segments<'a> {
+    pub b: &'a [u8],
+    pub at: usize,
+}
+
+impl<'a> Segments<'a> {
+    /// The next marker and its segment's bytes, after its length: `None` where there's no
+    /// marker, and as an error the part there is where the segment is cut short. Markers
+    /// that stand alone, with no segment, are passed over, except the end, which comes with none.
+    pub(crate) fn next(&mut self) -> Option<(u8, Segment<'a>)> {
+        let b = self.b;
+        let marker = loop {
+            // markers may be padded with any number of 0xff
+            while b.get(self.at) == Some(&0xff) && b.get(self.at + 1) == Some(&0xff) {
+                self.at += 1;
+            }
+            let (Some(&0xff), Some(&marker)) = (b.get(self.at), b.get(self.at + 1)) else {
+                return None;
+            };
+            self.at += 2;
+            match marker {
+                0xd8 | 0x01 | 0xd0..=0xd7 => continue,
+                0xd9 => return Some((marker, Ok(&[]))),
+                _ => break marker,
+            }
+        };
+        let len = match b.get(self.at..self.at + 2) {
+            Some(l) => usize::from(u16::from_be_bytes([l[0], l[1]])),
+            None => usize::MAX,
+        };
+        let seg = b
+            .get(self.at + 2..self.at.saturating_add(len))
+            .ok_or_else(|| b.get(self.at + 2..).unwrap_or(&[]));
+        self.at = self.at.saturating_add(len).min(b.len());
+        Some((marker, seg))
+    }
 }
 
 /// The orientation in an APP1 segment's EXIF, if it has one: 1 to 8, as EXIF numbers them.
@@ -579,7 +615,17 @@ mod tests {
         // a JPEG with an APP0 segment before its frame header
         let mut jpeg = b"\xff\xd8\xff\xe0\x00\x04ab".to_vec();
         jpeg.extend(b"\xff\xc0\x00\x11\x08\x01\xe0\x02\x80");
+        jpeg.extend([0; 10]);
         assert_eq!(sniff(&jpeg), Some((Format::Jpeg, 640, 480, 1)));
+        // a restart marker standing alone before the frame header, as the decoder allows
+        let mut stray = jpeg[..8].to_vec();
+        stray.extend(b"\xff\xd3");
+        stray.extend(&jpeg[8..]);
+        assert_eq!(sniff(&stray), Some((Format::Jpeg, 640, 480, 1)));
+        // and millions of them, without running out of stack
+        let mut many = b"\xff\xd8".to_vec();
+        many.extend(b"\xff\xd0".repeat(1 << 21));
+        assert_eq!(sniff(&many), None);
         assert_eq!(sniff(b"\xff\xd8\xff\xe0\x00"), None, "cut short");
         assert_eq!(sniff(b"plain text"), None);
         assert!(Image::new(png(0, 5)).is_err());

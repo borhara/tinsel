@@ -3,37 +3,24 @@
 //! hierarchical, 12-bit and CMYK pictures are rare enough to say so instead.
 
 use super::{MOST_PIXELS, Pixels};
+use crate::image::Segments;
 
 pub(super) fn decode(b: &[u8]) -> Result<Pixels, String> {
     let mut d = Decoder::default();
-    let mut at = 2;
     if !b.starts_with(&[0xff, 0xd8]) {
         return Err("not a JPEG".into());
     }
+    let mut segments = Segments { b, at: 2 };
     loop {
-        // markers may be padded with any number of 0xff
-        while b.get(at) == Some(&0xff) && b.get(at + 1) == Some(&0xff) {
-            at += 1;
-        }
-        let (Some(&0xff), Some(&marker)) = (b.get(at), b.get(at + 1)) else {
+        let Some(next) = segments.next() else {
             // a picture whose end marker is missing still shows what it has
             if d.frame.is_some() {
                 break;
             }
-            return Err("a JPEG cut short".into());
+            return Err(SHORT.into());
         };
-        at += 2;
-        match marker {
-            0xd8 | 0x01 | 0xd0..=0xd7 => continue,
-            0xd9 => break,
-            _ => {}
-        }
-        let len = usize::from(u16::from_be_bytes([
-            *b.get(at).ok_or(SHORT)?,
-            *b.get(at + 1).ok_or(SHORT)?,
-        ]));
-        let seg = b.get(at + 2..at + len).ok_or(SHORT)?;
-        at += len;
+        let (marker, seg) = next;
+        let seg = seg.map_err(|_| SHORT)?;
         match marker {
             0xc0..=0xc2 => d.frame(seg, marker == 0xc2)?,
             0xc3 | 0xc7 | 0xcb | 0xcf => return Err("a lossless JPEG, which tinsel can't read".into()),
@@ -48,7 +35,8 @@ pub(super) fn decode(b: &[u8]) -> Result<Pixels, String> {
                 ]))
             }
             0xee if seg.starts_with(b"Adobe") => d.adobe = seg.get(11).copied(),
-            0xda => at = d.scan(seg, b, at)?,
+            0xda => segments.at = d.scan(seg, b, segments.at)?,
+            0xd9 => break,
             _ => {}
         }
     }
