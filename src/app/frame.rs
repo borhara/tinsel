@@ -542,7 +542,7 @@ impl Frame {
     }
 
     /// What this frame asked of the frames after it.
-    pub(super) fn wants(&self) -> Wants {
+    pub(crate) fn wants(&self) -> Wants {
         self.wants
     }
 

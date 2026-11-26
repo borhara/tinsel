@@ -131,21 +131,8 @@ pub mod text;
 mod tree;
 mod watch;
 mod widgets;
-// the docs reader for a web page, which needs the binary's own reader and examples, and them
-// able to name this crate as the binary does
-#[cfg(all(feature = "web", target_family = "wasm"))]
-extern crate self as tinsel;
-#[cfg(all(feature = "web", target_family = "wasm"))]
-#[path = "bin/tinsel/demos.rs"]
-mod demos;
-#[cfg(all(feature = "web", target_family = "wasm"))]
-#[allow(dead_code)]
-#[path = "bin/tinsel/docs.rs"]
-mod docs;
-#[cfg(all(feature = "web", target_family = "wasm"))]
-mod web;
-#[cfg(all(feature = "web", target_family = "wasm"))]
-use web::usage_error;
+#[cfg(feature = "web")]
+pub mod web;
 
 pub use block::Block;
 pub use chart::{bars, heatmap, histogram, meter, sparkline};

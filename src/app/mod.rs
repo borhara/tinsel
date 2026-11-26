@@ -105,7 +105,7 @@ mod keys;
 mod layout;
 mod notation;
 mod overlay;
-mod schedule;
+pub(crate) mod schedule;
 mod scroll;
 mod textarea;
 mod widgets;
@@ -590,10 +590,10 @@ thread_local! {
 }
 
 /// The running app's screen size, for [`size`]; forgotten however the loop ends.
-struct Measured;
+pub(crate) struct Measured;
 
 impl Measured {
-    fn start(size: (usize, usize)) -> Measured {
+    pub(crate) fn start(size: (usize, usize)) -> Measured {
         SIZE.with(|s| s.set(Some(size)));
         Measured
     }
@@ -619,10 +619,10 @@ pub fn size() -> (usize, usize) {
 }
 
 /// The running app's clock, for [`time`]; stopped however the loop ends.
-struct Clock;
+pub(crate) struct Clock;
 
 impl Clock {
-    fn start(at: Instant) -> Clock {
+    pub(crate) fn start(at: Instant) -> Clock {
         STARTED.with(|s| s.set(Some(at)));
         Clock
     }
