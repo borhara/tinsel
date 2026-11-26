@@ -472,7 +472,8 @@ impl App for Docs {
         Footer::new()
             .keys(if self.hints { keys } else { &[] })
             .status(status)
-            .render(Rect::new(0, h - 1, w, 1), frame);
+            // in from the edges as far as the top line is
+            .render(Rect::new(2, h - 1, w - 4, 1), frame);
 
         if self.has_examples() {
             frame.animate();
