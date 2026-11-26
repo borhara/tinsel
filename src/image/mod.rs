@@ -539,7 +539,9 @@ impl Shown {
             self.sent.retain(|id| kept(*id));
         }
         for (at, image) in wanted {
-            ANY_SENT.store(true, Ordering::Relaxed);
+            if protocol == Protocol::Kitty {
+                ANY_SENT.store(true, Ordering::Relaxed);
+            }
             if protocol == Protocol::Kitty && !self.sent.contains(&image.id) {
                 kitty_send(&mut out, image, screen);
                 self.sent.push(image.id);
@@ -609,7 +611,7 @@ fn kitty_data(image: &Image, screen: (u32, u32)) -> (String, String) {
 }
 
 /// What to send as the app leaves the screen: kitty told to drop every picture, if any were
-/// sent, so none are left behind in the terminal.
+/// sent, so none are left behind in the terminal. iTerm2's go with the cells they're in.
 pub(crate) fn leaving() -> &'static str {
     if ANY_SENT.swap(false, Ordering::Relaxed) {
         LEFT.fetch_add(1, Ordering::Relaxed);
