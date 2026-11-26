@@ -509,6 +509,11 @@ impl Shown {
         }
     }
 
+    /// Whether no pictures are on screen, nor kept in the terminal to free.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.placed.is_empty() && self.sent.is_empty()
+    }
+
     /// Whether `wanted` puts pictures anywhere other than where they are now.
     pub(crate) fn changes(&self, wanted: &[(Rect, Image)]) -> bool {
         let now: Vec<(Rect, u32)> = wanted.iter().map(|(r, i)| (*r, i.id)).collect();

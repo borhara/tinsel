@@ -310,6 +310,9 @@ fn pictures_and_cells(
     let Some(protocol) = protocol else {
         return (frame.diff(shown), images);
     };
+    if frame.images().is_empty() && pictures.is_empty() {
+        return (frame.diff(shown), images);
+    }
     let cell = term::cell_pixels().unwrap_or((8, 16));
     let wanted: Vec<_> = frame
         .images()
