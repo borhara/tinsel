@@ -339,12 +339,16 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
+    // what an app was sent, and the time and ambient time of the last frame it drew
+    type Seen = Rc<RefCell<Vec<Event>>>;
+    type Clocks = Rc<Cell<(f64, f64)>>;
+
     // an app that keeps what it was sent and the clocks of the frames it drew, asking for
     // another frame `wait` seconds after each while it's waiting for a tick
     #[derive(Default)]
     struct Recorder {
-        seen: Rc<RefCell<Vec<Event>>>,
-        clocks: Rc<Cell<(f64, f64)>>,
+        seen: Seen,
+        clocks: Clocks,
         wait: Option<f64>,
         keep_ctrl_c: bool,
         panics: bool,
@@ -369,7 +373,7 @@ mod tests {
         }
     }
 
-    fn record(app: Recorder) -> (Rc<RefCell<Vec<Event>>>, Rc<Cell<(f64, f64)>>) {
+    fn record(app: Recorder) -> (Seen, Clocks) {
         let (seen, clocks) = (app.seen.clone(), app.clocks.clone());
         __start(20, 4, false, false, move || Box::new(app));
         (seen, clocks)
