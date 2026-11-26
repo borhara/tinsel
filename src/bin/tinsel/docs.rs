@@ -172,6 +172,8 @@ pub struct Docs {
     // Markdown wrapped to a width, by page, piece and width
     wrapped: RefCell<HashMap<(usize, usize, usize), Vec<String>>>,
     drawn: RefCell<Drawn>,
+    // whether the footer says which keys do what, which a touch screen has no use for
+    pub(crate) hints: bool,
 }
 
 impl Docs {
@@ -188,6 +190,7 @@ impl Docs {
             changelog: parse(&plain_headings(CHANGELOG)),
             wrapped: RefCell::default(),
             drawn: RefCell::default(),
+            hints: true,
         }
     }
 
@@ -467,7 +470,7 @@ impl App for Docs {
             version
         };
         Footer::new()
-            .keys(keys)
+            .keys(if self.hints { keys } else { &[] })
             .status(status)
             .render(Rect::new(0, h - 1, w, 1), frame);
 

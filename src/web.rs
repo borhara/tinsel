@@ -37,13 +37,14 @@ fn with<T>(f: impl FnOnce(&mut Reader) -> T) -> T {
 }
 
 /// Open the reader on the first guide, `width` by `height` cells, in light colours unless
-/// `light` is 0.
+/// `light` is 0, and saying which keys do what unless `touch` isn't 0.
 #[unsafe(no_mangle)]
-pub extern "C" fn start(width: usize, height: usize, light: u32) {
+pub extern "C" fn start(width: usize, height: usize, light: u32, touch: u32) {
     std::panic::set_hook(Box::new(|info| PANIC.with(|p| *p.borrow_mut() = info.to_string())));
     crate::set_color_mode(crate::ColorMode::TrueColor);
     crate::set_theme(if light != 0 { crate::Theme::Light } else { crate::Theme::Dark });
     let mut docs = Docs::new(Tab::Guides, 0);
+    docs.hints = touch == 0;
     docs.event(&Event::Resize { width, height });
     READER.with(|r| {
         *r.borrow_mut() = Some(Reader {
