@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## [1.2.0](https://github.com/borhara/tinsel/compare/v1.1.0...v1.2.0) - 2026-11-26
+
+### Added
+
+- *(cli)* tinsel docs reads the guides and changelog in a full-screen reader drawn by tinsel, its examples running as you read
+- ASCII glyphs for terminals whose fonts lack the symbols, and TINSEL_AMBIGUOUS=wide for ones that draw ambiguous characters two columns across
+- *(app)* Frame::html keeps to a terminal's grid in any font, drawing lines and blocks and holding other symbols to their cells
+- *(image)* photos stand the way they were taken, and big ones decode on another thread while Image::pending says so
+- *(image)* kitty shows JPEG and GIF too, decoded in tinsel behind the decode feature and shrunk to the screen
+- *(app)* Frame::image shows a picture at full resolution through kitty's graphics or iTerm2's inline images, and image::support says when the terminal can't
+
+### Fixed
+
+- *(image)* build on rust 1.85 again, without a let-chain
+- *(cli)* tinsel docs jumps to a heading where the page shows it, wrapping both at the same width
+- *(term)* a terminal giving fewer pixels than cells gets the usual cell size, not pictures a pixel wide
+- *(image)* leaving the screen tells kitty to drop its pictures only where kitty was sent some
+- *(image)* kitty frees a picture nothing shows, rather than fill its storage till it drops ones tinsel thinks it still has
+- *(image)* a JPEG or GIF put in a frame without a check decodes off the run loop, and one that won't decode isn't sent to kitty as a PNG
+- *(image)* a GIF saying it's bigger than any camera makes is an error, not an abort as it asks for gigabytes
+
+### Other
+
+- *(glyphs)* say that an app's own quotes, dashes and arrows go as ASCII too
+- *(image)* a picture is shrunk for the screen on the thread that decodes it, and kept, so sending it again costs nothing
+- *(app)* frames without pictures skip asking the terminal its cell size
+- *(image)* the header and the JPEG decoder walk segments the same way, so a restart marker before the frame header reads in both
+- check on rustup's stable rust, as the old ci did, not nixpkgs' whose clippy runs ahead
+- the release tag's message carries its part of the changelog, for forges without releases
+- the readme's command-line example declares --replicas, which it reads and would panic without
+- the readme's fragments are compiled from copies that have to match it, since doc tests skip them
+- the release script makes a github release too, from its part of the changelog
+
 ## [1.1.0](https://github.com/borhara/tinsel/compare/v1.0.1...v1.1.0) - 2026-11-25
 
 ### Added
