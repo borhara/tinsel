@@ -78,7 +78,8 @@ export function imports(memory, unanswered = () => {}) {
 }
 
 /**
- * Run the app in `wasm` (a URL, a Response or the bytes) in `element`, which it fills.
+ * Run the app in `wasm` (a URL, a Response or the bytes) in `element`, which it fills, and
+ * follows as it changes size. Gives back `stop()`, which ends the app and empties the element.
  *
  * @param {HTMLElement} element
  * @param {string | URL | Response | Promise<Response> | BufferSource} wasm
@@ -89,6 +90,9 @@ export function imports(memory, unanswered = () => {}) {
  */
 export async function run(element, wasm, options = {}) {
   const { light = false, fontSize = () => (innerWidth < 700 ? 11 : 14), onQuit = () => {} } = options;
+  // every listener goes when it's stopped
+  const stopping = new AbortController();
+  const on = { signal: stopping.signal };
   const decoder = new TextDecoder();
   let w;
   const text = (ptr, len) => decoder.decode(new Uint8Array(w.memory.buffer, ptr, len));
@@ -142,11 +146,13 @@ export async function run(element, wasm, options = {}) {
   let opening = '';
   let rows = [];
   let shown = [];
+  let size = 0;
   function show(html) {
     const start = html.indexOf('>') + 1;
     const lines = html.slice(start, html.lastIndexOf('</pre>')).split('\n');
-    if (html.slice(0, start) !== opening || lines.length !== rows.length) {
+    if (html.slice(0, start) !== opening || lines.length !== rows.length || cell.size !== size) {
       opening = html.slice(0, start);
+      size = cell.size;
       element.innerHTML = `${opening}${lines.map((l) => `<span>${l}</span>`).join('\n')}</pre>`;
       const pre = element.firstElementChild;
       // filling the element, rather than sitting in it as a picture, its background the
@@ -176,24 +182,27 @@ export async function run(element, wasm, options = {}) {
     });
   }
 
-
   element.tabIndex = 0;
   element.style.outline = 'none';
-  element.addEventListener('keydown', (e) => {
-    // the browser's own shortcuts stay the browser's
-    if (e.metaKey) return;
-    let kind;
-    let ch = 0;
-    if (e.key === 'Tab' && e.shiftKey) kind = 5;
-    else if (e.key in KEYS) kind = KEYS[e.key];
-    else if ([...e.key].length === 1) {
-      kind = e.ctrlKey ? 1 : e.altKey ? 2 : 0;
-      ch = (e.ctrlKey ? e.key.toLowerCase() : e.key).codePointAt(0);
-    }
-    if (kind === undefined) return;
-    e.preventDefault();
-    if (call(() => w.tinsel_key(kind, ch))) onQuit(e.key);
-  });
+  element.addEventListener(
+    'keydown',
+    (e) => {
+      // the browser's own shortcuts stay the browser's
+      if (e.metaKey) return;
+      let kind;
+      let ch = 0;
+      if (e.key === 'Tab' && e.shiftKey) kind = 5;
+      else if (e.key in KEYS) kind = KEYS[e.key];
+      else if ([...e.key].length === 1) {
+        kind = e.ctrlKey ? 1 : e.altKey ? 2 : 0;
+        ch = (e.ctrlKey ? e.key.toLowerCase() : e.key).codePointAt(0);
+      }
+      if (kind === undefined) return;
+      e.preventDefault();
+      if (call(() => w.tinsel_key(kind, ch))) onQuit(e.key);
+    },
+    on,
+  );
 
   // The cell under the pointer.
   function at(e) {
@@ -207,15 +216,23 @@ export async function run(element, wasm, options = {}) {
     if (call(() => w.tinsel_mouse(kind, x, y))) onQuit('mouse');
   };
 
-  element.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return;
-    element.focus();
-    mouse(0, at(e));
-  });
-  addEventListener('mouseup', (e) => mouse(1, at(e)));
-  element.addEventListener('mousemove', (e) => {
-    if (e.buttons & 1) mouse(2, at(e));
-  });
+  element.addEventListener(
+    'mousedown',
+    (e) => {
+      if (e.button !== 0) return;
+      element.focus();
+      mouse(0, at(e));
+    },
+    on,
+  );
+  addEventListener('mouseup', (e) => mouse(1, at(e)), on);
+  element.addEventListener(
+    'mousemove',
+    (e) => {
+      if (e.buttons & 1) mouse(2, at(e));
+    },
+    on,
+  );
 
   // The wheel a row at a time, however finely the trackpad reports it.
   let wheel = 0;
@@ -231,39 +248,61 @@ export async function run(element, wasm, options = {}) {
         mouse(down ? 4 : 3, where);
       }
     },
-    { passive: false },
+    { passive: false, signal: stopping.signal },
   );
 
   // On a touch screen: a drag scrolls as the wheel does, and a tap clicks.
   element.style.touchAction = 'none';
   let touch = null;
-  element.addEventListener('touchstart', (e) => {
-    const t = e.touches[0];
-    touch = { y: t.clientY, moved: false };
-  });
-  element.addEventListener('touchmove', (e) => {
-    if (!touch) return;
-    const t = e.touches[0];
-    const where = at(t);
-    while (Math.abs(touch.y - t.clientY) >= cell.h) {
-      const down = touch.y > t.clientY;
-      touch.y += down ? -cell.h : cell.h;
-      touch.moved = true;
-      mouse(down ? 4 : 3, where);
-    }
-  });
-  element.addEventListener('touchend', (e) => {
-    if (touch && !touch.moved) {
-      const where = at(e.changedTouches[0]);
-      mouse(0, where);
-      mouse(1, where);
-    }
-    touch = null;
-  });
+  element.addEventListener(
+    'touchstart',
+    (e) => {
+      const t = e.touches[0];
+      touch = { y: t.clientY, moved: false };
+    },
+    on,
+  );
+  element.addEventListener(
+    'touchmove',
+    (e) => {
+      if (!touch) return;
+      const t = e.touches[0];
+      const where = at(t);
+      while (Math.abs(touch.y - t.clientY) >= cell.h) {
+        const down = touch.y > t.clientY;
+        touch.y += down ? -cell.h : cell.h;
+        touch.moved = true;
+        mouse(down ? 4 : 3, where);
+      }
+    },
+    on,
+  );
+  element.addEventListener(
+    'touchend',
+    (e) => {
+      if (touch && !touch.moved) {
+        const where = at(e.changedTouches[0]);
+        mouse(0, where);
+        mouse(1, where);
+      }
+      touch = null;
+    },
+    on,
+  );
 
-  addEventListener('resize', () => call(() => w.tinsel_resize(...cells())));
+  // the element's size, not the window's, which it can change without: grown to fill a page,
+  // say, or put somewhere else
+  const resized = new ResizeObserver(() => w && call(() => w.tinsel_resize(...cells())));
+  resized.observe(element);
   // out of view as a terminal in the background, so ambient animation rests
-  document.addEventListener('visibilitychange', () => call(() => w.tinsel_focus(document.hidden ? 0 : 1)));
+  document.addEventListener('visibilitychange', () => call(() => w.tinsel_focus(document.hidden ? 0 : 1)), on);
+
+  const stop = () => {
+    broken = true;
+    stopping.abort();
+    resized.disconnect();
+    element.replaceChildren();
+  };
 
   const wasiImports = imports(() => w.memory);
   try {
@@ -283,9 +322,10 @@ export async function run(element, wasm, options = {}) {
     w._initialize?.();
     const [width, height] = cells();
     w.tinsel_start(width, height, light ? 1 : 0, matchMedia('(pointer: coarse)').matches ? 1 : 0);
-    element.focus();
+    element.focus({ preventScroll: true });
     requestAnimationFrame(draw);
   } catch (e) {
     fail(e);
   }
+  return { stop };
 }

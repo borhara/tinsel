@@ -9578,7 +9578,8 @@ needs (a clock, randomness and an empty environment), passes in the keys, the mo
 window's size and whether it's in view, and puts each frame in place, a row at a time.
 Write it next to the page, as `tinsel.js` say, and call its `run(element, wasm, options)`;
 the options are `light` for tinsel's light colours, `fontSize` in pixels, and `onQuit`,
-called with the browser's name for the key that quit the app (`"q"`, `"Escape"`).
+called with the browser's name for the key that quit the app (`"q"`, `"Escape"`). The app
+follows the element's size, however it changes, and `run` gives back `stop()` to end it.
 
 ## touch
 
